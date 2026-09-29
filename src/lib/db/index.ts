@@ -12,6 +12,7 @@ function createDatabase(databaseUrl: string) {
 
 type Database = ReturnType<typeof createDatabase>;
 let database: Database | undefined;
+let lastLoggedDatabaseFailure: string | undefined;
 
 function getDatabase() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -37,8 +38,18 @@ export async function databaseAvailable() {
   if (!isDatabaseConfigured()) return false;
   try {
     await getDatabase().execute(sql`select 1`);
+    lastLoggedDatabaseFailure = undefined;
     return true;
-  } catch {
+  } catch (error) {
+    const name = error instanceof Error ? error.name.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40) : "UnknownError";
+    const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40)
+      : "UNKNOWN";
+    const failure = `${name}:${code}`;
+    if (lastLoggedDatabaseFailure !== failure) {
+      console.error("[crediai:database-healthcheck] PostgreSQL probe failed", { name, code });
+      lastLoggedDatabaseFailure = failure;
+    }
     return false;
   }
 }
