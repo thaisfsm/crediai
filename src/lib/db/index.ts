@@ -2,19 +2,41 @@ import "server-only";
 import postgres from "postgres";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
+import { connection } from "next/server";
 import * as schema from "./schema";
 
-// postgres.js is lazy: this inert DSN is never used unless DATABASE_URL is configured.
-const databaseUrl = process.env.DATABASE_URL || "postgres://not-configured:not-configured@127.0.0.1:1/not-configured";
-const client = postgres(databaseUrl, { max: 10, prepare: false, connect_timeout: 3 });
+function createDatabase(databaseUrl: string) {
+  const client = postgres(databaseUrl, { max: 10, prepare: false, connect_timeout: 3 });
+  return drizzle(client, { schema });
+}
 
-export const databaseConfigured = Boolean(process.env.DATABASE_URL);
-export const db = drizzle(client, { schema });
+type Database = ReturnType<typeof createDatabase>;
+let database: Database | undefined;
+
+function getDatabase() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL não está configurado.");
+  database ??= createDatabase(databaseUrl);
+  return database;
+}
+
+export const db = new Proxy({} as Database, {
+  get(_target, property) {
+    const currentDatabase = getDatabase();
+    const value = Reflect.get(currentDatabase, property, currentDatabase) as unknown;
+    return typeof value === "function" ? value.bind(currentDatabase) : value;
+  },
+});
+
+export function isDatabaseConfigured() {
+  return Boolean(process.env.DATABASE_URL);
+}
 
 export async function databaseAvailable() {
-  if (!databaseConfigured) return false;
+  await connection();
+  if (!isDatabaseConfigured()) return false;
   try {
-    await db.execute(sql`select 1`);
+    await getDatabase().execute(sql`select 1`);
     return true;
   } catch {
     return false;
