@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import Image from "next/image";
 
 export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const router = useRouter();
@@ -32,8 +33,10 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
     router.refresh();
   }
 
-  return <main className="auth-page"><section className="auth-card">
-    <Link className="auth-brand" href="/"><span className="auth-symbol">C<span>AI</span></span><span>CrediAI<small>CRÉDITO + INTELIGÊNCIA</small></span></Link>
+  return <main className="auth-page"><section className={`auth-card${isSignup ? "" : " auth-card-login"}`}>
+    {isSignup
+      ? <Link className="auth-brand" href="/"><span className="auth-symbol">C<span>AI</span></span><span>CrediAI<small>CRÉDITO + INTELIGÊNCIA</small></span></Link>
+      : <Link className="auth-brand auth-brand-login" href="/" aria-label="CrediAI — início"><Image src="/brand/crediai-logo-transparent.png" width={2172} height={724} alt="CrediAI — Crédito + Inteligência" priority /></Link>}
     <div className="auth-kicker"><i /> AMBIENTE PRIVADO</div>
     <h1>{isSignup ? "Comece sua carteira" : "Acesse sua conta"}</h1>
     <p>{isSignup ? "Crie seu espaço privado no CrediAI." : "Entre para acompanhar seu ambiente CrediAI."}</p>
@@ -42,7 +45,7 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
       <label>E-mail<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
       <label>Senha<input name="password" type="password" autoComplete={isSignup ? "new-password" : "current-password"} required minLength={isSignup ? 12 : 1} maxLength={128} />{isSignup && <small>Use ao menos 12 caracteres.</small>}</label>
       {error && <div className="auth-error" role="alert">{error}</div>}
-      <button className="auth-submit" disabled={busy}>{busy ? "Aguarde…" : isSignup ? "Criar conta" : "Entrar"}<span>→</span></button>
+      <button className={`auth-submit${isSignup ? "" : " auth-submit-login"}`} disabled={busy}>{busy ? "Aguarde…" : isSignup ? "Criar conta" : "Entrar"}<span>→</span></button>
     </form>
     <div className="auth-switch">{isSignup ? "Já tem acesso?" : "Ainda não tem acesso?"} <a href={isSignup ? "/login" : "/signup"}>{isSignup ? "Entrar" : "Criar conta"}</a></div>
     <div className="auth-security">◈ <span>Os dados da sua conta serão mantidos em um ambiente isolado.</span></div>
