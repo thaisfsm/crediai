@@ -2,11 +2,11 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { and, eq, inArray, isNull, or, sql, gt } from "drizzle-orm";
-import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { subscriptions, tenants } from "@/lib/db/schema";
 
 export async function getSession() {
+  const { auth } = await import("@/lib/auth");
   return auth.api.getSession({ headers: await headers() });
 }
 
