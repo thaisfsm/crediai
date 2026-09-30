@@ -20,17 +20,24 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
     const name = String(data.get("name") ?? "");
     const email = String(data.get("email") ?? "");
     const password = String(data.get("password") ?? "");
-    const result = isSignup
-      ? await authClient.signUp.email({ name, email, password })
-      : await authClient.signIn.email({ email, password });
+    let redirecting = false;
+    try {
+      const result = isSignup
+        ? await authClient.signUp.email({ name, email, password })
+        : await authClient.signIn.email({ email, password });
 
-    if (result.error) {
-      setError(result.error.message ?? "Não foi possível concluir. Confira seus dados e tente novamente.");
-      setBusy(false);
-      return;
+      if (result.error) {
+        setError(result.error.message ?? "Não foi possível concluir. Confira seus dados e tente novamente.");
+        return;
+      }
+      redirecting = true;
+      router.replace("/");
+      router.refresh();
+    } catch {
+      setError("Não foi possível conectar ao servidor. Tente novamente.");
+    } finally {
+      if (!redirecting) setBusy(false);
     }
-    router.replace("/");
-    router.refresh();
   }
 
   return <main className="auth-page"><section className={`auth-card${isSignup ? "" : " auth-card-login"}`}>
