@@ -2,7 +2,7 @@
 
 **CrediAI** é uma aplicação web responsiva para apoiar a gestão de carteiras de crédito. O projeto está em estágio de fundação: combina uma interface demonstrativa com a base técnica para autenticação, contas SaaS isoladas e persistência em PostgreSQL.
 
-> **Estado atual:** o dashboard é alimentado pela carteira real de cada tenant (capital inicial, clientes, operações e quitações). A regra de cálculo em uso é provisória e está isolada em `src/lib/finance/rules.ts`: a taxa informada incide uma vez sobre o principal, com pagamento único no vencimento informado. Periodicidade, pagamentos parciais, multa e juros de mora ainda não foram definidos.
+> **Estado atual:** o dashboard é alimentado pela carteira real de cada tenant (capital inicial, clientes, operações e pagamentos). As regras financeiras ficam em `src/lib/finance/rules.ts`: a taxa informada incide uma vez sobre o principal (total = principal + juros) e a operação aceita vários pagamentos, que quitam primeiro os juros pendentes e depois o principal. Parcelas, multa, juros de mora e renegociação ainda não foram definidos.
 
 ## Objetivo
 
@@ -19,11 +19,11 @@ Preparar uma plataforma SaaS em que cada cliente tenha seu próprio ambiente. A 
 - Schema PostgreSQL tipado com Drizzle, migration inicial e políticas RLS para tenants, planos e assinaturas.
 - Tela de configuração quando não há conexão PostgreSQL disponível.
 
-- Carteira por tenant: capital inicial, cadastro de clientes, operações com data e vencimento, quitação total e dashboard calculado a partir desses dados (tabelas `wallet`, `client`, `loan_operation` e `payment`, com RLS forçada).
+- Carteira por tenant: capital inicial, cadastro de clientes, operações com data e vencimento, pagamentos parciais (juros primeiro, depois principal) com histórico e dashboard calculado a partir desses dados (tabelas `wallet`, `client`, `loan_operation` e `payment`, com RLS forçada).
 
 ### Em desenvolvimento
 
-- Regra financeira oficial (periodicidade, parcelas, pagamentos parciais, atraso), relatórios e limites por plano.
+- Parcelas, multa, juros de mora, renegociação, relatórios e limites por plano.
 - Notificações, rotina programada de cobranças, integrações de pagamento e recursos de IA.
 - Validação de integração e isolamento RLS contra um PostgreSQL de staging.
 

@@ -71,3 +71,56 @@ export function shortDate(iso: string) {
 export function initialsOf(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "?";
 }
+
+export const onlyDigits = (value: string) => value.replace(/\D/g, "");
+
+// Máscara progressiva enquanto o usuário digita: 411.797.058-58.
+export function maskCpf(value: string) {
+  const digits = onlyDigits(value).slice(0, 11);
+  return digits.replace(/^(\d{3})(\d)/, "$1.$2").replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d{1,2})$/, ".$1-$2");
+}
+
+// Máscara progressiva: (11) 3456-7890 para fixo (10 dígitos) e (11) 98765-4321 para celular (11 dígitos).
+export function maskPhone(value: string) {
+  const digits = onlyDigits(value).slice(0, 11);
+  if (digits.length <= 2) return digits ? `(${digits}` : "";
+  const area = `(${digits.slice(0, 2)}) `;
+  const rest = digits.slice(2);
+  const split = digits.length === 11 ? 5 : 4;
+  return rest.length > split ? `${area}${rest.slice(0, split)}-${rest.slice(split)}` : `${area}${rest}`;
+}
+
+// Exibição de valores gravados: formata quando o valor tem o tamanho esperado e mostra como está
+// qualquer valor antigo fora do padrão, para não esconder dados de clientes já cadastrados.
+export function formatCpf(stored: string | null) {
+  if (!stored) return null;
+  return onlyDigits(stored).length === 11 ? maskCpf(stored) : stored;
+}
+
+export function formatPhone(stored: string | null) {
+  if (!stored) return null;
+  const length = onlyDigits(stored).length;
+  return length === 10 || length === 11 ? maskPhone(stored) : stored;
+}
+
+// Validação mínima: bloqueia só formatos obviamente inválidos (tamanho errado, todos os dígitos iguais, DDD inexistente).
+export function normalizeCpf(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  const digits = onlyDigits(value);
+  if (!digits) return { ok: true, value: null };
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return { ok: false, error: "O CPF precisa ter 11 dígitos, por exemplo 411.797.058-58." };
+  return { ok: true, value: digits };
+}
+
+export function normalizePhone(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  const digits = onlyDigits(value);
+  if (!digits) return { ok: true, value: null };
+  if ((digits.length !== 10 && digits.length !== 11) || digits[0] === "0" || digits[1] === "0" || /^(\d)\1+$/.test(digits)) {
+    return { ok: false, error: "Informe o telefone com DDD: (11) 98765-4321 para celular ou (11) 3456-7890 para fixo." };
+  }
+  return { ok: true, value: digits };
+}
+
+// Valor em centavos para preencher um campo de dinheiro: 30000 -> "300,00".
+export function centsToInput(cents: number) {
+  return (cents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}

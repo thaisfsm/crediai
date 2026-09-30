@@ -5,8 +5,8 @@ import { and, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { clients, loanOperations, payments, wallets } from "@/lib/db/schema";
-import { formatMoney, isIsoDate, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
-import { calculateOperation } from "@/lib/finance/rules";
+import { formatMoney, isIsoDate, normalizeCpf, normalizePhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { allocatePayments, calculateOperation, checkPayment } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -28,17 +28,45 @@ export async function saveWalletAction(data: FormData): Promise<ActionResult> {
   return { ok: true, message: "Capital inicial salvo." };
 }
 
-export async function createClientAction(data: FormData): Promise<ActionResult> {
+// CPF e telefone são gravados só com dígitos e formatados na tela. Um valor antigo fora do padrão (por exemplo um RG),
+// reenviado sem alteração na edição, é mantido como está para não impedir a edição de clientes cadastrados antes das máscaras.
+function clientFields(data: FormData, previous?: { document: string | null; phone: string | null }) {
   const name = text(data, "name", 120);
-  if (!name) return { ok: false, error: "Informe o nome do cliente." };
+  if (!name) return { ok: false as const, error: "Informe o nome do cliente." };
+  const documentInput = text(data, "document", 40);
+  const phoneInput = text(data, "phone", 40);
+  const keepLegacy = <T extends { ok: boolean }>(checked: T, input: string, stored: string | null | undefined) =>
+    !checked.ok && previous && input === (stored ?? "") ? { ok: true as const, value: stored ?? null } : checked;
+  const document = keepLegacy(normalizeCpf(documentInput), documentInput, previous?.document);
+  if (!document.ok) return document;
+  const phone = keepLegacy(normalizePhone(phoneInput), phoneInput, previous?.phone);
+  if (!phone.ok) return phone;
+  return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 500)) } };
+}
+
+export async function createClientAction(data: FormData): Promise<ActionResult> {
+  const fields = clientFields(data);
+  if (!fields.ok) return fields;
   await withTenantContext(async (tx, { tenantId }) => {
-    await tx.insert(clients).values({
-      id: id("cli"), tenantId, name,
-      document: optional(text(data, "document", 40)), phone: optional(text(data, "phone", 40)), notes: optional(text(data, "notes", 500)),
-    });
+    await tx.insert(clients).values({ id: id("cli"), tenantId, ...fields.values });
   });
   revalidatePath("/");
-  return { ok: true, message: `Cliente ${name} cadastrado.` };
+  return { ok: true, message: `Cliente ${fields.values.name} cadastrado.` };
+}
+
+export async function updateClientAction(data: FormData): Promise<ActionResult> {
+  const clientId = text(data, "clientId", 80);
+  if (!clientId) return { ok: false, error: "Cliente inválido." };
+  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+    const client = await tx.query.clients.findFirst({ where: and(eq(clients.id, clientId), eq(clients.tenantId, tenantId)) });
+    if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
+    const fields = clientFields(data, client);
+    if (!fields.ok) return fields;
+    await tx.update(clients).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(clients.id, client.id), eq(clients.tenantId, tenantId)));
+    return { ok: true, message: `Cliente ${fields.values.name} atualizado.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
 }
 
 export async function createOperationAction(data: FormData): Promise<ActionResult> {
@@ -84,26 +112,38 @@ async function availableCapitalCents(tx: TenantTransaction, tenantId: string, in
   return initialCapitalCents - Number(lent) + Number(received);
 }
 
-// Registra a quitação total do saldo em aberto. Pagamentos parciais dependem da regra de apropriação, ainda não definida.
-export async function settleOperationAction(data: FormData): Promise<ActionResult> {
+// Registra um pagamento (juros, parcial ou quitação). A divisão entre juros e principal e o limite do saldo
+// vêm das regras centrais em src/lib/finance/rules.ts. Pagar exatamente o saldo quita a operação.
+export async function registerPaymentAction(data: FormData): Promise<ActionResult> {
   const operationId = text(data, "operationId", 80);
+  const amountCents = parseMoneyToCents(text(data, "amount", 40));
   const paidAt = text(data, "paidAt", 10) || todayIso();
+  const notes = optional(text(data, "notes", 500));
   if (!operationId) return { ok: false, error: "Operação inválida." };
+  if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
-  const result = await withTenantContext(async (tx, { tenantId }) => {
+  if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
+  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+    // Trava a operação para que dois pagamentos simultâneos não passem do saldo.
     const [operation] = await tx.select().from(loanOperations)
       .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId)))
       .for("update");
-    if (!operation) return { ok: false as const, error: "Operação não encontrada nesta carteira." };
-    if (operation.status !== "OPEN") return { ok: false as const, error: "Esta operação já não está em aberto." };
-    if (paidAt < operation.loanDate) return { ok: false as const, error: "O pagamento não pode ser antes da data do empréstimo." };
-    const [{ paid }] = await tx.select({ paid: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
+    if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
+    if (operation.status !== "OPEN") return { ok: false, error: "Esta operação já não está em aberto." };
+    if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
+    const previous = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt }).from(payments)
       .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
-    const balance = operation.totalCents - Number(paid);
-    if (balance > 0) await tx.insert(payments).values({ id: id("pay"), tenantId, operationId: operation.id, amountCents: balance, paidAt, notes: "Quitação total" });
-    await tx.update(loanOperations).set({ status: "PAID", settledAt: paidAt, updatedAt: sql`now()` })
-      .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
-    return { ok: true as const, message: "Quitação registrada." };
+    const before = allocatePayments(operation, previous);
+    const check = checkPayment({ amountCents, balanceCents: before.balanceCents, formatMoney });
+    if (!check.ok) return check;
+    await tx.insert(payments).values({ id: id("pay"), tenantId, operationId: operation.id, amountCents, paidAt, notes });
+    if (check.settles) {
+      const settledAt = previous.reduce((latest, payment) => (payment.paidAt > latest ? payment.paidAt : latest), paidAt);
+      await tx.update(loanOperations).set({ status: "PAID", settledAt, updatedAt: sql`now()` })
+        .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+      return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Operação quitada.` };
+    }
+    return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Saldo em aberto: ${formatMoney(before.balanceCents - amountCents)}.` };
   });
   if (result.ok) revalidatePath("/");
   return result;

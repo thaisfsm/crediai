@@ -38,7 +38,7 @@ export async function loadTenantPortfolio() {
       status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(),
     })),
     payments: data.paymentRows.map(({ payment, clientName }) => ({
-      id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes,
+      id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes, createdAt: payment.createdAt.toISOString(),
     })),
   });
   const operationCountByClient = new Map<string, number>();

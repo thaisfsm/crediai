@@ -1,5 +1,6 @@
 // Consolida a carteira do tenant a partir das linhas do banco. Funções puras: sem acesso a banco.
 import { addDays, daysBetween, formatDate, initialsOf, shortDate } from "./format";
+import { allocatePayments, paymentKindLabels, type PaymentKind } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
 
@@ -8,10 +9,14 @@ export type OperationRecord = {
   id: string; clientId: string; clientName: string; principalCents: number; interestRateBps: number; interestCents: number; totalCents: number;
   loanDate: string; dueDate: string; status: OperationStatus; settledAt: string | null; calculationRule: string; createdAt: string;
 };
-export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null };
+export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string };
+export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind };
 
 export type OperationState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID" | "CANCELED";
-export type OperationView = OperationRecord & { code: string; paidCents: number; balanceCents: number; state: OperationState; daysUntilDue: number };
+export type OperationView = OperationRecord & {
+  code: string; paidCents: number; interestPaidCents: number; principalPaidCents: number; interestRemainingCents: number; principalRemainingCents: number;
+  balanceCents: number; state: OperationState; daysUntilDue: number; payments: AllocatedPayment[];
+};
 
 export type ChargeTone = "due" | "late" | "received";
 export type ChargeItem = { key: string; operationId: string; clientName: string; initials: string; color: string; detail: string; amountCents: number; status: string; tone: ChargeTone };
@@ -46,17 +51,24 @@ function relativePaid(paidAt: string, today: string) {
 export function buildPortfolio({ initialCapitalCents, hasWallet, operations, payments, today }: {
   initialCapitalCents: number; hasWallet: boolean; operations: OperationRecord[]; payments: PaymentRecord[]; today: string;
 }) {
-  const paidByOperation = new Map<string, number>();
-  for (const payment of payments) paidByOperation.set(payment.operationId, (paidByOperation.get(payment.operationId) ?? 0) + payment.amountCents);
+  const paymentsByOperation = new Map<string, PaymentRecord[]>();
+  for (const payment of payments) paymentsByOperation.set(payment.operationId, [...(paymentsByOperation.get(payment.operationId) ?? []), payment]);
 
   const views: OperationView[] = operations.map((operation) => {
-    const paidCents = paidByOperation.get(operation.id) ?? 0;
+    // Juros primeiro, depois principal: a divisão de cada pagamento vem da regra central em rules.ts.
+    const allocation = allocatePayments(operation, paymentsByOperation.get(operation.id) ?? []);
     const daysUntilDue = daysBetween(today, operation.dueDate);
     const state: OperationState = operation.status === "PAID" ? "PAID"
       : operation.status === "CANCELED" ? "CANCELED"
       : daysUntilDue < 0 ? "OVERDUE" : daysUntilDue === 0 ? "DUE_TODAY" : "ACTIVE";
-    const balanceCents = operation.status === "OPEN" ? Math.max(operation.totalCents - paidCents, 0) : 0;
-    return { ...operation, code: operationCode(operation.id), paidCents, balanceCents, state, daysUntilDue };
+    return {
+      ...operation, code: operationCode(operation.id), state, daysUntilDue,
+      paidCents: allocation.paidCents, interestPaidCents: allocation.interestPaidCents, principalPaidCents: allocation.principalPaidCents,
+      interestRemainingCents: operation.status === "OPEN" ? allocation.interestRemainingCents : 0,
+      principalRemainingCents: operation.status === "OPEN" ? allocation.principalRemainingCents : 0,
+      balanceCents: operation.status === "OPEN" ? allocation.balanceCents : 0,
+      payments: [...allocation.items].reverse(),
+    };
   });
 
   const live = views.filter((operation) => operation.status !== "CANCELED");
@@ -73,7 +85,9 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, operations, pay
     lentCents: sum(open.map((operation) => operation.principalCents)),
     receivableCents: sum(open.map((operation) => operation.balanceCents)),
     expectedInterestCents: sum(open.map((operation) => operation.interestCents)),
-    receivedInterestCents: sum(views.filter((operation) => operation.status === "PAID").map((operation) => operation.interestCents)),
+    pendingInterestCents: sum(open.map((operation) => operation.interestRemainingCents)),
+    receivedInterestCents: sum(views.map((operation) => operation.interestPaidCents)),
+    receivedPrincipalCents: sum(views.map((operation) => operation.principalPaidCents)),
     receivedCents,
     counts: {
       total: live.length,
@@ -91,11 +105,12 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, operations, pay
   });
   const byDue = [...open].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const operationById = new Map(views.map((operation) => [operation.id, operation]));
-  const history: ChargeItem[] = [...payments].sort((a, b) => b.paidAt.localeCompare(a.paidAt)).slice(0, 20).map((payment) => {
+  const allocated = views.flatMap((operation) => operation.payments);
+  const history: ChargeItem[] = allocated.sort((a, b) => b.paidAt.localeCompare(a.paidAt) || b.createdAt.localeCompare(a.createdAt)).slice(0, 20).map((payment) => {
     const operation = operationById.get(payment.operationId);
     return {
       key: payment.id, operationId: payment.operationId, clientName: payment.clientName, initials: initialsOf(payment.clientName), color: colorFor(operation?.clientId ?? payment.clientName),
-      detail: `Op. #${operationCode(payment.operationId)} · Pago em ${formatDate(payment.paidAt)}`, amountCents: payment.amountCents,
+      detail: `Op. #${operationCode(payment.operationId)} · ${paymentKindLabels[payment.kind]} · Pago em ${formatDate(payment.paidAt)}`, amountCents: payment.amountCents,
       status: relativePaid(payment.paidAt, today), tone: "received",
     };
   });

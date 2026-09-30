@@ -33,7 +33,7 @@ Segredos são fornecidos em ambiente, nunca no código. `.env.local` não deve s
 
 ## Limites conhecidos
 
-- A regra de cálculo das operações é provisória (`src/lib/finance/rules.ts`); periodicidade, parcelas, pagamentos parciais e atraso ainda precisam ser definidos.
+- As regras financeiras ficam só em `src/lib/finance/rules.ts`: cálculo da operação (principal + taxa única), apropriação dos pagamentos (juros pendentes primeiro, depois principal) e limite do pagamento ao saldo em aberto. A divisão juros/principal de cada pagamento é calculada a partir da tabela `payment`, sem coluna extra. Parcelas, multa, juros de mora e renegociação ainda precisam ser definidos.
 - Nenhuma migração ou política RLS foi validada contra uma instância PostgreSQL nesta preparação sem banco ativo.
 - Autorização, isolamento e RLS precisam de testes de integração com ao menos dois tenants antes de dados financeiros reais.
 - Não há gateway, notificações, rotina agendada, armazenamento de arquivos ou recursos de IA funcionais.
