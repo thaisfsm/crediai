@@ -41,11 +41,13 @@ export async function requireSuperAdmin() {
   return session;
 }
 
-export async function withTenantContext<T>(operation: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>) {
+export type TenantTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export async function withTenantContext<T>(operation: (tx: TenantTransaction, context: { tenantId: string; session: Awaited<ReturnType<typeof requireTenantUser>>["session"] }) => Promise<T>) {
   const { tenantId, session } = await requireTenantUser();
   return db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.tenant_id', ${tenantId}, true), set_config('app.crediai_role', ${session.user.role}, true)`);
-    return operation(tx);
+    return operation(tx, { tenantId, session });
   });
 }
 

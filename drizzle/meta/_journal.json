@@ -2,6 +2,19 @@
   "version": "7",
   "dialect": "postgresql",
   "entries": [
-    { "idx": 0, "version": "7", "when": 1790642316845, "tag": "0001_greedy_hydra", "breakpoints": true }
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790642316845,
+      "tag": "0001_greedy_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790786245288,
+      "tag": "0002_financial_core",
+      "breakpoints": true
+    }
   ]
 }

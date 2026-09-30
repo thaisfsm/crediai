@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Dashboard from "./dashboard";
 import { databaseAvailable } from "@/lib/db";
 import { getSession } from "@/lib/auth/guards";
+import { loadTenantPortfolio } from "@/lib/finance/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -12,5 +13,7 @@ export default async function Home() {
   if (!session.user.active) redirect("/account-disabled");
   if (session.user.role === "SUPER_ADMIN") redirect("/admin");
   if (!session.user.tenantId) redirect("/account-disabled");
-  return <Dashboard userName={session.user.name} />;
+  // loadTenantPortfolio passa por requireTenantUser: confere tenant ativo e assinatura válida antes de ler a carteira.
+  const portfolio = await loadTenantPortfolio();
+  return <Dashboard userName={session.user.name} portfolio={portfolio} />;
 }
