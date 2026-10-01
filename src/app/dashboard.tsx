@@ -7,12 +7,12 @@ import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { Icon, type IconName } from "./ui-icon";
-import { ChargesPage, ClientsPage, OperationsPage, PaymentsPage, SettingsPage, WalletSetup } from "./portfolio-pages";
+import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
-type NavKey = "Visão geral" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
+type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
 
 const navGroups: { title: string; items: { label: NavKey; icon: IconName }[] }[] = [
-  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
+  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
 ];
@@ -144,11 +144,16 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
   const periodStart = series.values[0] ?? 0;
   const periodEnd = series.values.at(-1) ?? 0;
   const periodChange = periodStart > 0 ? ((periodEnd - periodStart) / periodStart) * 100 : null;
-  const interestBase = summary.receivedInterestCents + summary.pendingInterestCents;
+  const interestBase = summary.receivedInterestCents + summary.expectedInterestCents;
   const receivedShare = interestBase > 0 ? Math.round((summary.receivedInterestCents / interestBase) * 100) : 0;
   const refresh = () => router.refresh();
 
-  const navigate = (label: NavKey) => {
+  // Cada card do dashboard abre a tela que explica o próprio número (focus/chargesView); o menu abre a visão completa.
+  const [operationsFocus, setOperationsFocus] = useState<OperationsFocus>(null);
+  const [chargesView, setChargesView] = useState<ChargesView>("Em aberto");
+  const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView } = {}) => {
+    setOperationsFocus(options.focus ?? null);
+    setChargesView(options.charges ?? "Em aberto");
     setActive(label);
     setMobileMenuOpen(false);
   };
@@ -218,10 +223,10 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
               {!summary.hasWallet && <WalletSetup onSaved={refresh} />}
 
               <section className="metric-grid" aria-label="Indicadores financeiros da carteira">
-                <a href="#operacoes" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir operações" onClick={(event) => { event.preventDefault(); navigate("Operações"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Inicial {formatMoney(summary.initialCapitalCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></a>
-                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Capital emprestado, abrir operações" onClick={(event) => { event.preventDefault(); navigate("Operações"); }}><div className="metric-top"><span>Capital emprestado</span><span className="metric-icon metric-icon-teal"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={summary.lentCents} /></div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">Principal</span></div><MetricSignal /></a>
-                <a href="#pagamentos" className="metric-card metric-card-clickable" aria-label="Total a receber, abrir cobranças" onClick={(event) => { event.preventDefault(); navigate("Cobranças"); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></a>
-                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, abrir operações" onClick={(event) => { event.preventDefault(); navigate("Operações"); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Das operações em aberto</span><span className="metric-neutral">Projeção</span></div><MetricSignal variant="violet" /></a>
+                <a href="#capital" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir capital da carteira" onClick={(event) => { event.preventDefault(); navigate("Capital"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Aportado {formatMoney(summary.investedCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></a>
+                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Capital emprestado, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "lent" }); }}><div className="metric-top"><span>Capital emprestado</span><span className="metric-icon metric-icon-teal"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={summary.lentCents} /></div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">Principal a receber</span></div><MetricSignal /></a>
+                <a href="#cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></a>
+                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></a>
               </section>
 
               <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
@@ -253,7 +258,7 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
                 <article className="panel yield-panel">
                   <div className="panel-header"><div><div className="panel-title-row"><h2>Resultados</h2><span className="info-dot" title="Juros efetivamente recebidos nos pagamentos e juros que ainda faltam receber">i</span></div><p>Juros da carteira</p></div><button className="more-button" aria-label="Mais opções" onClick={() => navigate("Pagamentos")}><Icon name="more" size={18} /></button></div>
                   <div className="yield-total"><Money cents={summary.receivedInterestCents} /><small>juros recebidos</small></div>
-                  <div className="yield-chart-wrap"><div className="yield-donut" style={{ ["--yield" as string]: `${receivedShare}%` }}><div><strong>{receivedShare}%</strong><small>da projeção</small></div></div><div className="yield-legend"><div><i className="legend-received" /><span>Recebidos</span><strong>{formatMoney(summary.receivedInterestCents)}</strong></div><div><i className="legend-pending" /><span>A receber</span><strong>{formatMoney(summary.pendingInterestCents)}</strong></div></div></div>
+                  <div className="yield-chart-wrap"><div className="yield-donut" style={{ ["--yield" as string]: `${receivedShare}%` }}><div><strong>{receivedShare}%</strong><small>da projeção</small></div></div><div className="yield-legend"><div><i className="legend-received" /><span>Recebidos</span><strong>{formatMoney(summary.receivedInterestCents)}</strong></div><div><i className="legend-pending" /><span>A receber</span><strong>{formatMoney(summary.expectedInterestCents)}</strong></div></div></div>
                   <div className="yield-foot"><span><Icon name="trend" size={14} /> Total recebido</span><strong>{formatMoney(summary.receivedCents)}</strong></div>
                 </article>
               </section>
@@ -281,14 +286,16 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
 
               <footer className="page-footer"><span>CrediAI <i /> Gestão de carteira inteligente</span><span><Icon name="shield" size={13} /> Dados da sua carteira</span></footer>
             </>
+          ) : active === "Capital" ? (
+            <CapitalPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Clientes" ? (
             <ClientsPage portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
           ) : active === "Operações" ? (
-            <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} />
+            <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} />
           ) : active === "Pagamentos" ? (
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
-            <ChargesPage portfolio={portfolio} onChanged={refresh} />
+            <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} />
           ) : active === "Configurações" ? (
             <SettingsPage portfolio={portfolio} onChanged={refresh} />
           ) : (

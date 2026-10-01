@@ -11,6 +11,12 @@ export type OperationRecord = {
 };
 export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string };
 export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind };
+export type CapitalMovementRecord = { id: string; kind: "CONTRIBUTION"; amountCents: number; occurredAt: string; notes: string | null; createdAt: string };
+
+// Extrato do capital: cada linha soma (+) ou tira (−) do capital disponível; o saldo final é o capital disponível atual.
+export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "LOAN" | "PAYMENT";
+export type CapitalLedgerEntry = { key: string; kind: CapitalLedgerKind; date: string; description: string; amountCents: number; balanceCents: number };
+export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = { INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", LOAN: "Empréstimo", PAYMENT: "Recebimento" };
 
 export type OperationState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID" | "CANCELED";
 export type OperationView = OperationRecord & {
@@ -48,8 +54,9 @@ function relativePaid(paidAt: string, today: string) {
   return `Recebido em ${shortDate(paidAt)}`;
 }
 
-export function buildPortfolio({ initialCapitalCents, hasWallet, operations, payments, today }: {
-  initialCapitalCents: number; hasWallet: boolean; operations: OperationRecord[]; payments: PaymentRecord[]; today: string;
+export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn = null, capitalMovements = [], operations, payments, today }: {
+  initialCapitalCents: number; hasWallet: boolean; walletCreatedOn?: string | null; capitalMovements?: CapitalMovementRecord[];
+  operations: OperationRecord[]; payments: PaymentRecord[]; today: string;
 }) {
   const paymentsByOperation = new Map<string, PaymentRecord[]>();
   for (const payment of payments) paymentsByOperation.set(payment.operationId, [...(paymentsByOperation.get(payment.operationId) ?? []), payment]);
@@ -75,17 +82,23 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, operations, pay
   const open = views.filter((operation) => operation.status === "OPEN");
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
-  // Caixa: o capital sai quando a operação é criada e volta com cada pagamento recebido.
-  const lentEverCents = sum(live.map((operation) => operation.principalCents));
+  // Caixa: entra com o capital inicial e os aportes, sai quando a operação é criada (principal) e volta com cada pagamento
+  // recebido (principal e juros). Juros ainda não recebidos nunca entram no capital disponível.
+  const contributionsCents = sum(capitalMovements.map((movement) => movement.amountCents));
+  const usedCapitalCents = sum(live.map((operation) => operation.principalCents));
   const receivedCents = sum(payments.map((payment) => payment.amountCents));
   const summary = {
     hasWallet,
     initialCapitalCents,
-    availableCents: initialCapitalCents - lentEverCents + receivedCents,
-    lentCents: sum(open.map((operation) => operation.principalCents)),
+    contributionsCents,
+    investedCents: initialCapitalCents + contributionsCents,
+    usedCapitalCents,
+    availableCents: initialCapitalCents + contributionsCents - usedCapitalCents + receivedCents,
+    // Principal que ainda não voltou: disponível + emprestado = capital aportado + juros recebidos.
+    lentCents: sum(open.map((operation) => operation.principalRemainingCents)),
     receivableCents: sum(open.map((operation) => operation.balanceCents)),
-    expectedInterestCents: sum(open.map((operation) => operation.interestCents)),
-    pendingInterestCents: sum(open.map((operation) => operation.interestRemainingCents)),
+    // Juros que ainda faltam receber nas operações em aberto (os já recebidos ficam em receivedInterestCents).
+    expectedInterestCents: sum(open.map((operation) => operation.interestRemainingCents)),
     receivedInterestCents: sum(views.map((operation) => operation.interestPaidCents)),
     receivedPrincipalCents: sum(views.map((operation) => operation.principalPaidCents)),
     receivedCents,
@@ -136,7 +149,21 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, operations, pay
   };
   const chart: Record<ChartPeriod, { labels: string[]; values: number[] }> = { "7D": series(6, 7), "30D": series(30, 7), "90D": series(90, 7) };
 
-  return { summary, operations: views, charges, upcoming, chart };
+  const movements: Omit<CapitalLedgerEntry, "balanceCents">[] = [
+    ...capitalMovements.map((movement) => ({ key: movement.id, kind: "CONTRIBUTION" as const, date: movement.occurredAt, description: movement.notes ?? "Aporte de capital", amountCents: movement.amountCents, order: movement.createdAt })),
+    ...live.map((operation) => ({ key: operation.id, kind: "LOAN" as const, date: operation.loanDate, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: -operation.principalCents, order: operation.createdAt })),
+    ...payments.map((payment) => ({ key: payment.id, kind: "PAYMENT" as const, date: payment.paidAt, description: `${payment.clientName} · Op. #${operationCode(payment.operationId)}`, amountCents: payment.amountCents, order: payment.createdAt })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order))
+    .map((entry) => ({ key: entry.key, kind: entry.kind, date: entry.date, description: entry.description, amountCents: entry.amountCents }));
+  // O capital inicial abre o extrato, mesmo que a carteira tenha sido configurada depois de operações retroativas.
+  const initialEntry = hasWallet ? [{ key: "initial", kind: "INITIAL" as const, date: walletCreatedOn ?? today, description: "Capital inicial da carteira", amountCents: initialCapitalCents }] : [];
+  let running = 0;
+  const capitalLedger: CapitalLedgerEntry[] = [...initialEntry, ...movements].map((entry) => {
+    running += entry.amountCents;
+    return { ...entry, balanceCents: running };
+  });
+
+  return { summary, operations: views, charges, upcoming, chart, capitalLedger: capitalLedger.reverse() };
 }
 
 export type Portfolio = ReturnType<typeof buildPortfolio>;

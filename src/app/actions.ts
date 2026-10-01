@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { clients, loanOperations, payments, wallets } from "@/lib/db/schema";
+import { capitalMovements, clients, loanOperations, payments, wallets } from "@/lib/db/schema";
 import { formatMoney, isIsoDate, normalizeCpf, normalizePhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { allocatePayments, calculateOperation, checkPayment } from "@/lib/finance/rules";
 
@@ -26,6 +26,24 @@ export async function saveWalletAction(data: FormData): Promise<ActionResult> {
   });
   revalidatePath("/");
   return { ok: true, message: "Capital inicial salvo." };
+}
+
+// Aporte: dinheiro novo colocado na carteira depois do capital inicial. Entra no capital disponível na hora.
+export async function registerContributionAction(data: FormData): Promise<ActionResult> {
+  const amountCents = parseMoneyToCents(text(data, "amount", 40));
+  const occurredAt = text(data, "occurredAt", 10) || todayIso();
+  const notes = optional(text(data, "notes", 500));
+  if (amountCents === null || amountCents <= 0 || amountCents > MAX_CENTS) return { ok: false, error: "Informe o valor do aporte em reais, por exemplo 2.000,00." };
+  if (!isIsoDate(occurredAt)) return { ok: false, error: "Informe a data do aporte." };
+  if (occurredAt > todayIso()) return { ok: false, error: "A data do aporte não pode ser depois de hoje." };
+  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+    const wallet = await tx.query.wallets.findFirst({ where: eq(wallets.tenantId, tenantId) });
+    if (!wallet) return { ok: false, error: "Defina o capital inicial antes de registrar aportes." };
+    await tx.insert(capitalMovements).values({ id: id("cap"), tenantId, kind: "CONTRIBUTION", amountCents, occurredAt, notes });
+    return { ok: true, message: `Aporte de ${formatMoney(amountCents)} registrado.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
 }
 
 // CPF e telefone são gravados só com dígitos e formatados na tela. Um valor antigo fora do padrão (por exemplo um RG),
@@ -102,14 +120,16 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
   return result;
 }
 
-// Mesmo cálculo do card "Capital disponível" (src/lib/finance/portfolio.ts): o principal sai do caixa quando a
-// operação é criada e volta, com os juros, nos pagamentos recebidos.
+// Mesmo cálculo do card "Capital disponível" (src/lib/finance/portfolio.ts): capital inicial + aportes − principal das
+// operações + pagamentos recebidos.
 async function availableCapitalCents(tx: TenantTransaction, tenantId: string, initialCapitalCents: number) {
+  const [{ contributed }] = await tx.select({ contributed: sql<string>`coalesce(sum(${capitalMovements.amountCents}), 0)` }).from(capitalMovements)
+    .where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.kind, "CONTRIBUTION")));
   const [{ lent }] = await tx.select({ lent: sql<string>`coalesce(sum(${loanOperations.principalCents}), 0)` }).from(loanOperations)
     .where(and(eq(loanOperations.tenantId, tenantId), ne(loanOperations.status, "CANCELED")));
   const [{ received }] = await tx.select({ received: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
     .where(eq(payments.tenantId, tenantId));
-  return initialCapitalCents - Number(lent) + Number(received);
+  return initialCapitalCents + Number(contributed) - Number(lent) + Number(received);
 }
 
 // Registra um pagamento (juros, parcial ou quitação). A divisão entre juros e principal e o limite do saldo

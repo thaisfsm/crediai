@@ -2,7 +2,7 @@
 
 **CrediAI** é uma aplicação web responsiva para apoiar a gestão de carteiras de crédito. O projeto está em estágio de fundação: combina uma interface demonstrativa com a base técnica para autenticação, contas SaaS isoladas e persistência em PostgreSQL.
 
-> **Estado atual:** o dashboard é alimentado pela carteira real de cada tenant (capital inicial, clientes, operações e pagamentos). As regras financeiras ficam em `src/lib/finance/rules.ts`: a taxa informada incide uma vez sobre o principal (total = principal + juros) e a operação aceita vários pagamentos, que quitam primeiro os juros pendentes e depois o principal. Parcelas, multa, juros de mora e renegociação ainda não foram definidos.
+> **Estado atual:** o dashboard é alimentado pela carteira real de cada tenant (capital inicial, aportes, clientes, operações e pagamentos). As regras financeiras ficam em `src/lib/finance/rules.ts`: a taxa informada incide uma vez sobre o principal (total = principal + juros) e a operação aceita vários pagamentos, que quitam primeiro os juros pendentes e depois o principal. Parcelas, multa, juros de mora e renegociação ainda não foram definidos.
 
 ## Objetivo
 
@@ -19,7 +19,7 @@ Preparar uma plataforma SaaS em que cada cliente tenha seu próprio ambiente. A 
 - Schema PostgreSQL tipado com Drizzle, migration inicial e políticas RLS para tenants, planos e assinaturas.
 - Tela de configuração quando não há conexão PostgreSQL disponível.
 
-- Carteira por tenant: capital inicial, cadastro de clientes, operações com data e vencimento, pagamentos parciais (juros primeiro, depois principal) com histórico e dashboard calculado a partir desses dados (tabelas `wallet`, `client`, `loan_operation` e `payment`, com RLS forçada).
+- Carteira por tenant: capital inicial, aportes com histórico do capital, cadastro de clientes, operações com data e vencimento, pagamentos parciais (juros primeiro, depois principal) com histórico e dashboard calculado a partir desses dados (tabelas `wallet`, `capital_movement`, `client`, `loan_operation` e `payment`, com RLS forçada).
 
 ### Em desenvolvimento
 

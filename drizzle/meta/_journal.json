@@ -15,6 +15,13 @@
       "when": 1790786245288,
       "tag": "0002_financial_core",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790810504596,
+      "tag": "0003_capital_movements",
+      "breakpoints": true
     }
   ]
 }

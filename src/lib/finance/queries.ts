@@ -1,7 +1,7 @@
 import "server-only";
 import { asc, desc, eq } from "drizzle-orm";
 import { withTenantContext } from "@/lib/auth/guards";
-import { clients, loanOperations, payments, wallets } from "@/lib/db/schema";
+import { capitalMovements, clients, loanOperations, payments, wallets } from "@/lib/db/schema";
 import { todayIso } from "./format";
 import { buildPortfolio, type ClientRecord } from "./portfolio";
 
@@ -10,6 +10,7 @@ import { buildPortfolio, type ClientRecord } from "./portfolio";
 export async function loadTenantPortfolio() {
   const data = await withTenantContext(async (tx, { tenantId }) => {
     const wallet = await tx.query.wallets.findFirst({ where: eq(wallets.tenantId, tenantId) });
+    const movementRows = await tx.select().from(capitalMovements).where(eq(capitalMovements.tenantId, tenantId)).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
     const clientRows = await tx.select().from(clients).where(eq(clients.tenantId, tenantId)).orderBy(asc(clients.name));
     const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name })
       .from(loanOperations)
@@ -22,7 +23,7 @@ export async function loadTenantPortfolio() {
       .innerJoin(clients, eq(clients.id, loanOperations.clientId))
       .where(eq(payments.tenantId, tenantId))
       .orderBy(desc(payments.paidAt), desc(payments.createdAt));
-    return { wallet, clientRows, operationRows, paymentRows };
+    return { wallet, movementRows, clientRows, operationRows, paymentRows };
   });
 
   const clientList: ClientRecord[] = data.clientRows.map((client) => ({
@@ -31,6 +32,10 @@ export async function loadTenantPortfolio() {
   const portfolio = buildPortfolio({
     hasWallet: Boolean(data.wallet),
     initialCapitalCents: data.wallet?.initialCapitalCents ?? 0,
+    walletCreatedOn: data.wallet ? todayIso(data.wallet.createdAt) : null,
+    capitalMovements: data.movementRows.map((movement) => ({
+      id: movement.id, kind: movement.kind, amountCents: movement.amountCents, occurredAt: movement.occurredAt, notes: movement.notes, createdAt: movement.createdAt.toISOString(),
+    })),
     today: todayIso(),
     operations: data.operationRows.map(({ operation, clientName }) => ({
       id: operation.id, clientId: operation.clientId, clientName, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps,

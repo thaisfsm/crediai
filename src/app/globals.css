@@ -687,6 +687,9 @@ button { color:inherit; }
 .status-paid { color:#60d9a7; background:rgba(96,217,167,.1); }
 .status-muted { color:#8298a8; background:rgba(130,152,168,.1); }
 .actions-cell .muted-cell { display:block; margin-top:4px; }
+.focus-panel { border-color:rgba(73,218,214,.3); }
+.data-table tfoot td { padding:10px 9px; border-top:1px solid rgba(133,174,194,.2); color:#e3eff4; white-space:nowrap; }
+.capital-note { margin:12px 0 0; color:#8da2b1; font-size:11px; }
 .payment-overlay { position:fixed; inset:0; z-index:40; display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; overflow-y:auto; background:rgba(1,7,12,.72); backdrop-filter:blur(5px); }
 .payment-panel { width:min(680px,100%); white-space:normal; text-align:left; }
 .payment-panel .panel-header p { display:flex; align-items:center; gap:6px; }

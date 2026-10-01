@@ -24,6 +24,8 @@ const adminScope = sql`${roleSetting} = 'SUPER_ADMIN'`;
 export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
 export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED"]);
+// Movimentos de capital além do capital inicial (que fica em wallet). Retirada pode entrar depois como novo valor do enum.
+export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["TRIALING", "ACTIVE", "PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELED"]);
 
 export const plans = pgTable("plan", {
@@ -203,4 +205,18 @@ export const payments = pgTable("payment", {
   ...tenantPolicies("payment", table.tenantId),
 ]).enableRLS();
 
-export const schema = { accounts, clients, loanOperations, payments, plans, sessions, subscriptions, tenants, users, verifications, wallets };
+export const capitalMovements = pgTable("capital_movement", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  kind: capitalMovementKind("kind").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  occurredAt: date("occurred_at", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("capital_movement_tenant_id_idx").on(table.tenantId),
+  check("capital_movement_amount_positive", sql`${table.amountCents} > 0`),
+  ...tenantPolicies("capital_movement", table.tenantId),
+]).enableRLS();
+
+export const schema = { accounts, capitalMovements, clients, loanOperations, payments, plans, sessions, subscriptions, tenants, users, verifications, wallets };
