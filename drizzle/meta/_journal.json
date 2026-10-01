@@ -22,6 +22,20 @@
       "when": 1790810504596,
       "tag": "0003_capital_movements",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790813817330,
+      "tag": "0004_client_archive_capital_withdrawal",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790814890914,
+      "tag": "0005_wallet_cycles",
+      "breakpoints": true
     }
   ]
 }

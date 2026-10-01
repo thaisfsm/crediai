@@ -688,6 +688,14 @@ button { color:inherit; }
 .status-muted { color:#8298a8; background:rgba(130,152,168,.1); }
 .actions-cell .muted-cell { display:block; margin-top:4px; }
 .focus-panel { border-color:rgba(73,218,214,.3); }
+.row-actions { display:inline-flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:6px; }
+.danger-outline { color:#ff9da1; border-color:rgba(242,114,124,.35); }
+.danger-outline:hover { color:#ffc3c5; border-color:rgba(242,114,124,.6); }
+.primary-button.danger-button { color:#fff; background:linear-gradient(135deg,#d9545e,#b8323d); box-shadow:none; }
+.confirm-panel { width:min(520px,100%); }
+.confirm-body p { margin:12px 0 0; color:#b9cbd6; font-size:12px; line-height:1.55; }
+.confirm-body strong { color:#e3eff4; }
+.confirm-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
 .data-table tfoot td { padding:10px 9px; border-top:1px solid rgba(133,174,194,.2); color:#e3eff4; white-space:nowrap; }
 .capital-note { margin:12px 0 0; color:#8da2b1; font-size:11px; }
 .payment-overlay { position:fixed; inset:0; z-index:40; display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; overflow-y:auto; background:rgba(1,7,12,.72); backdrop-filter:blur(5px); }
@@ -722,3 +730,7 @@ button { color:inherit; }
   .payment-overlay { padding:16px 10px; }
   .form-panel,.table-panel { padding:13px 12px; }
 }
+
+/* Nome do cliente abre a página do cliente */
+.client-link { padding: 0; font-size: inherit; color: inherit; }
+.client-link strong { text-decoration: underline; text-decoration-color: rgba(54, 185, 173, .45); text-underline-offset: 3px; }

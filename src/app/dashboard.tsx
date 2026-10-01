@@ -7,7 +7,7 @@ import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { Icon, type IconName } from "./ui-icon";
-import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
+import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
 
@@ -220,7 +220,7 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
                 <div className="heading-actions"><button className="primary-button" onClick={() => navigate("Operações")}><Icon name="plus" size={17} /> Nova operação</button></div>
               </section>
 
-              {!summary.hasWallet && <WalletSetup onSaved={refresh} />}
+              {summary.needsInitialCapital && <WalletSetup onSaved={refresh} cycleNumber={summary.cycleNumber} />}
 
               <section className="metric-grid" aria-label="Indicadores financeiros da carteira">
                 <a href="#capital" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir capital da carteira" onClick={(event) => { event.preventDefault(); navigate("Capital"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Aportado {formatMoney(summary.investedCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></a>
@@ -296,17 +296,11 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
             <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} />
-          ) : active === "Configurações" ? (
-            <SettingsPage portfolio={portfolio} onChanged={refresh} />
+          ) : active === "Relatórios" ? (
+            <ReportsPage portfolio={portfolio} />
           ) : (
-            <section className="coming-page">
-              <div className="coming-icon"><Icon name={navGroups.flatMap((group) => group.items).find((item) => item.label === active)?.icon ?? "grid"} size={27} /></div>
-              <span className="eyebrow">CREDIAI · {active.toUpperCase()}</span>
-              <h1>{active}</h1>
-              <p>Esta área está prevista para uma próxima etapa do CrediAI. Os indicadores da sua carteira já estão na visão geral.</p>
-              <button className="primary-button" onClick={() => navigate("Visão geral")}><Icon name="arrow" size={16} /> Voltar para visão geral</button>
-              <div className="coming-note"><Icon name="sparkles" size={16} /> A estrutura visual está preparada para este módulo.</div>
-            </section>
+            // Todas as áreas do menu já têm tela própria; Configurações é a última.
+            <SettingsPage portfolio={portfolio} onChanged={refresh} />
           )}
         </div>
       </main>

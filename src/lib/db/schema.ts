@@ -24,8 +24,8 @@ const adminScope = sql`${roleSetting} = 'SUPER_ADMIN'`;
 export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
 export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED"]);
-// Movimentos de capital além do capital inicial (que fica em wallet). Retirada pode entrar depois como novo valor do enum.
-export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION"]);
+// Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada e estorno de aporte.
+export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION", "WITHDRAWAL", "CONTRIBUTION_REVERSAL"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["TRIALING", "ACTIVE", "PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELED"]);
 
 export const plans = pgTable("plan", {
@@ -127,23 +127,46 @@ export const subscriptions = pgTable("subscription", {
 ]).enableRLS();
 
 // Dados financeiros do tenant. Valores monetários em centavos; taxas em pontos-base (1% = 100).
-const tenantPolicies = (name: string, tenantId: SQLWrapper) => [
+// tenantDelete: o próprio tenant pode apagar (só usado em client, cuja FK RESTRICT impede apagar quem tem operações).
+const tenantPolicies = (name: string, tenantId: SQLWrapper, { tenantDelete = false } = {}) => [
   pgPolicy(`${name}_select_tenant_or_admin`, { for: "select", using: tenantScope(tenantId) }),
   pgPolicy(`${name}_insert_own_or_admin`, { for: "insert", withCheck: tenantScope(tenantId) }),
   pgPolicy(`${name}_update_own_or_admin`, { for: "update", using: tenantScope(tenantId), withCheck: tenantScope(tenantId) }),
-  pgPolicy(`${name}_delete_admin_only`, { for: "delete", using: adminScope }),
+  tenantDelete
+    ? pgPolicy(`${name}_delete_own_or_admin`, { for: "delete", using: tenantScope(tenantId) })
+    : pgPolicy(`${name}_delete_admin_only`, { for: "delete", using: adminScope }),
 ];
 
 export const wallets = pgTable("wallet", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   initialCapitalCents: bigint("initial_capital_cents", { mode: "number" }).notNull().default(0),
+  // Ciclo financeiro atual. "Zerar carteira" fecha o ciclo e abre o seguinte; nada dos ciclos anteriores é apagado.
+  cycleNumber: integer("cycle_number").notNull().default(1),
+  // Início do ciclo atual; vazio no ciclo 1, que começa na criação da carteira.
+  cycleStartedAt: timestamp("cycle_started_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("wallet_tenant_id_unique").on(table.tenantId),
   check("wallet_initial_capital_non_negative", sql`${table.initialCapitalCents} >= 0`),
+  check("wallet_cycle_number_positive", sql`${table.cycleNumber} >= 1`),
   ...tenantPolicies("wallet", table.tenantId),
+]).enableRLS();
+
+// Ciclos encerrados pelo "Zerar carteira": guarda o capital inicial e as datas de cada ciclo fechado.
+export const walletCycles = pgTable("wallet_cycle", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  cycleNumber: integer("cycle_number").notNull(),
+  initialCapitalCents: bigint("initial_capital_cents", { mode: "number" }).notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }).notNull().defaultNow(),
+  closedByUserId: text("closed_by_user_id"),
+}, (table) => [
+  uniqueIndex("wallet_cycle_tenant_number_unique").on(table.tenantId, table.cycleNumber),
+  check("wallet_cycle_cycle_number_positive", sql`${table.cycleNumber} >= 1`),
+  ...tenantPolicies("wallet_cycle", table.tenantId),
 ]).enableRLS();
 
 export const clients = pgTable("client", {
@@ -153,13 +176,15 @@ export const clients = pgTable("client", {
   document: text("document"),
   phone: text("phone"),
   notes: text("notes"),
+  // Cliente com histórico de operações não é apagado: fica arquivado (fora da lista e do cadastro de operação).
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("client_tenant_id_idx").on(table.tenantId),
   unique("client_tenant_id_id_unique").on(table.tenantId, table.id),
   check("client_name_not_blank", sql`length(trim(${table.name})) > 0`),
-  ...tenantPolicies("client", table.tenantId),
+  ...tenantPolicies("client", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
 export const loanOperations = pgTable("loan_operation", {
@@ -175,10 +200,12 @@ export const loanOperations = pgTable("loan_operation", {
   calculationRule: text("calculation_rule").notNull(),
   status: loanOperationStatus("status").notNull().default("OPEN"),
   settledAt: date("settled_at", { mode: "string" }),
+  cycleNumber: integer("cycle_number").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("loan_operation_tenant_id_idx").on(table.tenantId),
+  index("loan_operation_tenant_cycle_idx").on(table.tenantId, table.cycleNumber),
   index("loan_operation_tenant_due_date_idx").on(table.tenantId, table.dueDate),
   unique("loan_operation_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "loan_operation_client_same_tenant_fk", columns: [table.tenantId, table.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
@@ -212,11 +239,19 @@ export const capitalMovements = pgTable("capital_movement", {
   amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
   occurredAt: date("occurred_at", { mode: "string" }).notNull(),
   notes: text("notes"),
+  // Estorno aponta para o aporte estornado; o aporte original continua no histórico.
+  reversedMovementId: text("reversed_movement_id"),
+  cycleNumber: integer("cycle_number").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("capital_movement_tenant_id_idx").on(table.tenantId),
+  index("capital_movement_tenant_cycle_idx").on(table.tenantId, table.cycleNumber),
+  unique("capital_movement_tenant_id_id_unique").on(table.tenantId, table.id),
+  uniqueIndex("capital_movement_reversed_movement_unique").on(table.reversedMovementId),
+  foreignKey({ name: "capital_movement_reversal_same_tenant_fk", columns: [table.tenantId, table.reversedMovementId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
   check("capital_movement_amount_positive", sql`${table.amountCents} > 0`),
+  check("capital_movement_reversal_link", sql`(${table.kind}::text = 'CONTRIBUTION_REVERSAL') = (${table.reversedMovementId} is not null)`),
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
-export const schema = { accounts, capitalMovements, clients, loanOperations, payments, plans, sessions, subscriptions, tenants, users, verifications, wallets };
+export const schema = { accounts, capitalMovements, clients, loanOperations, payments, plans, sessions, subscriptions, tenants, users, verifications, walletCycles, wallets };

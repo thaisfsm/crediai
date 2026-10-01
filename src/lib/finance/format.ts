@@ -52,6 +52,24 @@ export function daysBetween(fromIso: string, toIso: string) {
   return Math.round((Date.parse(`${toIso}T00:00:00Z`) - Date.parse(`${fromIso}T00:00:00Z`)) / 86_400_000);
 }
 
+// Meses de calendário completos entre duas datas (15/01 → 14/02 = 0; 15/01 → 15/02 = 1).
+export function monthsBetween(fromIso: string, toIso: string) {
+  const [fromYear, fromMonth, fromDay] = fromIso.split("-").map(Number);
+  const [toYear, toMonth, toDay] = toIso.split("-").map(Number);
+  return Math.max((toYear - fromYear) * 12 + (toMonth - fromMonth) - (toDay < fromDay ? 1 : 0), 0);
+}
+
+// Tempo decorrido em texto: "hoje", "12 dias", "1 mês", "6 meses", "1 ano", "1 ano e 2 meses".
+export function formatElapsed(fromIso: string, toIso: string) {
+  const days = Math.max(daysBetween(fromIso, toIso), 0);
+  const months = monthsBetween(fromIso, toIso);
+  if (months === 0) return days === 0 ? "hoje" : `${days} dia${days === 1 ? "" : "s"}`;
+  if (months < 12) return `${months} ${months === 1 ? "mês" : "meses"}`;
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  return `${years} ano${years === 1 ? "" : "s"}${rest ? ` e ${rest} ${rest === 1 ? "mês" : "meses"}` : ""}`;
+}
+
 export function formatDate(iso: string) {
   const [year, month, day] = iso.split("-");
   return `${day}/${month}/${year}`;
