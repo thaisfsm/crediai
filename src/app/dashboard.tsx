@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
@@ -124,6 +124,28 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 }
 
 
+// Em telas estreitas as tabelas viram cartões (CSS): cada célula recebe o título da sua coluna em data-label.
+// Observa a página porque as tabelas mudam a cada navegação e atualização dos dados.
+function useTableLabels() {
+  useEffect(() => {
+    const label = () => document.querySelectorAll<HTMLTableElement>(".data-table").forEach((table) => {
+      const heads = [...table.querySelectorAll("thead th")].map((th) => th.textContent?.trim() ?? "");
+      table.querySelectorAll<HTMLTableRowElement>("tbody tr, tfoot tr").forEach((row) => {
+        let column = 0;
+        for (const cell of row.cells) {
+          const text = heads[column] ?? "";
+          if (cell.dataset.label !== text) cell.dataset.label = text;
+          column += cell.colSpan || 1;
+        }
+      });
+    });
+    label();
+    const observer = new MutationObserver(label);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+}
+
 export default function Dashboard({ userName, portfolio }: { userName: string; portfolio: TenantPortfolio }) {
   const router = useRouter();
   const initials = userName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
@@ -133,6 +155,8 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  useTableLabels();
   const [intelligenceCoreOpen, setIntelligenceCoreOpen] = useState(false);
   const [intelligenceCoreHovered, setIntelligenceCoreHovered] = useState(false);
   const { summary, charges, upcoming, chart } = portfolio;
@@ -151,7 +175,10 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
   // Cada card do dashboard abre a tela que explica o próprio número (focus/chargesView); o menu abre a visão completa.
   const [operationsFocus, setOperationsFocus] = useState<OperationsFocus>(null);
   const [chargesView, setChargesView] = useState<ChargesView>("Em aberto");
+  // Cada clique no menu abre a tela do início (por exemplo, Clientes volta para a lista, saindo da página de um cliente).
+  const [visit, setVisit] = useState(0);
   const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView } = {}) => {
+    setVisit((count) => count + 1);
     setOperationsFocus(options.focus ?? null);
     setChargesView(options.charges ?? "Em aberto");
     setActive(label);
@@ -186,9 +213,6 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
         <div className="sidebar-bottom">
           <div className="security-note"><span className="security-icon"><Icon name="shield" size={15} /></span><span><strong>Ambiente isolado</strong><small>Separação reforçada por tenant</small></span></div>
           <button className="nav-item help-link" onClick={() => navigate("Configurações")}><Icon name="help" size={18} /><span>Central de ajuda</span><Icon name="arrow" size={14} /></button>
-          <div className="profile-button">
-            <span className="profile-avatar">{initials}</span><span className="profile-copy"><strong>{userName}</strong><small>Minha conta</small></span><button className="signout-button" aria-label="Sair da conta" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}>Sair</button>
-          </div>
         </div>
       </aside>
 
@@ -208,7 +232,17 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
               {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{pendingCharges > 0 ? `${pendingCharges} pendente${pendingCharges > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p><button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
             </div>
             <span className="topbar-divider" />
-            <button className="top-profile" onClick={() => navigate("Configurações")}><span className="profile-avatar">{initials}</span><span>{userName}</span><Icon name="chevron" size={14} /></button>
+            {/* Único lugar com o usuário e o "Sair". */}
+            <div className="top-action-wrap">
+              <button className="top-profile" aria-label={`Menu da conta de ${userName}`} aria-expanded={profileOpen} onClick={() => { setProfileOpen(!profileOpen); setNotificationsOpen(false); setSearchOpen(false); }}><span className="profile-avatar">{initials}</span><span>{userName}</span><Icon name="chevron" size={14} /></button>
+              {profileOpen && (
+                <div className="notification-popover profile-popover" role="menu" onKeyDown={(event) => { if (event.key === "Escape") setProfileOpen(false); }}>
+                  <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
+                  <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>
+                  <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -278,7 +312,7 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
                   <div className="panel-header"><div><h2>Próximos vencimentos</h2><p>Agenda de cobranças em aberto</p></div><button className="more-button" aria-label="Abrir cobranças" onClick={() => navigate("Cobranças")}><Icon name="more" size={18} /></button></div>
                   <div className="upcoming-list">
                     {upcoming.length === 0 && <p className="empty-state">Nenhum vencimento em aberto.</p>}
-                    {upcoming.map((item) => { const date = dayAndMonth(item.dueDate); return <div className="upcoming-row" key={item.id}><span className="next-date-card"><strong>{date.day}</strong><small>{date.month}</small></span><div className="upcoming-copy"><strong>{item.clientName}</strong><small>Pagamento único · Op. #{item.code}</small></div><div className="upcoming-amount"><strong>{formatMoney(item.balanceCents)}</strong><small>{item.daysUntilDue === 0 ? "Hoje" : item.daysUntilDue === 1 ? "Amanhã" : `Em ${item.daysUntilDue} dias`}</small></div></div>; })}
+                    {upcoming.map((item) => { const date = dayAndMonth(item.nextDueDate); return <div className="upcoming-row" key={item.id}><span className="next-date-card"><strong>{date.day}</strong><small>{date.month}</small></span><div className="upcoming-copy"><strong>{item.clientName}</strong><small>{item.nextInstallment ? `Parcela ${item.nextInstallment.number}/${item.installments.length}` : "Pagamento único"} · Op. #{item.code}</small></div><div className="upcoming-amount"><strong>{formatMoney(item.nextInstallment ? item.nextInstallment.remainingCents : item.balanceCents)}</strong><small>{item.daysUntilDue === 0 ? "Hoje" : item.daysUntilDue === 1 ? "Amanhã" : `Em ${item.daysUntilDue} dias`}</small></div></div>; })}
                   </div>
                   <button className="activity-link" onClick={() => navigate("Cobranças")}>Ver central de cobranças <Icon name="arrow" size={14} /></button>
                 </article>
@@ -289,7 +323,7 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
           ) : active === "Capital" ? (
             <CapitalPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Clientes" ? (
-            <ClientsPage portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
+            <ClientsPage key={visit} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
           ) : active === "Operações" ? (
             <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} />
           ) : active === "Pagamentos" ? (

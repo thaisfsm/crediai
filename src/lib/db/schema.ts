@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -20,6 +21,10 @@ const roleSetting = sql`coalesce(current_setting('app.crediai_role', true), '')`
 const tenantSetting = sql`nullif(current_setting('app.tenant_id', true), '')`;
 const tenantScope = (tenantId: SQLWrapper) => sql`(${roleSetting} = 'SUPER_ADMIN' or ${tenantId} = ${tenantSetting})`;
 const adminScope = sql`${roleSetting} = 'SUPER_ADMIN'`;
+
+// Conteúdo de arquivo guardado no próprio banco (bytea).
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+
 
 export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
@@ -176,6 +181,34 @@ export const clients = pgTable("client", {
   document: text("document"),
   phone: text("phone"),
   notes: text("notes"),
+  // Endereço residencial
+  residentialCep: text("residential_cep"),
+  residentialStreet: text("residential_street"),
+  residentialNumber: text("residential_number"),
+  residentialComplement: text("residential_complement"),
+  residentialDistrict: text("residential_district"),
+  residentialCity: text("residential_city"),
+  residentialState: text("residential_state"),
+  // Endereço comercial
+  businessCep: text("business_cep"),
+  businessStreet: text("business_street"),
+  businessNumber: text("business_number"),
+  businessComplement: text("business_complement"),
+  businessDistrict: text("business_district"),
+  businessCity: text("business_city"),
+  businessState: text("business_state"),
+  // Duas referências pessoais
+  reference1Name: text("reference1_name"),
+  reference1Phone: text("reference1_phone"),
+  reference1Relationship: text("reference1_relationship"),
+  reference2Name: text("reference2_name"),
+  reference2Phone: text("reference2_phone"),
+  reference2Relationship: text("reference2_relationship"),
+  // Avalista do cliente (vale para as operações dele)
+  guarantorName: text("guarantor_name"),
+  guarantorDocument: text("guarantor_document"),
+  guarantorPhone: text("guarantor_phone"),
+  guarantorNotes: text("guarantor_notes"),
   // Cliente com histórico de operações não é apagado: fica arquivado (fora da lista e do cadastro de operação).
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -201,6 +234,12 @@ export const loanOperations = pgTable("loan_operation", {
   status: loanOperationStatus("status").notNull().default("OPEN"),
   settledAt: date("settled_at", { mode: "string" }),
   cycleNumber: integer("cycle_number").notNull().default(1),
+  // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (PMT).
+  modality: text("modality").notNull().default("SINGLE"),
+  // Só no parcelado: quantidade de parcelas, valor de cada parcela e primeiro vencimento (as demais vencem mês a mês).
+  installmentCount: integer("installment_count"),
+  installmentCents: bigint("installment_cents", { mode: "number" }),
+  firstDueDate: date("first_due_date", { mode: "string" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -213,6 +252,9 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_rate_non_negative", sql`${table.interestRateBps} >= 0`),
   check("loan_operation_amounts_consistent", sql`${table.interestCents} >= 0 and ${table.totalCents} = ${table.principalCents} + ${table.interestCents}`),
   check("loan_operation_due_after_loan", sql`${table.dueDate} >= ${table.loanDate}`),
+  check("loan_operation_modality_valid", sql`(${table.modality} = 'SINGLE' and ${table.installmentCount} is null and ${table.installmentCents} is null and ${table.firstDueDate} is null)
+    or (${table.modality} = 'INSTALLMENT' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
+      and ${table.totalCents} = ${table.installmentCount} * ${table.installmentCents})`),
   ...tenantPolicies("loan_operation", table.tenantId),
 ]).enableRLS();
 
@@ -227,9 +269,80 @@ export const payments = pgTable("payment", {
 }, (table) => [
   index("payment_tenant_id_idx").on(table.tenantId),
   index("payment_operation_id_idx").on(table.operationId),
+  unique("payment_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "payment_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
   check("payment_amount_positive", sql`${table.amountCents} > 0`),
   ...tenantPolicies("payment", table.tenantId),
+]).enableRLS();
+
+// Histórico de edições de pagamento: guarda valor, data e observação de antes e de depois de cada correção.
+export const paymentRevisions = pgTable("payment_revision", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  paymentId: text("payment_id").notNull(),
+  previousAmountCents: bigint("previous_amount_cents", { mode: "number" }).notNull(),
+  previousPaidAt: date("previous_paid_at", { mode: "string" }).notNull(),
+  previousNotes: text("previous_notes"),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  paidAt: date("paid_at", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  editedByUserId: text("edited_by_user_id"),
+  editedAt: timestamp("edited_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("payment_revision_payment_id_idx").on(table.paymentId),
+  foreignKey({ name: "payment_revision_payment_same_tenant_fk", columns: [table.tenantId, table.paymentId], foreignColumns: [payments.tenantId, payments.id] }).onDelete("restrict"),
+  check("payment_revision_amounts_positive", sql`${table.previousAmountCents} > 0 and ${table.amountCents} > 0`),
+  ...tenantPolicies("payment_revision", table.tenantId),
+]).enableRLS();
+
+// Renovação de período: o cliente pagou só os juros do período e a operação ganhou novo vencimento e novo período de juros.
+// O pagamento dos juros fica em payment (entra no capital como qualquer pagamento); aqui fica o que a renovação mudou.
+export const loanRenewals = pgTable("loan_renewal", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  operationId: text("operation_id").notNull(),
+  paymentId: text("payment_id").notNull(),
+  // Número do novo período (o período original é o 1; a primeira renovação abre o 2).
+  periodNumber: integer("period_number").notNull(),
+  previousDueDate: date("previous_due_date", { mode: "string" }).notNull(),
+  newDueDate: date("new_due_date", { mode: "string" }).notNull(),
+  // Principal em aberto na renovação e juros do novo período (taxa da operação sobre esse principal; sem juros sobre juros).
+  principalBaseCents: bigint("principal_base_cents", { mode: "number" }).notNull(),
+  interestCents: bigint("interest_cents", { mode: "number" }).notNull(),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("loan_renewal_operation_id_idx").on(table.operationId),
+  uniqueIndex("loan_renewal_payment_unique").on(table.paymentId),
+  uniqueIndex("loan_renewal_operation_period_unique").on(table.operationId, table.periodNumber),
+  foreignKey({ name: "loan_renewal_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
+  foreignKey({ name: "loan_renewal_payment_same_tenant_fk", columns: [table.tenantId, table.paymentId], foreignColumns: [payments.tenantId, payments.id] }).onDelete("restrict"),
+  check("loan_renewal_period_after_first", sql`${table.periodNumber} >= 2`),
+  check("loan_renewal_due_extended", sql`${table.newDueDate} > ${table.previousDueDate}`),
+  check("loan_renewal_amounts_valid", sql`${table.principalBaseCents} > 0 and ${table.interestCents} >= 0`),
+  ...tenantPolicies("loan_renewal", table.tenantId),
+]).enableRLS();
+
+// Documentos anexados ao cliente. O arquivo fica no banco, sempre ligado a um cliente do mesmo tenant.
+export const clientDocuments = pgTable("client_document", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  // O que é o documento (RG, comprovante de residência, contrato…)
+  label: text("label").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  content: bytea("content").notNull(),
+  uploadedByUserId: text("uploaded_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("client_document_client_id_idx").on(table.clientId),
+  // Cliente apagado de vez (só quem nunca teve operação) leva os documentos junto; nenhum arquivo fica solto.
+  foreignKey({ name: "client_document_client_same_tenant_fk", columns: [table.tenantId, table.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("cascade"),
+  check("client_document_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
+  check("client_document_label_not_blank", sql`length(trim(${table.label})) > 0`),
+  ...tenantPolicies("client_document", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
 export const capitalMovements = pgTable("capital_movement", {
@@ -254,4 +367,4 @@ export const capitalMovements = pgTable("capital_movement", {
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
-export const schema = { accounts, capitalMovements, clients, loanOperations, payments, plans, sessions, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptions, tenants, users, verifications, walletCycles, wallets };

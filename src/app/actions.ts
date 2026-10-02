@@ -1,12 +1,13 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clients, loanOperations, payments, walletCycles, wallets } from "@/lib/db/schema";
-import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
-import { allocatePayments, calculateOperation, checkPayment } from "@/lib/finance/rules";
+import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, walletCycles, wallets } from "@/lib/db/schema";
+import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
+import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { allocatePayments, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, renewalInterest } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -48,7 +49,7 @@ export async function registerContributionAction(data: FormData): Promise<Action
 
 // CPF e telefone são gravados só com dígitos e formatados na tela. Um valor antigo fora do padrão (por exemplo um RG),
 // reenviado sem alteração na edição, é mantido como está para não impedir a edição de clientes cadastrados antes das máscaras.
-function clientFields(data: FormData, previous?: { document: string | null; phone: string | null }) {
+function clientFields(data: FormData, previous?: { document: string | null; phone: string | null } & Partial<ClientProfile>) {
   const name = text(data, "name", 120);
   if (!name) return { ok: false as const, error: "Informe o nome do cliente." };
   const documentInput = text(data, "document", 40);
@@ -59,7 +60,29 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
   if (!document.ok) return document;
   const phone = keepLegacy(normalizePhone(phoneInput), phoneInput, previous?.phone);
   if (!phone.ok) return phone;
-  return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 500)) } };
+  // Cadastro completo (endereços, referências, avalista): texto livre, CEP e UF conferidos; telefones e CPF do avalista
+  // com a mesma regra do cliente.
+  const profile = {} as ClientProfile;
+  for (const key of clientProfileKeys) profile[key] = optional(text(data, key, key === "guarantorNotes" ? 500 : 160));
+  for (const key of ["residentialCep", "businessCep"] as const) {
+    const cep = onlyDigits(profile[key] ?? "");
+    if (profile[key] && cep.length !== 8) return { ok: false as const, error: "O CEP precisa ter 8 dígitos, por exemplo 01310-100." };
+    profile[key] = cep || null;
+  }
+  for (const key of ["residentialState", "businessState"] as const) {
+    const state = profile[key]?.toUpperCase() ?? null;
+    if (state && !brazilianStates.includes(state)) return { ok: false as const, error: "Escolha o estado (UF) na lista, por exemplo SP." };
+    profile[key] = state;
+  }
+  for (const key of ["reference1Phone", "reference2Phone", "guarantorPhone"] as const) {
+    const checked = keepLegacy(normalizePhone(profile[key] ?? ""), profile[key] ?? "", previous?.[key]);
+    if (!checked.ok) return { ok: false as const, error: `${key === "guarantorPhone" ? "Telefone do avalista" : `Telefone da referência ${key[9]}`}: ${checked.error}` };
+    profile[key] = checked.value;
+  }
+  const guarantorDocument = keepLegacy(normalizeCpf(profile.guarantorDocument ?? ""), profile.guarantorDocument ?? "", previous?.guarantorDocument);
+  if (!guarantorDocument.ok) return { ok: false as const, error: `CPF do avalista: ${guarantorDocument.error}` };
+  profile.guarantorDocument = guarantorDocument.value;
+  return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 500)), ...profile } };
 }
 
 export async function createClientAction(data: FormData): Promise<ActionResult> {
@@ -87,20 +110,45 @@ export async function updateClientAction(data: FormData): Promise<ActionResult> 
   return result;
 }
 
-export async function createOperationAction(data: FormData): Promise<ActionResult> {
-  const clientId = text(data, "clientId", 80);
+// Duas modalidades: pagamento único (principal + taxa, com renovação pagando só os juros) e parcelado (valor presente,
+// parcela fixa, primeiro vencimento e prazo em meses; a taxa é calculada pelo sistema).
+function operationTermsFromForm(data: FormData) {
+  const loanDate = text(data, "loanDate", 10);
+  if (!isIsoDate(loanDate)) return { ok: false as const, error: "Informe a data do empréstimo." };
+  if (text(data, "modality", 20) === "INSTALLMENT") {
+    const principalCents = parseMoneyToCents(text(data, "presentValue", 40));
+    const installmentCents = parseMoneyToCents(text(data, "installment", 40));
+    const termInput = text(data, "term", 10);
+    const installmentCount = /^\d+$/.test(termInput) ? Number(termInput) : NaN;
+    const firstDueDate = text(data, "firstDueDate", 10);
+    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor presente (valor emprestado) em reais, por exemplo 10.000,00." };
+    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor da parcela (PMT) em reais, por exemplo 1.200,00." };
+    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: "Informe o prazo total em meses, de 1 a 360." };
+    if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
+    if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
+    const calculated = calculateInstallments({ presentValueCents: principalCents, installmentCents, count: installmentCount });
+    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor presente de ${formatMoney(principalCents)}.` };
+    return {
+      ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount),
+      values: { modality: "INSTALLMENT", installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
+    };
+  }
   const principalCents = parseMoneyToCents(text(data, "principal", 40));
   const interestRateBps = parseRateToBps(text(data, "rate", 20));
-  const loanDate = text(data, "loanDate", 10);
   const dueDate = text(data, "dueDate", 10);
-  if (!clientId) return { ok: false, error: "Selecione o cliente." };
-  if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false, error: "Informe o valor principal em reais, por exemplo 1.000,00." };
-  if (interestRateBps === null || interestRateBps > 100_000) return { ok: false, error: "Informe a taxa de juros em %, por exemplo 30." };
-  if (!isIsoDate(loanDate)) return { ok: false, error: "Informe a data do empréstimo." };
-  if (!isIsoDate(dueDate)) return { ok: false, error: "Informe a data de vencimento." };
-  if (dueDate < loanDate) return { ok: false, error: "O vencimento não pode ser antes da data do empréstimo." };
+  if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor principal em reais, por exemplo 1.000,00." };
+  if (interestRateBps === null || interestRateBps > 100_000) return { ok: false as const, error: "Informe a taxa de juros em %, por exemplo 30." };
+  if (!isIsoDate(dueDate)) return { ok: false as const, error: "Informe a data de vencimento." };
+  if (dueDate < loanDate) return { ok: false as const, error: "O vencimento não pode ser antes da data do empréstimo." };
+  return { ok: true as const, principalCents, loanDate, dueDate, values: { modality: "SINGLE", interestRateBps, ...calculateOperation({ principalCents, interestRateBps }) } };
+}
 
-  const calculated = calculateOperation({ principalCents, interestRateBps });
+export async function createOperationAction(data: FormData): Promise<ActionResult> {
+  const clientId = text(data, "clientId", 80);
+  if (!clientId) return { ok: false, error: "Selecione o cliente." };
+  const terms = operationTermsFromForm(data);
+  if (!terms.ok) return terms;
+  const { principalCents, loanDate, dueDate } = terms;
   const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
     const client = await tx.query.clients.findFirst({ where: and(eq(clients.id, clientId), eq(clients.tenantId, tenantId), isNull(clients.archivedAt)) });
     if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
@@ -113,7 +161,7 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
       return { ok: false, error: `Capital disponível insuficiente. Disponível para novas operações: ${formatMoney(Math.max(availableCents, 0))}.` };
     }
     await tx.insert(loanOperations).values({
-      id: id("op"), tenantId, clientId: client.id, principalCents, interestRateBps, loanDate, dueDate, status: "OPEN", cycleNumber, ...calculated,
+      id: id("op"), tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
     });
     return { ok: true, message: `Operação de ${client.name} cadastrada.` };
   });
@@ -259,18 +307,31 @@ export async function resetWalletAction(data: FormData): Promise<ActionResult> {
   return result;
 }
 
+// Juros contratados até agora: os do período original mais os de cada renovação. É sobre eles que os pagamentos são
+// apropriados (juros primeiro, depois principal), como na tela.
+async function operationTerms(tx: TenantTransaction, tenantId: string, operation: { id: string; principalCents: number; interestCents: number; modality: string }) {
+  const renewals = await tx.select().from(loanRenewals)
+    .where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId))).orderBy(asc(loanRenewals.periodNumber));
+  const interestCents = operation.interestCents + renewals.reduce((total, renewal) => total + renewal.interestCents, 0);
+  return { terms: { principalCents: operation.principalCents, interestCents, proportional: operation.modality === "INSTALLMENT" }, renewals, renewalPaymentIds: new Set(renewals.map((renewal) => renewal.paymentId)) };
+}
+
+
 // Registra um pagamento (juros, parcial ou quitação). A divisão entre juros e principal e o limite do saldo
 // vêm das regras centrais em src/lib/finance/rules.ts. Pagar exatamente o saldo quita a operação.
+// Pagar exatamente os juros pendentes do período, com principal em aberto, é a renovação (regra oficial): o principal
+// não muda, o vencimento avança um mês (ou para a data informada) e um novo período começa com os juros sobre o principal.
 export async function registerPaymentAction(data: FormData): Promise<ActionResult> {
   const operationId = text(data, "operationId", 80);
   const amountCents = parseMoneyToCents(text(data, "amount", 40));
   const paidAt = text(data, "paidAt", 10) || todayIso();
   const notes = optional(text(data, "notes", 500));
+  const newDueDateInput = text(data, "newDueDate", 10);
+  if (newDueDateInput && !isIsoDate(newDueDateInput)) return { ok: false, error: "Informe o novo vencimento." };
   if (!operationId) return { ok: false, error: "Operação inválida." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
-  if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
-  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Trava a operação para que dois pagamentos simultâneos não passem do saldo.
     const [operation] = await tx.select().from(loanOperations)
       .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))))
@@ -280,10 +341,34 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
     const previous = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt }).from(payments)
       .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
-    const before = allocatePayments(operation, previous);
+    const { terms, renewals } = await operationTerms(tx, tenantId, operation);
+    const before = allocatePayments(terms, previous);
     const check = checkPayment({ amountCents, balanceCents: before.balanceCents, formatMoney });
     if (!check.ok) return check;
-    await tx.insert(payments).values({ id: id("pay"), tenantId, operationId: operation.id, amountCents, paidAt, notes });
+    // Renovação só existe no pagamento único; no parcelado cada pagamento abate as parcelas em ordem.
+    const renews = operation.modality === "SINGLE" && !check.settles && amountCents === before.interestRemainingCents && before.principalRemainingCents > 0;
+    if (newDueDateInput && !renews) {
+      return { ok: false, error: `Novo vencimento só vale para o pagamento somente dos juros do período (${formatMoney(before.interestRemainingCents)}).` };
+    }
+    const paymentId = id("pay");
+    if (renews) {
+      // Novo período de um mês: 01/11 → 01/12 → 01/01 (ou a data informada).
+      const newDueDate = newDueDateInput || installmentDueDate(operation.dueDate, 2);
+      if (newDueDate <= operation.dueDate) return { ok: false, error: `O novo vencimento precisa ser depois do vencimento atual (${formatDate(operation.dueDate)}).` };
+      const nextInterestCents = renewalInterest({ principalRemainingCents: before.principalRemainingCents, interestRateBps: operation.interestRateBps });
+      await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
+      await tx.insert(loanRenewals).values({
+        id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: renewals.length + 2, previousDueDate: operation.dueDate, newDueDate,
+        principalBaseCents: before.principalRemainingCents, interestCents: nextInterestCents, createdByUserId: session.user.id,
+      });
+      await tx.update(loanOperations).set({ dueDate: newDueDate, updatedAt: sql`now()` })
+        .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+      return {
+        ok: true,
+        message: `Pagamento somente de juros de ${formatMoney(amountCents)} registrado. Período renovado até ${formatDate(newDueDate)}. Valor para quitação: ${formatMoney(before.principalRemainingCents + nextInterestCents)}.`,
+      };
+    }
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
     if (check.settles) {
       const settledAt = previous.reduce((latest, payment) => (payment.paidAt > latest ? payment.paidAt : latest), paidAt);
       await tx.update(loanOperations).set({ status: "PAID", settledAt, updatedAt: sql`now()` })
@@ -291,6 +376,115 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
       return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Operação quitada.` };
     }
     return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Saldo em aberto: ${formatMoney(before.balanceCents - amountCents)}.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Correção de um pagamento já registrado (valor, data e observação). O pagamento continua sendo o mesmo (nada é duplicado)
+// e os valores de antes ficam em payment_revision. Saldo, juros e principal recebidos, situação da operação e capital
+// disponível são recalculados a partir dos pagamentos, pela mesma regra de rules.ts.
+export async function editPaymentAction(data: FormData): Promise<ActionResult> {
+  const paymentId = text(data, "paymentId", 80);
+  const amountCents = parseMoneyToCents(text(data, "amount", 40));
+  const paidAt = text(data, "paidAt", 10);
+  const notes = optional(text(data, "notes", 500));
+  if (!paymentId) return { ok: false, error: "Pagamento inválido." };
+  if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
+  if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    // Mesma ordem de travas da criação de operação e do pagamento: carteira, depois operação.
+    const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+    const [payment] = await tx.select().from(payments).where(and(eq(payments.id, paymentId), eq(payments.tenantId, tenantId)));
+    if (!wallet || !payment) return { ok: false, error: "Pagamento não encontrado nesta carteira." };
+    const [operation] = await tx.select().from(loanOperations)
+      .where(and(eq(loanOperations.id, payment.operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, wallet.cycleNumber)))
+      .for("update");
+    if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
+    if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
+    if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
+    const { terms, renewalPaymentIds } = await operationTerms(tx, tenantId, operation);
+    // O pagamento que renovou um período pagou os juros daquele período (o valor registrado na época). Pode ser corrigido
+    // para mais (o excedente abate o principal) e a renovação continua; para menos, os juros do período ficariam sem pagar.
+    if (renewalPaymentIds.has(payment.id)) {
+      const [first] = await tx.select({ previousAmountCents: paymentRevisions.previousAmountCents }).from(paymentRevisions)
+        .where(and(eq(paymentRevisions.paymentId, payment.id), eq(paymentRevisions.tenantId, tenantId))).orderBy(asc(paymentRevisions.editedAt)).limit(1);
+      const renewedInterestCents = first?.previousAmountCents ?? payment.amountCents;
+      if (amountCents < renewedInterestCents) {
+        return { ok: false, error: `Este pagamento renovou o período pagando ${formatMoney(renewedInterestCents)} de juros; o valor não pode ficar menor que isso.` };
+      }
+    }
+    const all = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt }).from(payments)
+      .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
+    const others = all.filter((item) => item.id !== payment.id);
+    const before = allocatePayments(terms, others.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() })));
+    if (amountCents > before.balanceCents) {
+      return { ok: false, error: `O pagamento não pode ser maior que ${formatMoney(before.balanceCents)}, o saldo da operação sem este pagamento.` };
+    }
+    // Diminuir um pagamento tira dinheiro do capital disponível; não pode deixá-lo negativo.
+    if (amountCents < payment.amountCents) {
+      const availableCents = await availableCapitalCents(tx, tenantId, wallet);
+      if (availableCents - (payment.amountCents - amountCents) < 0) {
+        return { ok: false, error: `Não é possível reduzir este pagamento em ${formatMoney(payment.amountCents - amountCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };
+      }
+    }
+    await tx.insert(paymentRevisions).values({
+      id: id("rev"), tenantId, paymentId: payment.id, previousAmountCents: payment.amountCents, previousPaidAt: payment.paidAt, previousNotes: payment.notes,
+      amountCents, paidAt, notes, editedByUserId: session.user.id,
+    });
+    await tx.update(payments).set({ amountCents, paidAt, notes }).where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)));
+    // Situação da operação conforme o novo total: quitada (data do último pagamento) ou de volta para em aberto.
+    const settles = amountCents === before.balanceCents;
+    const settledAt = settles ? others.reduce((latest, item) => (item.paidAt > latest ? item.paidAt : latest), paidAt) : null;
+    await tx.update(loanOperations).set({ status: settles ? "PAID" : "OPEN", settledAt, updatedAt: sql`now()` })
+      .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    const reopened = operation.status === "PAID" && !settles;
+    return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(before.balanceCents - amountCents)}.`}` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Documentos do cliente: PDF ou imagem de até 5 MB, gravados ligados ao cliente do mesmo tenant.
+const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const documentTypes: Record<string, (bytes: Buffer) => boolean> = {
+  "application/pdf": (bytes) => bytes.subarray(0, 5).toString("latin1") === "%PDF-",
+  "image/jpeg": (bytes) => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff,
+  "image/png": (bytes) => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  "image/webp": (bytes) => bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP",
+};
+
+export async function uploadClientDocumentAction(data: FormData): Promise<ActionResult> {
+  const clientId = text(data, "clientId", 80);
+  const label = text(data, "label", 120);
+  const file = data.get("file");
+  if (!clientId) return { ok: false, error: "Cliente inválido." };
+  if (!label) return { ok: false, error: "Informe o que é o documento, por exemplo RG ou comprovante de residência." };
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Escolha o arquivo do documento." };
+  if (file.size > MAX_DOCUMENT_BYTES) return { ok: false, error: "O arquivo pode ter no máximo 5 MB." };
+  const content = Buffer.from(await file.arrayBuffer());
+  // O tipo é conferido pelo conteúdo do arquivo, não só pela extensão.
+  const contentType = Object.keys(documentTypes).find((type) => documentTypes[type](content));
+  if (!contentType) return { ok: false, error: "Envie um PDF ou uma imagem (JPG, PNG ou WEBP)." };
+  const fileName = file.name.replace(/[\\/\r\n"]/g, "_").slice(0, 160) || "documento";
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const client = await tx.query.clients.findFirst({ where: and(eq(clients.id, clientId), eq(clients.tenantId, tenantId), isNull(clients.archivedAt)) });
+    if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
+    await tx.insert(clientDocuments).values({ id: id("doc"), tenantId, clientId: client.id, label, fileName, contentType, sizeBytes: content.length, content, uploadedByUserId: session.user.id });
+    return { ok: true, message: `Documento "${label}" anexado ao cadastro de ${client.name}.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+export async function deleteClientDocumentAction(data: FormData): Promise<ActionResult> {
+  const documentId = text(data, "documentId", 80);
+  if (!documentId) return { ok: false, error: "Documento inválido." };
+  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+    const [removed] = await tx.delete(clientDocuments).where(and(eq(clientDocuments.id, documentId), eq(clientDocuments.tenantId, tenantId)))
+      .returning({ label: clientDocuments.label });
+    if (!removed) return { ok: false, error: "Documento não encontrado nesta carteira." };
+    return { ok: true, message: `Documento "${removed.label}" excluído.` };
   });
   if (result.ok) revalidatePath("/");
   return result;
