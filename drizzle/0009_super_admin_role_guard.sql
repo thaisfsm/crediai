@@ -3,7 +3,7 @@
 -- a menos que a própria transação declare o procedimento administrativo com
 --   select set_config('app.crediai_role_grant', 'promote', true);
 -- O cadastro público (Better Auth) nunca define essa configuração, então todo novo cadastro fica TENANT_USER.
--- Esta migração não altera nenhuma linha existente.
+-- Esta migração não altera nenhuma linha existente e pode ser executada de novo sem erro.
 CREATE OR REPLACE FUNCTION "crediai_guard_user_role"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."role" = 'SUPER_ADMIN'
@@ -14,4 +14,5 @@ BEGIN
   RETURN NEW;
 END;
 $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "user_role_guard" ON "user";--> statement-breakpoint
 CREATE TRIGGER "user_role_guard" BEFORE INSERT OR UPDATE OF "role" ON "user" FOR EACH ROW EXECUTE FUNCTION "crediai_guard_user_role"();

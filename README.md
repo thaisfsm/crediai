@@ -107,7 +107,7 @@ pnpm db:migrate
 pnpm dev --hostname 127.0.0.1
 ```
 
-Para criar o primeiro administrador, preencha temporariamente `ADMIN_NAME`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` e execute `pnpm admin:create`. Remova esses valores do ambiente após o bootstrap. O comando não eleva nem redefine contas existentes. Para promover uma conta existente a MASTER mantendo o tenant e a carteira dela, use `scripts/promote-master.sql` (depende da migração 0009; veja as instruções no próprio arquivo).
+Para criar o primeiro administrador, preencha temporariamente `ADMIN_NAME`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` e execute `pnpm admin:create`. Remova esses valores do ambiente após o bootstrap. O comando não eleva nem redefine contas existentes. Para promover uma conta existente a MASTER mantendo o tenant e a carteira dela, use `scripts/promote-master-neon-sql-editor.sql` no SQL Editor do Neon ou `scripts/promote-master.sql` no `psql` (dependem da migração 0009; veja as instruções em cada arquivo).
 
 ### PostgreSQL local opcional via Docker Compose
 
