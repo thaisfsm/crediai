@@ -57,6 +57,13 @@
       "when": 1790901265965,
       "tag": "0008_installments_guarantor_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791226738824,
+      "tag": "0009_super_admin_role_guard",
+      "breakpoints": true
     }
   ]
 }
