@@ -8,5 +8,5 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage() {
   if (!(await databaseAvailable())) redirect("/setup");
   if (await getSession()) redirect("/");
-  return <AuthForm mode="login" />;
+  return <AuthForm />;
 }

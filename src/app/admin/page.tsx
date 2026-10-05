@@ -2,125 +2,128 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
 import { databaseAvailable } from "@/lib/db";
-import { loadPlatformOverview } from "@/lib/admin/queries";
-import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
-import SignOutButton from "@/app/sign-out-button";
+import { loadSaasClients, type SaasClient } from "@/lib/admin/queries";
+import { formatMoney } from "@/lib/finance/format";
+import { AdminShell, Kpi, StatusBadge, dateLabel, relativeAccess } from "./admin-ui";
 
 export const dynamic = "force-dynamic";
 
-const TABS = [
-  ["relatorio", "Relatório global"],
-  ["tenants", "Tenants"],
-  ["usuarios", "Usuários"],
-  ["clientes", "Clientes"],
-  ["operacoes", "Operações"],
-  ["pagamentos", "Pagamentos"],
-  ["carteiras", "Carteiras"],
-] as const;
-type Tab = (typeof TABS)[number][0];
+type Search = { q?: string; status?: string; plano?: string; ordem?: string; pagina?: string };
 
-const STATUS_LABEL: Record<string, string> = {
-  TRIALING: "Teste", ACTIVE: "Ativo", SUSPENDED: "Suspenso", CLOSED: "Encerrado", PAST_DUE: "Em atraso", EXPIRED: "Expirado", CANCELED: "Cancelado",
-  OPEN: "Em aberto", PAID: "Quitada",
-};
-const label = (status: string | null) => (status ? STATUS_LABEL[status] ?? status : "—");
-const day = (value: Date | string) => formatDate(typeof value === "string" ? value.slice(0, 10) : todayIso(value));
-
-export default async function AdminPage({ searchParams }: { searchParams: Promise<{ aba?: string }> }) {
+export default async function AdminCentralPage({ searchParams }: { searchParams: Promise<Search> }) {
   if (!(await databaseAvailable())) redirect("/setup");
   const session = await requireSuperAdmin();
-  const { aba } = await searchParams;
-  const tab: Tab = TABS.some(([key]) => key === aba) ? (aba as Tab) : "relatorio";
-  const data = await loadPlatformOverview();
-  const { totals } = data;
+  const data = await loadSaasClients(await searchParams);
+  const { kpis, filters } = data;
+  const pageHref = (page: number) => `/admin?${new URLSearchParams({ ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), pagina: String(page) })}`;
 
   return (
-    <main className="admin-page">
-      <header className="admin-header">
-        <div>
-          <div className="auth-kicker"><i /> CREDIAI · PLATAFORMA</div>
-          <h1>Administração da plataforma</h1>
-          <p>Olá, {session.user.name}. Visão global somente leitura de todos os tenants.</p>
-        </div>
-        <div className="admin-header-actions">
-          {session.user.tenantId && <Link href="/" className="admin-link">Minha carteira</Link>}
-          <SignOutButton label="Sair" />
-        </div>
-      </header>
+    <AdminShell active="clientes" userName={session.user.name} hasOwnWallet={Boolean(session.user.tenantId)}>
+      <section className="central-kpis" aria-label="Resumo da plataforma">
+        <Kpi label="Clientes SaaS" value={kpis.total} hint={<><b className="dot-active" />{kpis.active} ativos · <b className="dot-trial" />{kpis.trialing} em teste · <b className="dot-suspended" />{kpis.suspended} suspensos</>} tone="cyan" />
+        <Kpi label="Clientes finais" value={kpis.finalClients} hint={`${kpis.activeFinalClients} ativos nas carteiras`} />
+        <Kpi label="Operações abertas" value={kpis.openOperations} hint={kpis.overdueOperations ? `${kpis.overdueOperations} em atraso` : "Nenhuma em atraso"} tone={kpis.overdueOperations ? "red" : undefined} />
+        <Kpi label="Capital emprestado" value={formatMoney(kpis.lentCents)} hint="Principal ainda não devolvido" />
+        <Kpi label="Total a receber" value={formatMoney(kpis.receivableCents)} hint="Saldo das operações abertas" />
+        <Kpi label="Recebido" value={formatMoney(kpis.receivedCents)} hint={`${formatMoney(kpis.receivedInterestCents)} de juros`} tone="green" />
+      </section>
 
-      <nav className="admin-tabs" aria-label="Seções da administração">
-        {TABS.map(([key, name]) => <Link key={key} href={`/admin?aba=${key}`} aria-current={tab === key ? "page" : undefined}>{name}</Link>)}
-      </nav>
-
-      {tab === "relatorio" && (
-        <>
-          <section className="admin-stats">
-            <Stat label="Tenants" value={totals.tenants} />
-            <Stat label="Usuários" value={totals.users} hint={`${totals.superAdmins} MASTER`} />
-            <Stat label="Clientes" value={totals.clients} />
-            <Stat label="Operações" value={totals.operations} hint={`${totals.openOperations} em aberto`} />
-            <Stat label="Capital emprestado" value={formatMoney(totals.lentCents)} />
-            <Stat label="Pagamentos recebidos" value={formatMoney(totals.receivedCents)} hint={`${totals.payments} pagamentos`} />
-            <Stat label="Carteiras" value={totals.wallets} />
-          </section>
-          <Table head={["Tenant", "Clientes", "Operações em aberto", "Emprestado", "Recebido"]} empty="Nenhum tenant.">
-            {data.tenants.map((tenant) => <tr key={tenant.id}><td>{tenant.name}</td><td>{tenant.clientCount}</td><td>{tenant.openOperationCount}</td><td>{formatMoney(tenant.lentCents)}</td><td>{formatMoney(tenant.receivedCents)}</td></tr>)}
-          </Table>
-        </>
+      {data.attention.length > 0 && (
+        <section className="central-panel">
+          <header className="central-panel-head"><div><h2>Precisam da sua atenção</h2><p>Clientes SaaS com acesso parado, teste vencendo, senha provisória pendente ou atraso na carteira.</p></div></header>
+          <ul className="central-attention">
+            {data.attention.map((client) => (
+              <li key={client.tenantId}>
+                <Link href={`/admin/clientes/${client.tenantId}`}>
+                  <span className="central-avatar" aria-hidden>{initials(client.name)}</span>
+                  <span className="central-attention-name"><strong>{client.name}</strong><small>{client.email}</small></span>
+                  <span className="central-attention-tags">{client.attention.map((reason) => <em key={reason}>{reason}</em>)}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
-      {tab === "tenants" && (
-        <Table head={["Tenant", "Usuários", "Status", "Plano", "Assinatura", "Vence em", "Criado em"]} empty="Nenhum tenant.">
-          {data.tenants.map((tenant) => <tr key={tenant.id}><td>{tenant.name}{tenant.hasSuperAdmin && <span className="admin-badge">MASTER</span>}</td><td>{tenant.owners ?? "—"}</td><td>{label(tenant.status)}</td><td>{tenant.planName}</td><td>{label(tenant.subscriptionStatus)}</td><td>{tenant.subscriptionExpiresAt ? day(tenant.subscriptionExpiresAt) : "—"}</td><td>{day(tenant.createdAt)}</td></tr>)}
-        </Table>
-      )}
+      <section className="central-panel">
+        <header className="central-panel-head">
+          <div>
+            <h2>Clientes SaaS</h2>
+            <p>Quem assina e usa o CrediAI. Os números de cada um vêm da carteira dele (ciclo atual), com o mesmo cálculo do dashboard.</p>
+          </div>
+          <Link href="/admin/clientes/novo" className="central-primary">+ Novo cliente SaaS</Link>
+        </header>
 
-      {tab === "usuarios" && (
-        <Table head={["Nome", "E-mail", "Papel", "Tenant", "Situação", "Criado em"]} empty="Nenhum usuário.">
-          {data.users.map((user) => <tr key={user.id}><td>{user.name}</td><td>{user.email}</td><td>{user.role === "SUPER_ADMIN" ? "MASTER" : "Usuário"}</td><td>{user.tenantName ?? "—"}</td><td>{user.active ? "Ativo" : "Desativado"}</td><td>{day(user.createdAt)}</td></tr>)}
-        </Table>
-      )}
+        <form className="central-filters" action="/admin" method="get" role="search">
+          <label className="central-search"><span>Buscar</span><input name="q" defaultValue={filters.q} placeholder="Nome ou e-mail" maxLength={120} /></label>
+          <label><span>Status</span><select name="status" defaultValue={filters.status}>
+            <option value="">Todos</option><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option><option value="SUSPENDED">Suspenso</option><option value="CLOSED">Encerrado</option>
+          </select></label>
+          <label><span>Plano</span><select name="plano" defaultValue={filters.plano}>
+            <option value="">Todos</option>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+          </select></label>
+          <label><span>Ordenar por</span><select name="ordem" defaultValue={filters.ordem}>
+            <option value="nome">Nome</option><option value="emprestado">Capital emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option>
+          </select></label>
+          <button className="central-secondary">Aplicar</button>
+        </form>
 
-      {tab === "clientes" && (
-        <Table head={["Cliente", "Tenant", "Situação", "Criado em"]} empty="Nenhum cliente.">
-          {data.clients.map((client) => <tr key={client.id}><td>{client.name}</td><td>{client.tenantName}</td><td>{client.archivedAt ? "Arquivado" : "Ativo"}</td><td>{day(client.createdAt)}</td></tr>)}
-        </Table>
-      )}
+        <p className="central-count">{data.matched === 1 ? "1 cliente SaaS encontrado" : `${data.matched} clientes SaaS encontrados`}</p>
+        {data.clients.length === 0
+          ? <div className="central-empty">Nenhum cliente SaaS com esses filtros.</div>
+          : <div className="saas-grid">{data.clients.map((client) => <SaasCard key={client.tenantId} client={client} />)}</div>}
 
-      {tab === "operacoes" && (
-        <Table head={["Cliente", "Tenant", "Modalidade", "Principal", "Total", "Status", "Data", "Vencimento"]} empty="Nenhuma operação.">
-          {data.operations.map((operation) => <tr key={operation.id}><td>{operation.clientName}</td><td>{operation.tenantName}</td><td>{operation.modality === "INSTALLMENT" ? "Parcelado" : "Pagamento único"}</td><td>{formatMoney(operation.principalCents)}</td><td>{formatMoney(operation.totalCents)}</td><td>{label(operation.status)}</td><td>{formatDate(operation.loanDate)}</td><td>{formatDate(operation.dueDate)}</td></tr>)}
-        </Table>
-      )}
-
-      {tab === "pagamentos" && (
-        <Table head={["Cliente", "Tenant", "Valor", "Data"]} empty="Nenhum pagamento.">
-          {data.payments.map((payment) => <tr key={payment.id}><td>{payment.clientName}</td><td>{payment.tenantName}</td><td>{formatMoney(payment.amountCents)}</td><td>{formatDate(payment.paidAt)}</td></tr>)}
-        </Table>
-      )}
-
-      {tab === "carteiras" && (
-        <Table head={["Tenant", "Capital inicial", "Ciclo atual", "Criada em"]} empty="Nenhuma carteira.">
-          {data.wallets.map((wallet) => <tr key={wallet.id}><td>{wallet.tenantName}</td><td>{formatMoney(wallet.initialCapitalCents)}</td><td>{wallet.cycleNumber}</td><td>{day(wallet.createdAt)}</td></tr>)}
-        </Table>
-      )}
-
-      {tab !== "relatorio" && tab !== "tenants" && <p className="admin-note">Mostrando os 100 registros mais recentes.</p>}
-    </main>
+        {data.pages > 1 && (
+          <nav className="central-pagination" aria-label="Páginas">
+            {data.page > 1 ? <Link href={pageHref(data.page - 1)}>← Anterior</Link> : <span />}
+            <span>{`Página ${data.page} de ${data.pages}`}</span>
+            {data.page < data.pages ? <Link href={pageHref(data.page + 1)}>Próxima →</Link> : <span />}
+          </nav>
+        )}
+      </section>
+    </AdminShell>
   );
 }
 
-function Stat({ label: name, value, hint }: { label: string; value: string | number; hint?: string }) {
-  return <div className="admin-stat"><span>{name}</span><strong>{value}</strong>{hint && <small>{hint}</small>}</div>;
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
 }
 
-function Table({ head, empty, children }: { head: string[]; empty: string; children: React.ReactNode[] }) {
+function SaasCard({ client }: { client: SaasClient }) {
+  const { money } = client;
   return (
-    <div className="admin-table-wrap">
-      <table className="admin-table">
-        <thead><tr>{head.map((title) => <th key={title}>{title}</th>)}</tr></thead>
-        <tbody>{children.length ? children : <tr><td colSpan={head.length}>{empty}</td></tr>}</tbody>
-      </table>
-    </div>
+    <article className={`saas-card${client.attention.length ? " saas-card-alert" : ""}`}>
+      <header>
+        <span className="central-avatar" aria-hidden>{initials(client.name)}</span>
+        <div className="saas-card-title">
+          <h3><Link href={`/admin/clientes/${client.tenantId}`}>{client.name}</Link></h3>
+          <small>{client.email ?? "Sem usuário"}</small>
+        </div>
+        <StatusBadge status={client.status} />
+      </header>
+      <div className="saas-card-meta">
+        <span>Plano <b>{client.planName}</b></span>
+        <span>Desde <b>{dateLabel(client.createdAt)}</b></span>
+        <span>Último acesso <b>{relativeAccess(client.lastAccessAt)}</b></span>
+        {client.isPlatformOwner && <span className="saas-owner">Sua carteira (SUPER_ADMIN)</span>}
+      </div>
+      <dl className="saas-card-money">
+        <div><dt>Capital disponível</dt><dd>{formatMoney(money.availableCents)}</dd></div>
+        <div><dt>Emprestado</dt><dd>{formatMoney(money.lentCents)}</dd></div>
+        <div><dt>A receber</dt><dd>{formatMoney(money.receivableCents)}</dd></div>
+        <div><dt>Recebido</dt><dd>{formatMoney(money.receivedCents)}</dd></div>
+        <div><dt>Juros previstos</dt><dd>{formatMoney(money.expectedInterestCents)}</dd></div>
+        <div><dt>Juros recebidos</dt><dd>{formatMoney(money.receivedInterestCents)}</dd></div>
+      </dl>
+      <div className="saas-card-counts">
+        <span><b>{client.clients.total}</b> {client.clients.total === 1 ? "cliente final" : "clientes finais"} <small>({client.clients.active} {client.clients.active === 1 ? "ativo" : "ativos"})</small></span>
+        <span><b>{client.operations.open}</b> {client.operations.open === 1 ? "aberta" : "abertas"}</span>
+        <span><b>{client.operations.paid}</b> {client.operations.paid === 1 ? "quitada" : "quitadas"}</span>
+        <span className={client.operations.overdue ? "is-late" : undefined}><b>{client.operations.overdue}</b> em atraso</span>
+        <span><b>{client.paymentCount}</b> {client.paymentCount === 1 ? "pagamento" : "pagamentos"}</span>
+      </div>
+      {client.attention.length > 0 && <div className="saas-card-tags">{client.attention.map((reason) => <em key={reason}>{reason}</em>)}</div>}
+      <footer><Link href={`/admin/clientes/${client.tenantId}`} className="central-secondary">Ver detalhes</Link><Link href={`/admin/clientes/${client.tenantId}#carteira`} className="central-ghost">Ver carteira</Link></footer>
+    </article>
   );
 }

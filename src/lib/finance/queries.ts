@@ -5,6 +5,7 @@ import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewal
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
 import { buildPortfolio, summarizeOperations, type ClientRecord, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
+import { toMovementRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
 // para que o isolamento não dependa só do papel de banco usado em produção.
@@ -64,10 +65,7 @@ export async function loadTenantPortfolio() {
   }
   const renewalsByOperation = new Map<string, RenewalRecord[]>();
   for (const { renewal } of data.renewalRows) {
-    renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), {
-      id: renewal.id, paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate,
-      principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents, createdAt: renewal.createdAt.toISOString(),
-    }]);
+    renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), toRenewalRecord(renewal)]);
   }
   const documentsByClient = new Map<string, ClientDocumentInfo[]>();
   for (const document of data.documentRows) {
@@ -82,22 +80,10 @@ export async function loadTenantPortfolio() {
     initialCapitalCents: data.wallet?.initialCapitalCents ?? 0,
     walletCreatedOn: data.wallet ? todayIso(data.wallet.cycleStartedAt ?? data.wallet.createdAt) : null,
     cycleNumber: data.cycleNumber,
-    capitalMovements: data.movementRows.map((movement) => ({
-      id: movement.id, kind: movement.kind, amountCents: movement.amountCents, occurredAt: movement.occurredAt, notes: movement.notes, reversedMovementId: movement.reversedMovementId, createdAt: movement.createdAt.toISOString(),
-    })),
+    capitalMovements: data.movementRows.map(toMovementRecord),
     today: todayIso(),
-    operations: data.operationRows.map(({ operation, clientName }) => ({
-      id: operation.id, clientId: operation.clientId, clientName, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps,
-      interestCents: operation.interestCents, totalCents: operation.totalCents, loanDate: operation.loanDate, dueDate: operation.dueDate,
-      status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(), updatedAt: operation.updatedAt.toISOString(),
-      renewals: renewalsByOperation.get(operation.id) ?? [],
-      modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
-      installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate,
-    })),
-    payments: data.paymentRows.map(({ payment, clientName }) => ({
-      id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes, createdAt: payment.createdAt.toISOString(),
-      revisions: revisionsByPayment.get(payment.id) ?? [],
-    })),
+    operations: data.operationRows.map(({ operation, clientName }) => toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [])),
+    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, revisionsByPayment.get(payment.id) ?? [])),
   });
   // Contagens por cliente para a exclusão: operações visíveis, em aberto e qualquer histórico (inclusive excluídas).
   const countBy = (rows: { clientId: string }[]) => {
