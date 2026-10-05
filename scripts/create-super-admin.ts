@@ -22,6 +22,8 @@ if (!created.user) throw new Error("O provedor de autenticação não retornou o
 
 const tenantId = created.user.tenantId;
 await db.transaction(async (tx) => {
+  // Declara o procedimento administrativo exigido pelo gatilho user_role_guard (migração 0009).
+  await tx.execute(sql`select set_config('app.crediai_role_grant', 'promote', true)`);
   await tx.update(users).set({ role: "SUPER_ADMIN", tenantId: null, active: true }).where(eq(users.id, created.user.id));
   if (tenantId) {
     await tx.execute(sql`select set_config('app.tenant_id', '', true), set_config('app.crediai_role', 'SUPER_ADMIN', true)`);

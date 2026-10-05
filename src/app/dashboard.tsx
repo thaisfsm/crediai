@@ -146,7 +146,7 @@ function useTableLabels() {
   }, []);
 }
 
-export default function Dashboard({ userName, portfolio }: { userName: string; portfolio: TenantPortfolio }) {
+export default function Dashboard({ userName, portfolio, isSuperAdmin = false }: { userName: string; portfolio: TenantPortfolio; isSuperAdmin?: boolean }) {
   const router = useRouter();
   const initials = userName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
   const [active, setActive] = useState<NavKey>("Visão geral");
@@ -239,6 +239,7 @@ export default function Dashboard({ userName, portfolio }: { userName: string; p
                 <div className="notification-popover profile-popover" role="menu" onKeyDown={(event) => { if (event.key === "Escape") setProfileOpen(false); }}>
                   <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
                   <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>
+                  {isSuperAdmin && <button role="menuitem" onClick={() => { setProfileOpen(false); router.push("/admin"); }}><Icon name="settings" size={15} /> Administração da plataforma</button>}
                   <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
                 </div>
               )}
