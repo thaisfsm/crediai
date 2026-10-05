@@ -15,21 +15,37 @@ export async function getSession() {
   return auth.api.getSession({ headers: await headers() });
 }
 
-// Confere no banco o papel atual do usuário, para que uma promoção ou rebaixamento valha já na próxima requisição.
+// Confere no banco o estado atual da conta (papel, ativa, senha provisória), para que promoção, bloqueio ou
+// redefinição de senha valham já na próxima requisição, sem depender do que a sessão guardou.
+export async function accountState(userId: string) {
+  const [row] = await db.select({ role: users.role, active: users.active, mustChangePassword: users.mustChangePassword })
+    .from(users).where(eq(users.id, userId)).limit(1);
+  return row ?? null;
+}
+
 async function currentRole(userId: string): Promise<Role | null> {
-  const [row] = await db.select({ role: users.role, active: users.active }).from(users).where(eq(users.id, userId)).limit(1);
-  if (!row || !row.active) return null;
-  return row.role;
+  const state = await accountState(userId);
+  if (!state || !state.active) return null;
+  return state.role;
+}
+
+// Sessão válida de conta ativa. Com senha provisória, a única tela liberada é a de troca de senha.
+export async function requireActiveAccount({ allowTemporaryPassword = false } = {}) {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  const state = await accountState(session.user.id);
+  if (!state || !state.active || !session.user.active) redirect("/account-disabled");
+  if (state.mustChangePassword && !allowTemporaryPassword) redirect("/definir-senha");
+  return { session, state };
 }
 
 // Acesso à carteira do próprio tenant: TENANT_USER e também SUPER_ADMIN que tenha tenant próprio.
 // O contexto de banco é sempre o do tenant ('TENANT_USER'), mesmo para o MASTER: no dashboard comum o RLS
 // restringe tudo ao próprio tenant; a visão global só existe em withPlatformContext.
 export async function requireTenantUser() {
-  const session = await getSession();
-  if (!session) redirect("/login");
-  if (!session.user.active) redirect("/account-disabled");
-  const role = session.user.role as Role;
+  const { session, state } = await requireActiveAccount();
+  // O papel vem do banco: um rebaixamento vale na hora, mesmo com a sessão antiga.
+  const role = state.role as Role;
   if (!ROLES.includes(role)) redirect("/account-disabled");
   if (!session.user.tenantId) redirect(role === "SUPER_ADMIN" ? "/admin" : "/account-disabled");
   const tenantId = session.user.tenantId;
@@ -54,9 +70,7 @@ export async function requireTenantUser() {
 }
 
 export async function requireSuperAdmin() {
-  const session = await getSession();
-  if (!session) redirect("/login");
-  if (!session.user.active) redirect("/account-disabled");
+  const { session } = await requireActiveAccount();
   if (session.user.role !== "SUPER_ADMIN") redirect("/");
   // Segunda checagem direto no banco: a sessão não basta para liberar a área global.
   if ((await currentRole(session.user.id)) !== "SUPER_ADMIN") redirect("/");

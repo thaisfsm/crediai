@@ -6,25 +6,22 @@ import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import Image from "next/image";
 
-export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
+// Só existe login: contas são criadas pela administração da plataforma, nunca pelo próprio usuário.
+export default function AuthForm() {
   const router = useRouter();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const isSignup = mode === "signup";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setError("");
     const data = new FormData(event.currentTarget);
-    const name = String(data.get("name") ?? "");
     const email = String(data.get("email") ?? "");
     const password = String(data.get("password") ?? "");
     let redirecting = false;
     try {
-      const result = isSignup
-        ? await authClient.signUp.email({ name, email, password })
-        : await authClient.signIn.email({ email, password });
+      const result = await authClient.signIn.email({ email, password });
 
       if (result.error) {
         setError(result.error.message ?? "Não foi possível concluir. Confira seus dados e tente novamente.");
@@ -40,21 +37,17 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
     }
   }
 
-  return <main className="auth-page"><section className={`auth-card${isSignup ? "" : " auth-card-login"}`}>
-    {isSignup
-      ? <Link className="auth-brand" href="/"><span className="auth-symbol">C<span>AI</span></span><span>CrediAI<small>CRÉDITO + INTELIGÊNCIA</small></span></Link>
-      : <Link className="auth-brand auth-brand-login" href="/" aria-label="CrediAI — início"><Image src="/brand/crediai-logo-transparent.png" width={2172} height={724} alt="CrediAI — Crédito + Inteligência" priority /></Link>}
+  return <main className="auth-page"><section className="auth-card auth-card-login">
+    <Link className="auth-brand auth-brand-login" href="/" aria-label="CrediAI — início"><Image src="/brand/crediai-logo-transparent.png" width={2172} height={724} alt="CrediAI — Crédito + Inteligência" priority /></Link>
     <div className="auth-kicker"><i /> AMBIENTE PRIVADO</div>
-    <h1>{isSignup ? "Comece sua carteira" : "Acesse sua conta"}</h1>
-    <p>{isSignup ? "Crie seu espaço privado no CrediAI." : "Entre para acompanhar seu ambiente CrediAI."}</p>
+    <h1>Acesse sua conta</h1>
+    <p>Entre para acompanhar seu ambiente CrediAI.</p>
     <form onSubmit={submit}>
-      {isSignup && <label>Nome completo<input name="name" autoComplete="name" required minLength={2} maxLength={120} /></label>}
       <label>E-mail<input name="email" type="email" autoComplete="email" required maxLength={254} /></label>
-      <label>Senha<input name="password" type="password" autoComplete={isSignup ? "new-password" : "current-password"} required minLength={isSignup ? 12 : 1} maxLength={128} />{isSignup && <small>Use ao menos 12 caracteres.</small>}</label>
+      <label>Senha<input name="password" type="password" autoComplete="current-password" required maxLength={128} /></label>
       {error && <div className="auth-error" role="alert">{error}</div>}
-      <button className={`auth-submit${isSignup ? "" : " auth-submit-login"}`} disabled={busy}>{busy ? "Aguarde…" : isSignup ? "Criar conta" : "Entrar"}<span>→</span></button>
+      <button className="auth-submit auth-submit-login" disabled={busy}>{busy ? "Aguarde…" : "Entrar"}<span>→</span></button>
     </form>
-    <div className="auth-switch">{isSignup ? "Já tem acesso?" : "Ainda não tem acesso?"} <a href={isSignup ? "/login" : "/signup"}>{isSignup ? "Entrar" : "Criar conta"}</a></div>
     <div className="auth-security">◈ <span>Os dados da sua conta serão mantidos em um ambiente isolado.</span></div>
   </section><div className="auth-orbit auth-orbit-one" /><div className="auth-orbit auth-orbit-two" /></main>;
 }

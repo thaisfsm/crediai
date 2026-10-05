@@ -55,6 +55,8 @@ export const tenants = pgTable("tenant", {
   slug: text("slug").notNull(),
   status: tenantStatus("status").notNull().default("TRIALING"),
   planId: text("plan_id").notNull().references(() => plans.id, { onDelete: "restrict" }),
+  // Telefone de contato do cliente SaaS, preenchido pela administração da plataforma.
+  contactPhone: text("contact_phone"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -74,6 +76,9 @@ export const users = pgTable("user", {
   role: userRole("role").notNull().default("TENANT_USER"),
   tenantId: text("tenant_id").references(() => tenants.id, { onDelete: "restrict" }),
   active: boolean("active").notNull().default(true),
+  // Senha provisória (criada ou redefinida pelo SUPER_ADMIN): o app só libera o uso depois da troca.
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("user_tenant_id_idx").on(table.tenantId)]);

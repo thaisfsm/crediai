@@ -64,6 +64,13 @@
       "when": 1791226738824,
       "tag": "0009_super_admin_role_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791231837905,
+      "tag": "0010_saas_clients_access",
+      "breakpoints": true
     }
   ]
 }
