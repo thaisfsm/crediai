@@ -882,8 +882,8 @@ button { color:inherit; }
 .central-kpi-red { border-color:rgba(255,133,137,.3); }
 .central-kpi-red::before { background:linear-gradient(90deg,transparent,var(--central-red),transparent); }
 .central-kpi-red strong { color:#ffc2c4; }
-.dot-active,.dot-trial,.dot-suspended { display:inline-block; width:7px; height:7px; margin-left:2px; border-radius:50%; }
-.dot-active { background:var(--central-green); }.dot-trial { background:var(--central-amber); }.dot-suspended { background:var(--central-red); }
+.dot-active,.dot-trial,.dot-suspended,.dot-late { display:inline-block; width:7px; height:7px; margin-left:2px; border-radius:50%; }
+.dot-active { background:var(--central-green); }.dot-trial { background:var(--central-amber); }.dot-suspended { background:var(--central-red); }.dot-late { background:#ff9f5a; }
 .central-panel { margin-bottom:18px; padding:20px; border:1px solid var(--central-line); border-radius:16px; background:rgba(9,20,32,.72); }
 .central-panel-head { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:16px; }
 .central-panel-head h2 { margin:0; color:var(--central-ink); font-size:17px; letter-spacing:-.3px; }
@@ -915,6 +915,7 @@ button { color:inherit; }
 .saas-status-active { color:var(--central-green); background:rgba(95,217,168,.1); }
 .saas-status-trial { color:var(--central-amber); background:rgba(236,193,107,.1); }
 .saas-status-suspended { color:var(--central-red); background:rgba(255,133,137,.1); }
+.saas-status-late { color:#ff9f5a; background:rgba(255,159,90,.12); }
 .saas-status-closed { color:#c9d4dc; background:rgba(201,212,220,.08); }
 .saas-status-closed i { box-shadow:none; }
 .saas-card-plan { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; color:#c9dae4; font-size:12px; font-weight:600; }
@@ -983,3 +984,28 @@ button { color:inherit; }
 .central-point { fill:var(--central-cyan); stroke:#091420; stroke-width:2; }
 @media(max-width:820px) { .central-filters { grid-template-columns:1fr 1fr; } .central-search { grid-column:1 / -1; } }
 @media(max-width:560px) { .central-filters { grid-template-columns:1fr; } .saas-grid { grid-template-columns:1fr; } .saas-card-money { grid-template-columns:repeat(2,minmax(0,1fr)); } .central-panel { padding:16px; } .central-header h1 { font-size:22px; } }
+
+/* Situação comercial: assinatura, valor contratado e vencimento. */
+.saas-card-commercial { display:grid; gap:8px; }
+.saas-card-meta em { font-style:normal; color:#9fb3c2; }
+.saas-card-meta em.is-late,.commercial-grid small.is-late { color:#ff9f5a; }
+.commercial-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,170px),1fr)); gap:10px; margin:0 0 14px; }
+.commercial-grid div { padding:12px; border:1px solid rgba(255,255,255,.06); border-radius:12px; background:rgba(255,255,255,.02); }
+.commercial-grid dt { color:#7f97a8; font-size:11px; margin-bottom:6px; }
+.commercial-grid dd { margin:0; color:#e6f1f6; font-weight:600; font-size:14px; display:grid; gap:4px; }
+.commercial-grid dd small { color:#9fb3c2; font-weight:500; font-size:11px; }
+.commercial-panel { margin-top:14px; padding:16px; border:1px solid rgba(110,231,240,.18); border-radius:14px; background:rgba(110,231,240,.03); }
+.commercial-panel h3 { margin:0 0 10px; font-size:15px; }
+.commercial-fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr)); gap:10px 14px; }
+.commercial-fields .commercial-hint { grid-column:1/-1; margin:0; }
+.commercial-fields input[readonly] { opacity:.75; }
+.plan-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr)); gap:14px; }
+.plan-card { padding:16px; border:1px solid rgba(255,255,255,.07); border-radius:14px; background:rgba(255,255,255,.02); display:grid; gap:10px; }
+.plan-card header { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.plan-card h3 { margin:0; font-size:16px; }
+.plan-card strong.plan-price { font-size:20px; }
+.plan-card p { margin:0; color:#9fb3c2; font-size:12px; }
+.plan-card details summary { cursor:pointer; color:#6ee7f0; font-size:12px; }
+.central-form label.central-check { display:flex; align-items:center; gap:8px; }
+.central-form label.central-check input { width:auto; }
+.central-form textarea { width:100%; min-height:70px; padding:10px 12px; border:1px solid rgba(112,145,170,.24); border-radius:9px; color:var(--central-ink); background:#07111f; font:inherit; font-size:12px; resize:vertical; }

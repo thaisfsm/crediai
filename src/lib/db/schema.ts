@@ -8,6 +8,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgPolicy,
   pgTable,
@@ -32,13 +33,23 @@ export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAI
 // Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada e estorno de aporte.
 export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION", "WITHDRAWAL", "CONTRIBUTION_REVERSAL"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["TRIALING", "ACTIVE", "PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELED"]);
+// Condição comercial de uma assinatura: preço padrão do plano, preço personalizado ou cortesia (sem cobrança).
+export const commercialCondition = pgEnum("commercial_condition", ["STANDARD", "CUSTOM", "COURTESY"]);
+export const billingCycle = pgEnum("billing_cycle", ["MONTHLY"]);
+// Mensalidades da assinatura. Hoje só o SUPER_ADMIN registra pagamentos (MANUAL); um provedor de cobrança futuro
+// usa as mesmas linhas (PENDING ao gerar, PAID ao confirmar), guardando o identificador externo.
+export const subscriptionChargeStatus = pgEnum("subscription_charge_status", ["PENDING", "PAID", "CANCELED", "FAILED"]);
 
 export const plans = pgTable("plan", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   description: text("description").notNull().default(""),
+  // Preço PADRÃO do plano. O valor que cada cliente paga fica em subscription.contracted_price_cents.
   priceInCents: integer("price_in_cents").notNull().default(0),
+  // Preparados para o futuro: recursos e limites do plano (ainda não aplicados pelo app).
+  features: jsonb("features").$type<Record<string, unknown>>().notNull().default({}),
+  limits: jsonb("limits").$type<Record<string, unknown>>().notNull().default({}),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -125,15 +136,54 @@ export const subscriptions = pgTable("subscription", {
   planId: text("plan_id").notNull().references(() => plans.id, { onDelete: "restrict" }),
   status: subscriptionStatus("status").notNull().default("TRIALING"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  // Em teste: fim do período de teste. Assinatura ativa: vazio (o ciclo mensal usa next_due_date).
   expiresAt: timestamp("expires_at", { withTimezone: true }),
+  // Condição comercial (preenchida na ativação). Vazia enquanto o cliente está em teste.
+  contractedPriceCents: integer("contracted_price_cents"),
+  commercialCondition: commercialCondition("commercial_condition"),
+  activatedAt: date("activated_at", { mode: "string" }),
+  firstDueDate: date("first_due_date", { mode: "string" }),
+  nextDueDate: date("next_due_date", { mode: "string" }),
+  billingCycle: billingCycle("billing_cycle").notNull().default("MONTHLY"),
+  graceDays: integer("grace_days").notNull().default(5),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("subscription_tenant_id_idx").on(table.tenantId),
+  check("subscription_contracted_price_check", sql`${table.contractedPriceCents} is null or ${table.contractedPriceCents} >= 0`),
+  check("subscription_courtesy_free_check", sql`${table.commercialCondition} is distinct from 'COURTESY' or ${table.contractedPriceCents} = 0`),
+  check("subscription_grace_days_check", sql`${table.graceDays} between 0 and 60`),
   pgPolicy("subscription_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
-  pgPolicy("subscription_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
-  pgPolicy("subscription_update_own_or_admin", { for: "update", using: tenantScope(table.tenantId), withCheck: tenantScope(table.tenantId) }),
+  // A condição comercial é decidida pela administração: o próprio tenant só lê a assinatura.
+  pgPolicy("subscription_insert_own_or_admin", { for: "insert", withCheck: adminScope }),
+  pgPolicy("subscription_update_own_or_admin", { for: "update", using: adminScope, withCheck: adminScope }),
   pgPolicy("subscription_delete_admin_only", { for: "delete", using: adminScope }),
+]).enableRLS();
+
+export const subscriptionCharges = pgTable("subscription_charge", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  subscriptionId: text("subscription_id").notNull().references(() => subscriptions.id, { onDelete: "cascade" }),
+  // Mensalidade a que se refere (o vencimento do ciclo) e o valor cobrado, copiado do valor contratado.
+  dueDate: date("due_date", { mode: "string" }).notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  status: subscriptionChargeStatus("status").notNull().default("PENDING"),
+  paidAt: date("paid_at", { mode: "string" }),
+  // MANUAL = registrado pelo SUPER_ADMIN; no futuro, o nome do provedor de cobrança.
+  provider: text("provider").notNull().default("MANUAL"),
+  providerReference: text("provider_reference"),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("subscription_charge_subscription_idx").on(table.subscriptionId, table.dueDate),
+  index("subscription_charge_tenant_idx").on(table.tenantId),
+  check("subscription_charge_amount_check", sql`${table.amountCents} >= 0`),
+  check("subscription_charge_paid_check", sql`(${table.status} = 'PAID') = (${table.paidAt} is not null)`),
+  pgPolicy("subscription_charge_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("subscription_charge_insert_admin_only", { for: "insert", withCheck: adminScope }),
+  pgPolicy("subscription_charge_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("subscription_charge_delete_admin_only", { for: "delete", using: adminScope }),
 ]).enableRLS();
 
 // Dados financeiros do tenant. Valores monetários em centavos; taxas em pontos-base (1% = 100).
@@ -372,4 +422,4 @@ export const capitalMovements = pgTable("capital_movement", {
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
-export const schema = { accounts, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

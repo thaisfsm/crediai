@@ -5,9 +5,10 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withPlatformContext, type TenantTransaction } from "@/lib/auth/guards";
 import { generateTemporaryPassword, hashPassword } from "@/lib/admin/passwords";
-import { accounts, plans, sessions, subscriptions, tenants, users, wallets } from "@/lib/db/schema";
-import { normalizePhone } from "@/lib/finance/format";
-import { planLabel } from "@/lib/admin/plan-price";
+import { accounts, plans, sessions, subscriptionCharges, subscriptions, tenants, users, wallets } from "@/lib/db/schema";
+import { normalizePhone, parseMoneyToCents, todayIso } from "@/lib/finance/format";
+import { planPriceLabel } from "@/lib/admin/plan-price";
+import { CONDITION_LABEL, DEFAULT_GRACE_DAYS, nextDueAfterPayment, validateTerms, type CommercialCondition, type CommercialTerms } from "@/lib/billing/rules";
 
 // Todas as ações exigem SUPER_ADMIN na sessão e no banco (withPlatformContext). Nenhum papel vem do navegador:
 // toda conta criada aqui é TENANT_USER, e contas SUPER_ADMIN nunca são alteradas por estas ações.
@@ -20,7 +21,7 @@ const text = (data: FormData, key: string, max: number) => String(data.get(key) 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DAY = 24 * 60 * 60 * 1000;
 
-function readContact(data: FormData): { ok: true; name: string; email: string; phone: string | null; planId: string; tenantName: string } | { ok: false; error: string } {
+function readContact(data: FormData, needsPlan = true): { ok: true; name: string; email: string; phone: string | null; planId: string; tenantName: string } | { ok: false; error: string } {
   const name = text(data, "name", 120);
   const email = text(data, "email", 254).toLowerCase();
   const phone = normalizePhone(text(data, "phone", 30));
@@ -29,14 +30,41 @@ function readContact(data: FormData): { ok: true; name: string; email: string; p
   if (name.length < 2) return { ok: false, error: "Informe o nome do cliente SaaS." };
   if (!EMAIL.test(email)) return { ok: false, error: "Informe um e-mail válido." };
   if (!phone.ok) return { ok: false, error: phone.error };
-  if (!planId) return { ok: false, error: "Escolha o plano." };
+  if (needsPlan && !planId) return { ok: false, error: "Escolha o plano." };
   return { ok: true, name, email, phone: phone.value, planId, tenantName: tenantName || `${name} · CrediAI` };
 }
 
 async function activePlan(tx: TenantTransaction, planId: string) {
-  const [plan] = await tx.select({ id: plans.id }).from(plans).where(and(eq(plans.id, planId), eq(plans.active, true)));
+  const [plan] = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents }).from(plans).where(and(eq(plans.id, planId), eq(plans.active, true)));
   return plan ?? null;
 }
+
+// Condição comercial digitada pelo SUPER_ADMIN (ativação ou alteração). O valor contratado é guardado na assinatura
+// e não acompanha mudanças futuras no preço padrão do plano.
+function readTerms(data: FormData, standardCents: number, fixed?: { activatedAt: string }): { ok: true; terms: CommercialTerms } | { ok: false; error: string } {
+  const condition = text(data, "condition", 20) as CommercialCondition;
+  if (!(condition in CONDITION_LABEL)) return { ok: false, error: "Escolha a condição comercial." };
+  const contractedCents = condition === "COURTESY" ? 0 : parseMoneyToCents(text(data, "contractedPrice", 20));
+  if (contractedCents === null) return { ok: false, error: "Informe o valor contratado." };
+  const graceDays = Number(text(data, "graceDays", 3) || String(DEFAULT_GRACE_DAYS));
+  const terms: CommercialTerms = {
+    condition, contractedCents, standardCents, graceDays,
+    activatedAt: fixed?.activatedAt ?? text(data, "activatedAt", 10),
+    firstDueDate: condition === "COURTESY" ? null : text(data, "dueDate", 10) || null,
+  };
+  const error = validateTerms(terms);
+  return error ? { ok: false, error } : { ok: true, terms };
+}
+
+function subscriptionTermsValues(terms: CommercialTerms) {
+  return {
+    contractedPriceCents: terms.contractedCents, commercialCondition: terms.condition, activatedAt: terms.activatedAt,
+    firstDueDate: terms.firstDueDate, nextDueDate: terms.firstDueDate, billingCycle: "MONTHLY" as const, graceDays: terms.graceDays,
+  };
+}
+
+const termsSummary = (planName: string, terms: CommercialTerms) =>
+  `${planName} · ${terms.condition === "COURTESY" ? "Cortesia (R$ 0,00/mês)" : planPriceLabel(terms.contractedCents)}`;
 
 async function emailTaken(tx: TenantTransaction, email: string, exceptUserId?: string) {
   const rows = await tx.select({ id: users.id }).from(users).where(sql`lower(${users.email}) = ${email}`);
@@ -60,7 +88,7 @@ const isUniqueViolation = (error: unknown) => typeof error === "object" && error
 export async function createSaasClientAction(data: FormData): Promise<PasswordActionResult> {
   const contact = readContact(data);
   if (!contact.ok) return contact;
-  const status = text(data, "status", 20) === "TRIALING" ? "TRIALING" : "ACTIVE";
+  const status = text(data, "status", 20) === "ACTIVE" ? "ACTIVE" : "TRIALING";
   const trialDays = Number(text(data, "trialDays", 3) || "14");
   if (status === "TRIALING" && (!Number.isInteger(trialDays) || trialDays < 1 || trialDays > 90)) return { ok: false, error: "O período de teste deve ter de 1 a 90 dias." };
 
@@ -68,13 +96,17 @@ export async function createSaasClientAction(data: FormData): Promise<PasswordAc
   const passwordHash = await hashPassword(temporaryPassword);
   try {
     const result = await withPlatformContext(async (tx) => {
-      if (!(await activePlan(tx, contact.planId))) return { ok: false as const, error: "Plano não encontrado ou inativo." };
+      const plan = await activePlan(tx, contact.planId);
+      if (!plan) return { ok: false as const, error: "Plano não encontrado ou inativo." };
+      // Cliente criado já como Ativo precisa da condição comercial completa, como na ativação.
+      const read = status === "ACTIVE" ? readTerms(data, plan.priceInCents) : null;
+      if (read && !read.ok) return read;
       if (await emailTaken(tx, contact.email)) return { ok: false as const, error: "Já existe uma conta com este e-mail." };
       const tenantId = id("ten");
       const userId = randomUUID();
       // Tudo na mesma transação: ou nasce o ambiente completo (tenant, assinatura, carteira, usuário e senha), ou nada.
       await tx.insert(tenants).values({ id: tenantId, name: contact.tenantName, slug: `workspace-${randomUUID().replaceAll("-", "")}`, planId: contact.planId, status, contactPhone: contact.phone });
-      await tx.insert(subscriptions).values({ id: id("sub"), tenantId, planId: contact.planId, status, expiresAt: status === "TRIALING" ? new Date(Date.now() + trialDays * DAY) : null });
+      await tx.insert(subscriptions).values({ id: id("sub"), tenantId, planId: contact.planId, status, expiresAt: status === "TRIALING" ? new Date(Date.now() + trialDays * DAY) : null, ...(read?.ok ? subscriptionTermsValues(read.terms) : {}) });
       // Carteira vazia: o próprio cliente informa o capital inicial no primeiro acesso, como já acontece no dashboard.
       await tx.insert(wallets).values({ id: id("wal"), tenantId, initialCapitalCents: 0 });
       await tx.insert(users).values({ id: userId, name: contact.name, email: contact.email, emailVerified: false, role: "TENANT_USER", tenantId, active: true, mustChangePassword: true });
@@ -91,19 +123,17 @@ export async function createSaasClientAction(data: FormData): Promise<PasswordAc
 }
 
 export async function updateSaasClientAction(data: FormData): Promise<AdminActionResult> {
-  const contact = readContact(data);
+  const contact = readContact(data, false);
   if (!contact.ok) return contact;
   const tenantId = text(data, "tenantId", 80);
   try {
     const result = await withPlatformContext(async (tx) => {
       const target = await saasAccount(tx, tenantId);
       if (!target.ok) return target;
-      if (!(await activePlan(tx, contact.planId))) return { ok: false as const, error: "Plano não encontrado ou inativo." };
       if (await emailTaken(tx, contact.email, target.user.id)) return { ok: false as const, error: "Já existe outra conta com este e-mail." };
-      await tx.update(tenants).set({ name: contact.tenantName, contactPhone: contact.phone, planId: contact.planId, updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
-      // O plano da assinatura vigente acompanha o plano do tenant.
-      const [subscription] = await tx.select({ id: subscriptions.id }).from(subscriptions).where(eq(subscriptions.tenantId, tenantId)).orderBy(desc(subscriptions.createdAt)).limit(1);
-      if (subscription) await tx.update(subscriptions).set({ planId: contact.planId, updatedAt: sql`now()` }).where(eq(subscriptions.id, subscription.id));
+      // Plano e valor não mudam por aqui: são a condição comercial, alterada só em "Ativar assinatura" ou
+      // "Alterar condição comercial".
+      await tx.update(tenants).set({ name: contact.tenantName, contactPhone: contact.phone, updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
       await tx.update(users).set({ name: contact.name, email: contact.email, updatedAt: sql`now()` }).where(and(eq(users.id, target.user.id), eq(users.role, "TENANT_USER")));
       return { ok: true as const };
     });
@@ -116,14 +146,97 @@ export async function updateSaasClientAction(data: FormData): Promise<AdminActio
   return { ok: true, message: "Dados do cliente SaaS atualizados." };
 }
 
-// Ativar: tenant ACTIVE e assinatura vigente ACTIVE, no plano do tenant e sem vencimento. Suspender: tenant SUSPENDED
-// e sessões encerradas. Os dados financeiros do tenant (carteira, clientes, operações, pagamentos) não são tocados.
-// A ativação confere o plano e o valor que o SUPER_ADMIN viu na confirmação (planId e priceInCents enviados pela tela):
-// se mudaram nesse meio-tempo, ou se o plano não tem valor configurado, nada é alterado.
+async function currentSubscription(tx: TenantTransaction, tenantId: string) {
+  const [subscription] = await tx.select().from(subscriptions).where(eq(subscriptions.tenantId, tenantId)).orderBy(desc(subscriptions.createdAt)).limit(1).for("update");
+  return subscription ?? null;
+}
+
+// Ativar assinatura: o SUPER_ADMIN escolhe plano, valor contratado, condição, data de ativação, primeiro vencimento
+// e tolerância. Tenant e assinatura vigente passam a ACTIVE (sem fim de teste); a assinatura guarda o valor contratado.
+// Carteira, clientes finais, operações e pagamentos do tenant não são tocados.
+export async function activateSubscriptionAction(data: FormData): Promise<AdminActionResult> {
+  const tenantId = text(data, "tenantId", 80);
+  const result = await withPlatformContext(async (tx) => {
+    const target = await saasAccount(tx, tenantId);
+    if (!target.ok) return target;
+    if (target.tenant.status === "ACTIVE") return { ok: false as const, error: "Este cliente SaaS já está ativo. Use Alterar condição comercial." };
+    const plan = await activePlan(tx, text(data, "planId", 80));
+    if (!plan) return { ok: false as const, error: "Plano não encontrado ou inativo." };
+    const read = readTerms(data, plan.priceInCents);
+    if (!read.ok) return read;
+    const values = { status: "ACTIVE" as const, expiresAt: null, planId: plan.id, ...subscriptionTermsValues(read.terms), updatedAt: sql`now()` };
+    await tx.update(tenants).set({ status: "ACTIVE", planId: plan.id, updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
+    const subscription = await currentSubscription(tx, tenantId);
+    if (subscription) await tx.update(subscriptions).set(values).where(eq(subscriptions.id, subscription.id));
+    else await tx.insert(subscriptions).values({ id: id("sub"), tenantId, ...values });
+    return { ok: true as const, message: `Assinatura ativada: ${termsSummary(plan.name, read.terms)}.` };
+  });
+  if (!result.ok) return result;
+  revalidatePath("/admin");
+  return result;
+}
+
+// Alterar condição comercial de uma assinatura já ativada: plano, valor contratado, condição, próximo vencimento e
+// tolerância. Não muda o status, a data de ativação nem o preço padrão do plano, e não afeta nenhum outro cliente.
+export async function updateCommercialTermsAction(data: FormData): Promise<AdminActionResult> {
+  const tenantId = text(data, "tenantId", 80);
+  const result = await withPlatformContext(async (tx) => {
+    const target = await saasAccount(tx, tenantId);
+    if (!target.ok) return target;
+    const subscription = await currentSubscription(tx, tenantId);
+    if (!subscription?.activatedAt) return { ok: false as const, error: "Este cliente SaaS ainda não tem assinatura ativada. Use Ativar assinatura." };
+    const plan = await activePlan(tx, text(data, "planId", 80));
+    // Um plano desativado continua valendo para quem já o tem; só não pode ser escolhido de novo.
+    const chosen = plan ?? (text(data, "planId", 80) === subscription.planId
+      ? (await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents }).from(plans).where(eq(plans.id, subscription.planId)))[0] ?? null
+      : null);
+    if (!chosen) return { ok: false as const, error: "Plano não encontrado ou inativo." };
+    const read = readTerms(data, chosen.priceInCents, { activatedAt: subscription.activatedAt });
+    if (!read.ok) return read;
+    const { terms } = read;
+    await tx.update(subscriptions).set({
+      planId: chosen.id, contractedPriceCents: terms.contractedCents, commercialCondition: terms.condition, graceDays: terms.graceDays,
+      nextDueDate: terms.firstDueDate, firstDueDate: subscription.firstDueDate ?? terms.firstDueDate, updatedAt: sql`now()`,
+    }).where(eq(subscriptions.id, subscription.id));
+    await tx.update(tenants).set({ planId: chosen.id, updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
+    return { ok: true as const, message: `Condição comercial atualizada: ${termsSummary(chosen.name, terms)}.` };
+  });
+  if (!result.ok) return result;
+  revalidatePath("/admin");
+  return result;
+}
+
+// Registrar mensalidade paga (manual, até existir um provedor de cobrança): grava a mensalidade do vencimento atual
+// como paga, pelo valor contratado, e avança o próximo vencimento em um mês, no dia do primeiro vencimento.
+export async function registerSubscriptionPaymentAction(data: FormData): Promise<AdminActionResult> {
+  const tenantId = text(data, "tenantId", 80);
+  const paidAt = text(data, "paidAt", 10);
+  const today = todayIso();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidAt) || paidAt > today) return { ok: false, error: "Informe a data do pagamento (até hoje)." };
+  const result = await withPlatformContext(async (tx) => {
+    const target = await saasAccount(tx, tenantId);
+    if (!target.ok) return target;
+    const subscription = await currentSubscription(tx, tenantId);
+    if (!subscription?.activatedAt || subscription.status !== "ACTIVE") return { ok: false as const, error: "Este cliente SaaS não tem assinatura ativa." };
+    if (subscription.commercialCondition === "COURTESY" || !subscription.nextDueDate || !subscription.firstDueDate) return { ok: false as const, error: "Esta assinatura não tem cobrança (cortesia)." };
+    const dueDate = subscription.nextDueDate;
+    if (text(data, "dueDate", 10) !== dueDate) return { ok: false as const, error: "O vencimento mudou desde que a tela foi aberta. Recarregue a página." };
+    const nextDueDate = nextDueAfterPayment(dueDate, subscription.firstDueDate);
+    await tx.insert(subscriptionCharges).values({ id: id("chg"), tenantId, subscriptionId: subscription.id, dueDate, amountCents: subscription.contractedPriceCents ?? 0, status: "PAID", paidAt, provider: "MANUAL" });
+    await tx.update(subscriptions).set({ nextDueDate, updatedAt: sql`now()` }).where(eq(subscriptions.id, subscription.id));
+    return { ok: true as const, message: `Mensalidade de ${dueDate.split("-").reverse().join("/")} registrada. Próximo vencimento: ${nextDueDate.split("-").reverse().join("/")}.` };
+  });
+  if (!result.ok) return result;
+  revalidatePath("/admin");
+  return result;
+}
+
+// Suspender: tenant SUSPENDED e sessões encerradas. Reativar: volta a ACTIVE mantendo a condição comercial já definida
+// (quem nunca foi ativado passa por Ativar assinatura). Os dados financeiros do tenant não são tocados.
 export async function setSaasClientStatusAction(data: FormData): Promise<AdminActionResult> {
   const tenantId = text(data, "tenantId", 80);
   const action = text(data, "action", 20);
-  if (action !== "activate" && action !== "suspend") return { ok: false, error: "Ação inválida." };
+  if (action !== "reactivate" && action !== "suspend") return { ok: false, error: "Ação inválida." };
   const result = await withPlatformContext(async (tx) => {
     const target = await saasAccount(tx, tenantId);
     if (!target.ok) return target;
@@ -132,17 +245,11 @@ export async function setSaasClientStatusAction(data: FormData): Promise<AdminAc
       await tx.delete(sessions).where(eq(sessions.userId, target.user.id));
       return { ok: true as const, message: "Cliente SaaS suspenso. O acesso foi encerrado." };
     }
-    const [plan] = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).where(eq(plans.id, target.tenant.planId));
-    if (!plan || !plan.active) return { ok: false as const, error: "O plano deste cliente SaaS não está disponível." };
-    if (plan.priceInCents <= 0) return { ok: false as const, error: `O plano ${plan.name} ainda não tem valor mensal configurado. Nada foi alterado.` };
-    if (text(data, "planId", 80) !== plan.id || Number(text(data, "priceInCents", 12)) !== plan.priceInCents) {
-      return { ok: false as const, error: "O plano ou o valor mudou desde que a tela foi aberta. Recarregue a página e confira antes de ativar." };
-    }
+    const subscription = await currentSubscription(tx, tenantId);
+    if (!subscription?.activatedAt) return { ok: false as const, error: "Este cliente SaaS nunca foi ativado. Use Ativar assinatura." };
     await tx.update(tenants).set({ status: "ACTIVE", updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
-    const [subscription] = await tx.select({ id: subscriptions.id }).from(subscriptions).where(eq(subscriptions.tenantId, tenantId)).orderBy(desc(subscriptions.createdAt)).limit(1);
-    if (subscription) await tx.update(subscriptions).set({ status: "ACTIVE", expiresAt: null, planId: target.tenant.planId, updatedAt: sql`now()` }).where(eq(subscriptions.id, subscription.id));
-    else await tx.insert(subscriptions).values({ id: id("sub"), tenantId, planId: target.tenant.planId, status: "ACTIVE", expiresAt: null });
-    return { ok: true as const, message: `Cliente SaaS ativado no plano ${planLabel(plan.name, plan.priceInCents)}, sem data de vencimento.` };
+    if (subscription.status !== "ACTIVE" || subscription.expiresAt) await tx.update(subscriptions).set({ status: "ACTIVE", expiresAt: null, updatedAt: sql`now()` }).where(eq(subscriptions.id, subscription.id));
+    return { ok: true as const, message: "Cliente SaaS reativado com a condição comercial que já tinha." };
   });
   if (!result.ok) return result;
   revalidatePath("/admin");

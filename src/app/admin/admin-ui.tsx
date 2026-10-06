@@ -12,6 +12,32 @@ export const STATUS_INFO: Record<string, { label: string; tone: "active" | "tria
   CLOSED: { label: "Encerrado", tone: "closed" },
 };
 
+// Situação comercial (ver src/lib/billing/rules.ts). Independente do último acesso.
+const COMMERCIAL_INFO: Record<string, { label: string; tone: "active" | "trial" | "suspended" | "closed" | "late" }> = {
+  TRIALING: { label: "Em teste", tone: "trial" },
+  TRIAL_EXPIRED: { label: "Teste vencido", tone: "trial" },
+  ACTIVE: { label: "Ativo", tone: "active" },
+  PAST_DUE: { label: "Vencido", tone: "late" },
+  SUSPENSION_DUE: { label: "Vencido", tone: "late" },
+  SUSPENDED: { label: "Suspenso", tone: "suspended" },
+  CLOSED: { label: "Encerrado", tone: "closed" },
+};
+
+export function CommercialBadge({ status }: { status: string }) {
+  const info = COMMERCIAL_INFO[status] ?? { label: status, tone: "closed" as const };
+  return <span className={`saas-status saas-status-${info.tone}`}><i aria-hidden />{info.label}</span>;
+}
+
+// "vence em 3 dias", "vence hoje", "venceu há 2 dias (tolerância até 11/11)" …
+export function dueLabel(commercial: { status: string; daysToDue: number | null; daysOverdue: number | null; graceEndsOn: string | null }) {
+  if (commercial.daysToDue !== null) return commercial.daysToDue === 0 ? "vence hoje" : `faltam ${commercial.daysToDue} ${commercial.daysToDue === 1 ? "dia" : "dias"}`;
+  if (commercial.daysOverdue !== null) {
+    const late = `${commercial.daysOverdue} ${commercial.daysOverdue === 1 ? "dia" : "dias"} em atraso`;
+    return commercial.status === "SUSPENSION_DUE" ? `${late} · tolerância esgotada` : `${late} · tolerância até ${dateLabel(commercial.graceEndsOn)}`;
+  }
+  return null;
+}
+
 export function StatusBadge({ status }: { status: string }) {
   const info = STATUS_INFO[status] ?? { label: status, tone: "closed" as const };
   return <span className={`saas-status saas-status-${info.tone}`}><i aria-hidden />{info.label}</span>;
@@ -33,10 +59,11 @@ export function relativeAccess(value: string | null) {
 
 const NAV = [
   ["clientes", "/admin", "Clientes SaaS"],
+  ["planos", "/admin/planos", "Planos"],
   ["registros", "/admin/registros", "Registros da plataforma"],
 ] as const;
 
-export function AdminShell({ active, userName, hasOwnWallet, children }: { active: "clientes" | "registros"; userName: string; hasOwnWallet: boolean; children: ReactNode }) {
+export function AdminShell({ active, userName, hasOwnWallet, children }: { active: "clientes" | "planos" | "registros"; userName: string; hasOwnWallet: boolean; children: ReactNode }) {
   return (
     <main className="admin-page central">
       <header className="central-header">

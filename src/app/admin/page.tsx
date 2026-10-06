@@ -4,8 +4,9 @@ import { requireSuperAdmin } from "@/lib/auth/guards";
 import { databaseAvailable } from "@/lib/db";
 import { loadSaasClients, type SaasClient } from "@/lib/admin/queries";
 import { formatMoney } from "@/lib/finance/format";
-import { AdminShell, Kpi, StatusBadge, dateLabel, relativeAccess } from "./admin-ui";
+import { AdminShell, CommercialBadge, Kpi, dateLabel, dueLabel, relativeAccess } from "./admin-ui";
 import { planLabel } from "@/lib/admin/plan-price";
+import { CONDITION_LABEL } from "@/lib/billing/rules";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +22,8 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
   return (
     <AdminShell active="clientes" userName={session.user.name} hasOwnWallet={Boolean(session.user.tenantId)}>
       <section className="central-kpis central-kpis-4" aria-label="Resumo da plataforma">
-        <Kpi label="Clientes SaaS" value={kpis.total} hint={<><b className="dot-active" />{kpis.active} ativos · <b className="dot-trial" />{kpis.trialing} em teste · <b className="dot-suspended" />{kpis.suspended} suspensos</>} tone="cyan" />
-        <Kpi label="Receita mensal" value={formatMoney(kpis.monthlyRevenueCents)} hint={`${kpis.active} ${kpis.active === 1 ? "assinatura ativa" : "assinaturas ativas"} · ${formatMoney(kpis.trialRevenueCents)} se os em teste forem ativados`} tone="green" />
+        <Kpi label="Clientes SaaS" value={kpis.total} hint={<><b className="dot-active" />{kpis.active} ativos · <b className="dot-trial" />{kpis.trialing} em teste · <b className="dot-late" />{kpis.pastDue} vencidos · <b className="dot-suspended" />{kpis.suspended} suspensos</>} tone="cyan" />
+        <Kpi label="Receita mensal contratada" value={formatMoney(kpis.monthlyRevenueCents)} hint={`Soma dos valores contratados${kpis.courtesy ? ` · ${kpis.courtesy} em cortesia` : ""} · em teste: ${formatMoney(kpis.trialRevenueCents)} pelo preço padrão`} tone="green" />
         <Kpi label="Clientes finais" value={kpis.finalClients} hint={`${kpis.activeFinalClients} ativos nas carteiras`} />
         <Kpi label="Operações abertas" value={kpis.openOperations} hint={kpis.overdueOperations ? `${kpis.overdueOperations} em atraso` : "Nenhuma em atraso"} tone={kpis.overdueOperations ? "red" : undefined} />
         <Kpi label="Capital emprestado" value={formatMoney(kpis.lentCents)} hint="Principal ainda não devolvido" />
@@ -60,13 +61,13 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
         <form className="central-filters" action="/admin" method="get" role="search">
           <label className="central-search"><span>Buscar</span><input name="q" defaultValue={filters.q} placeholder="Nome ou e-mail" maxLength={120} /></label>
           <label><span>Status</span><select name="status" defaultValue={filters.status}>
-            <option value="">Todos</option><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option><option value="SUSPENDED">Suspenso</option><option value="CLOSED">Encerrado</option>
+            <option value="">Todos</option><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option><option value="PAST_DUE">Vencido</option><option value="SUSPENDED">Suspenso</option><option value="CLOSED">Encerrado</option>
           </select></label>
           <label><span>Plano</span><select name="plano" defaultValue={filters.plano}>
             <option value="">Todos</option>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan.name, plan.priceInCents, true)}</option>)}
           </select></label>
           <label><span>Ordenar por</span><select name="ordem" defaultValue={filters.ordem}>
-            <option value="nome">Nome</option><option value="emprestado">Capital emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option>
+            <option value="nome">Nome</option><option value="emprestado">Capital emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option><option value="vencimento">Próximo vencimento</option>
           </select></label>
           <button className="central-secondary">Aplicar</button>
         </form>
@@ -103,14 +104,10 @@ function SaasCard({ client }: { client: SaasClient }) {
           <small>{client.email ?? "Sem usuário"}</small>
         </div>
       </header>
-      {/* Assinatura: status comercial + plano e valor. Fica separada da atividade de uso logo abaixo. */}
+      {/* Situação comercial (plano, valor contratado, condição, status, vencimento) separada do uso logo abaixo. */}
       {client.isPlatformOwner
         ? <div className="saas-card-plan"><span className="saas-owner">Conta da administração · sem cobrança</span></div>
-        : <div className="saas-card-plan">
-          <StatusBadge status={client.status} />
-          <span>{planLabel(client.planName, client.planPriceInCents, true)}</span>
-          {client.status === "TRIALING" && client.subscriptionExpiresAt && <small>{client.subscriptionValid ? "Teste até" : "Teste venceu em"} {dateLabel(client.subscriptionExpiresAt)}</small>}
-        </div>}
+        : <CommercialSummary client={client} />}
       <div className="saas-card-meta">
         <span>Último acesso <b>{relativeAccess(client.lastAccessAt)}</b></span>
         <span>Desde <b>{dateLabel(client.createdAt)}</b></span>
@@ -133,5 +130,32 @@ function SaasCard({ client }: { client: SaasClient }) {
       {client.attention.length > 0 && <div className="saas-card-tags">{client.attention.map((reason) => <em key={reason}>{reason}</em>)}</div>}
       <footer><Link href={`/admin/clientes/${client.tenantId}`} className="central-secondary">Ver detalhes</Link><Link href={`/admin/clientes/${client.tenantId}#carteira`} className="central-ghost">Ver carteira</Link></footer>
     </article>
+  );
+}
+
+function CommercialSummary({ client }: { client: SaasClient }) {
+  const { commercial } = client;
+  const trial = commercial.status === "TRIALING" || commercial.status === "TRIAL_EXPIRED";
+  const courtesy = commercial.condition === "COURTESY";
+  const due = dueLabel(commercial);
+  return (
+    <div className="saas-card-commercial">
+      <div className="saas-card-plan">
+        <CommercialBadge status={commercial.status} />
+        <span>{trial || commercial.contractedPriceCents === null
+          ? planLabel(client.planName, client.planPriceInCents, true)
+          : courtesy ? `${client.planName} · Cortesia` : `${client.planName} · ${formatMoney(commercial.contractedPriceCents)}/mês`}</span>
+        {commercial.condition && commercial.condition !== "STANDARD" && !courtesy && <small>{CONDITION_LABEL[commercial.condition]} · padrão {formatMoney(client.planPriceInCents)}</small>}
+      </div>
+      <div className="saas-card-meta">
+        {trial
+          ? <span>{commercial.status === "TRIAL_EXPIRED" ? "Teste venceu em" : "Teste até"} <b>{dateLabel(client.subscriptionExpiresAt)}</b></span>
+          : <>
+            <span>Ativação <b>{dateLabel(commercial.activatedAt)}</b></span>
+            {!courtesy && <span>Próximo vencimento <b>{dateLabel(commercial.nextDueDate)}</b>{due && <em className={commercial.daysOverdue ? "is-late" : undefined}> · {due}</em>}</span>}
+            {!courtesy && <span>Último pagamento <b>{dateLabel(commercial.lastPaidAt)}</b></span>}
+          </>}
+      </div>
+    </div>
   );
 }

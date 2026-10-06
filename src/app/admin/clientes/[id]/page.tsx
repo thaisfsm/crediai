@@ -3,11 +3,12 @@ import { notFound, redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
 import { databaseAvailable } from "@/lib/db";
 import { loadSaasClientDetail } from "@/lib/admin/queries";
-import { formatMoney, formatPhone } from "@/lib/finance/format";
-import { AdminShell, Kpi, StatusBadge, dateLabel, relativeAccess } from "../../admin-ui";
+import { formatMoney, formatPhone, todayIso } from "@/lib/finance/format";
+import { AdminShell, CommercialBadge, Kpi, dateLabel, dueLabel, relativeAccess } from "../../admin-ui";
 import SaasClientForm from "../saas-client-form";
 import ClientActions from "./client-actions";
 import { planPriceLabel } from "@/lib/admin/plan-price";
+import { CONDITION_LABEL } from "@/lib/billing/rules";
 import { AreaChart, BarChart } from "./charts";
 
 export const dynamic = "force-dynamic";
@@ -20,10 +21,10 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
   if (!detail) notFound();
   const { client, profitability } = detail;
   const { money } = client;
-  const subscriptionNote = client.subscriptionExpiresAt
-    ? `${client.status === "TRIALING" ? "Teste " : ""}${client.subscriptionValid ? "vence" : "venceu"} em ${dateLabel(client.subscriptionExpiresAt)}`
-    : "Sem vencimento";
-
+  const { commercial } = client;
+  const today = todayIso();
+  const trial = commercial.status === "TRIALING" || commercial.status === "TRIAL_EXPIRED";
+  const due = dueLabel(commercial);
   return (
     <AdminShell active="clientes" userName={session.user.name} hasOwnWallet={Boolean(session.user.tenantId)}>
       <Link href="/admin" className="central-back">← Clientes SaaS</Link>
@@ -32,16 +33,13 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
           <div className="auth-kicker"><i /> CLIENTE SaaS</div>
           <h2>{client.name}</h2>
           <p>{client.email ?? "Sem usuário"}{client.contactPhone ? ` · ${formatPhone(client.contactPhone)}` : ""} · Ambiente “{client.tenantName}”</p>
-          {/* Assinatura (situação comercial definida pela administração) e uso (atividade na plataforma) ficam separados:
-              um cliente Ativo pode estar sem acessar há dias, e um cliente Em teste pode estar usando muito. */}
-          {client.isPlatformOwner
-            ? <div className="central-hero-meta" aria-label="Assinatura"><span className="saas-owner">Conta da administração (SUPER_ADMIN) · sem cobrança de plano</span></div>
-            : <div className="central-hero-meta" aria-label="Assinatura">
-              <StatusBadge status={client.status} />
-              <span>Plano <b>{client.planName}</b></span>
-              <span>Valor <b>{planPriceLabel(client.planPriceInCents)}</b></span>
-              <span>Assinatura <b>{subscriptionNote}</b></span>
-            </div>}
+          {/* Situação comercial e uso ficam separados: um cliente Ativo pode estar sem acessar há dias, e um cliente
+              Em teste pode estar usando muito. */}
+          <div className="central-hero-meta" aria-label="Situação comercial">
+            {client.isPlatformOwner ? <span className="saas-owner">Conta da administração (SUPER_ADMIN) · sem cobrança</span> : <CommercialBadge status={commercial.status} />}
+            {!client.isPlatformOwner && <span>Plano <b>{client.planName}</b></span>}
+            {!client.isPlatformOwner && commercial.condition && <span>Condição <b>{CONDITION_LABEL[commercial.condition]}</b></span>}
+          </div>
           <div className="central-hero-meta" aria-label="Uso da plataforma">
             <span>Cadastro <b>{dateLabel(client.createdAt)}</b></span>
             <span>Último acesso <b>{relativeAccess(client.lastAccessAt)}</b></span>
@@ -50,6 +48,31 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
           {client.attention.length > 0 && <div className="saas-card-tags">{client.attention.map((reason) => <em key={reason}>{reason}</em>)}</div>}
         </div>
       </section>
+
+      {!client.isPlatformOwner && (
+        <section className="central-panel" id="assinatura">
+          <header className="central-panel-head"><div><h2>Assinatura</h2><p>Condição comercial deste cliente. O preço padrão é do plano; o valor contratado é deste cliente e não muda quando o plano muda.</p></div></header>
+          <dl className="commercial-grid">
+            <div><dt>Plano</dt><dd>{client.planName}</dd></div>
+            <div><dt>Preço padrão</dt><dd>{planPriceLabel(client.planPriceInCents)}</dd></div>
+            <div><dt>Valor contratado</dt><dd>{commercial.contractedPriceCents === null ? "—" : `${formatMoney(commercial.contractedPriceCents)}/mês`}</dd></div>
+            <div><dt>Condição</dt><dd>{commercial.condition ? CONDITION_LABEL[commercial.condition] : "—"}</dd></div>
+            <div><dt>Status</dt><dd><CommercialBadge status={commercial.status} /></dd></div>
+            {trial
+              ? <div><dt>Fim do teste</dt><dd>{dateLabel(client.subscriptionExpiresAt)}</dd></div>
+              : <div><dt>Ativação</dt><dd>{dateLabel(commercial.activatedAt)}</dd></div>}
+            <div><dt>Próximo vencimento</dt><dd>{commercial.condition === "COURTESY" ? "Sem cobrança" : dateLabel(commercial.nextDueDate)}{due && <small>{due}</small>}</dd></div>
+            <div><dt>Ciclo</dt><dd>{trial ? "—" : "Mensal"}</dd></div>
+            <div><dt>Tolerância</dt><dd>{commercial.graceDays} dias</dd></div>
+            <div><dt>Último pagamento</dt><dd>{dateLabel(commercial.lastPaidAt)}</dd></div>
+          </dl>
+          {detail.charges.length > 0 && (
+            <ul className="central-list">{detail.charges.map((charge) => (
+              <li key={charge.id}><span><strong>Mensalidade de {dateLabel(charge.dueDate)}</strong><small>{charge.status === "PAID" ? `Paga em ${dateLabel(charge.paidAt)}` : charge.status} · {charge.provider === "MANUAL" ? "registro manual" : charge.provider}</small></span><b>{formatMoney(charge.amountCents)}</b></li>
+            ))}</ul>
+          )}
+        </section>
+      )}
 
       <section className="central-panel" id="carteira">
         <header className="central-panel-head"><div><h2>Carteira</h2><p>Ciclo {client.cycleNumber} da carteira deste cliente SaaS, com o mesmo cálculo que ele vê no dashboard.{client.needsInitialCapital ? " O capital inicial ainda não foi informado." : ""}</p></div></header>
@@ -79,6 +102,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
             <Kpi label="Quitadas" value={client.operations.paid} />
             <Kpi label="Em atraso" value={client.operations.overdue} tone={client.operations.overdue ? "red" : undefined} />
           </div>
+          <p className="central-hint">{client.paymentCount === 1 ? "1 pagamento" : `${client.paymentCount} pagamentos`} · Último acesso: {relativeAccess(client.lastAccessAt)}</p>
           <p className="central-hint">Emprestado no ciclo: {formatMoney(profitability.principalCents)} · Juros contratados: {formatMoney(profitability.interestCents)}</p>
         </section>
       </div>
@@ -119,13 +143,17 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
             </li>
           ))}
         </ul>
-        <ClientActions tenantId={client.tenantId} status={client.status} userActive={client.userActive} locked={client.isPlatformOwner} plan={{ id: client.planId, name: client.planName, priceInCents: client.planPriceInCents }} />
+        <ClientActions tenantId={client.tenantId} status={client.status} userActive={client.userActive} locked={client.isPlatformOwner} plans={detail.plans} today={today}
+          subscription={{
+            activatedAt: commercial.activatedAt, nextDueDate: commercial.nextDueDate, contractedPriceCents: commercial.contractedPriceCents, courtesy: commercial.condition === "COURTESY",
+            terms: { planId: client.planId, condition: commercial.condition, contractedCents: commercial.contractedPriceCents, dueDate: commercial.nextDueDate, graceDays: commercial.graceDays },
+          }} />
       </section>
 
       {!client.isPlatformOwner && client.email && (
         <section className="central-panel">
           <header className="central-panel-head"><div><h2>Editar cliente SaaS</h2></div></header>
-          <SaasClientForm plans={detail.plans} initial={{ tenantId: client.tenantId, name: client.name, email: client.email, phone: formatPhone(client.contactPhone) ?? "", planId: client.planId, tenantName: client.tenantName }} />
+          <SaasClientForm plans={detail.plans} today={today} initial={{ tenantId: client.tenantId, name: client.name, email: client.email, phone: formatPhone(client.contactPhone) ?? "", planId: client.planId, tenantName: client.tenantName }} />
         </section>
       )}
     </AdminShell>
