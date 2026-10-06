@@ -1,7 +1,7 @@
 // Consolida a carteira do tenant a partir das linhas do banco. Funções puras: sem acesso a banco.
 import { addDays, daysBetween, formatDate, initialsOf, shortDate, todayIso } from "./format";
 import type { ClientProfile } from "./client-profile";
-import { allocatePayments, installmentSchedule, paymentKindLabels, type PaymentKind } from "./rules";
+import { operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
 
@@ -15,6 +15,8 @@ export type OperationRecord = {
   renewals?: RenewalRecord[];
   // Modalidade: pagamento único (padrão) ou parcelado com parcela fixa.
   modality?: OperationModality; installmentCount?: number | null; installmentCents?: number | null; firstDueDate?: string | null;
+  // Periodicidade do pagamento único (mensal, quinzenal ou diário). Operações antigas: mensal.
+  frequency?: Frequency;
 };
 export type OperationModality = "SINGLE" | "INSTALLMENT";
 // Renovação de período: o pagamento que a gerou, o vencimento antes e depois e os juros do novo período.
@@ -22,7 +24,8 @@ export type RenewalRecord = { id: string; paymentId: string; periodNumber: numbe
 // Correção feita em um pagamento: valores de antes e de depois.
 export type PaymentRevisionRecord = { id: string; previousAmountCents: number; previousPaidAt: string; amountCents: number; paidAt: string; editedAt: string; editedBy: string | null };
 export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[] };
-export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind };
+// renewedPeriod: o período que este pagamento renovou (pagamento somente de juros), com o novo vencimento.
+export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind; renewedPeriod: LedgerPeriod | null };
 export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_REVERSAL";
 export type CapitalMovementRecord = { id: string; kind: CapitalMovementKind; amountCents: number; occurredAt: string; notes: string | null; reversedMovementId: string | null; createdAt: string };
 
@@ -42,11 +45,15 @@ export type OperationView = Omit<OperationRecord, "renewals"> & {
   originalInterestCents: number; originalTotalCents: number; renewals: RenewalRecord[]; renewalCount: number;
   // Período atual (1 = original), seus juros e o primeiro vencimento combinado.
   periodNumber: number; periodInterestCents: number; originalDueDate: string;
-  modality: OperationModality;
-  // Parcelado: as parcelas com o que já foi pago em cada uma e a próxima parcela em aberto (null quando tudo foi pago).
-  installments: ReturnType<typeof installmentSchedule>; nextInstallment: ReturnType<typeof installmentSchedule>[number] | null;
-  // Próximo vencimento: no pagamento único é o vencimento do período; no parcelado, o da próxima parcela em aberto.
+  modality: OperationModality; frequency: Frequency;
+  // Parcelado e diário: as parcelas com o que já foi pago em cada uma e a próxima em aberto (null quando tudo foi pago).
+  installments: ScheduleItem[]; nextInstallment: ScheduleItem | null;
+  // Mensal e quinzenal: os períodos (o 1º é o do contrato; os seguintes vieram de renovações).
+  periods: LedgerPeriod[];
+  // Próximo vencimento: no pagamento único é o vencimento do período atual; no parcelado/diário, o da próxima parcela.
   nextDueDate: string;
+  // Próximo valor a cobrar (juros do período ou a próxima parcela) e os termos usados pelas prévias da tela.
+  amountDueCents: number; ledgerTerms: LedgerTerms;
   code: string; paidCents: number; interestPaidCents: number; principalPaidCents: number; interestRemainingCents: number; principalRemainingCents: number;
   balanceCents: number; state: OperationState; daysUntilDue: number; payments: AllocatedPayment[];
   // Tempo da operação: do empréstimo até hoje (ou até a quitação) e em quantos meses diferentes houve pagamento.
@@ -62,7 +69,7 @@ export function summarizeOperations(operations: OperationView[]) {
     operationCount: operations.length,
     openCount: open.length,
     paidCount: operations.filter((operation) => operation.status === "PAID").length,
-    overdueCount: open.filter((operation) => operation.daysUntilDue < 0).length,
+    overdueCount: open.filter((operation) => operation.state === "OVERDUE").length,
     principalCents: sum((operation) => operation.principalCents),
     interestCents: sum((operation) => operation.interestCents),
     renewalCount: sum((operation) => operation.renewalCount),
@@ -120,36 +127,34 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   for (const payment of payments) paymentsByOperation.set(payment.operationId, [...(paymentsByOperation.get(payment.operationId) ?? []), payment]);
 
   const views: OperationView[] = operations.map(({ renewals: renewalRows = [], ...operation }) => {
-    // Cada renovação acrescenta os juros de um novo período; o principal não muda (regra oficial em rules.ts).
     const renewals = [...renewalRows].sort((a, b) => a.periodNumber - b.periodNumber);
-    const interestCents = operation.interestCents + renewals.reduce((total, renewal) => total + renewal.interestCents, 0);
-    const renewalPayments = new Set(renewals.map((renewal) => renewal.paymentId));
-    // Juros primeiro, depois principal: a divisão de cada pagamento vem da regra central em rules.ts.
     const modality: OperationModality = operation.modality ?? "SINGLE";
-    const installment = modality === "INSTALLMENT";
-    const allocation = allocatePayments({ principalCents: operation.principalCents, interestCents, proportional: installment },
-      (paymentsByOperation.get(operation.id) ?? []).map((payment) => ({ ...payment, renewal: renewalPayments.has(payment.id) })));
-    const installments = installment && operation.firstDueDate && operation.installmentCount && operation.installmentCents
-      ? installmentSchedule({ firstDueDate: operation.firstDueDate, installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, paidCents: allocation.paidCents })
-      : [];
-    const nextInstallment = installments.find((item) => item.state !== "PAID") ?? null;
-    const nextDueDate = nextInstallment?.dueDate ?? operation.dueDate;
-    const daysUntilDue = daysBetween(today, nextDueDate);
-    const state: OperationState = operation.status === "PAID" ? "PAID"
-      : operation.status === "CANCELED" ? "CANCELED"
-      : daysUntilDue < 0 ? "OVERDUE" : daysUntilDue === 0 ? "DUE_TODAY" : "ACTIVE";
+    const frequency: Frequency = operation.frequency ?? "MONTHLY";
+    // Primeiro vencimento combinado. Operações antigas de pagamento único não o gravavam: é o vencimento antes da
+    // primeira renovação registrada ou, sem renovação registrada, o vencimento gravado.
+    const originalDueDate = operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate;
+    const ledgerTerms: LedgerTerms = {
+      modality, frequency, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
+      firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, renewals,
+    };
+    // Toda a conta (juros/principal de cada pagamento, período, vencimento, saldo e situação) vem do extrato em rules.ts.
+    const ledger = operationLedger(ledgerTerms, paymentsByOperation.get(operation.id) ?? [], today);
+    const open = operation.status === "OPEN";
+    const state: OperationState = operation.status === "PAID" ? "PAID" : operation.status === "CANCELED" ? "CANCELED" : ledger.state === "PAID" ? "ACTIVE" : ledger.state;
+    const daysUntilDue = open ? ledger.daysUntilDue : daysBetween(today, ledger.nextDueDate);
     return {
       ...operation, code: operationCode(operation.id), state, daysUntilDue,
-      interestCents, totalCents: operation.principalCents + interestCents, originalInterestCents: operation.interestCents, originalTotalCents: operation.totalCents,
-      renewals, renewalCount: renewals.length, periodNumber: renewals.length + 1, modality, installments, nextInstallment, nextDueDate,
-      periodInterestCents: renewals.at(-1)?.interestCents ?? operation.interestCents, originalDueDate: renewals[0]?.previousDueDate ?? operation.dueDate,
-      paidCents: allocation.paidCents, interestPaidCents: allocation.interestPaidCents, principalPaidCents: allocation.principalPaidCents,
-      interestRemainingCents: operation.status === "OPEN" ? allocation.interestRemainingCents : 0,
-      principalRemainingCents: operation.status === "OPEN" ? allocation.principalRemainingCents : 0,
-      balanceCents: operation.status === "OPEN" ? allocation.balanceCents : 0,
-      payments: [...allocation.items].reverse(),
+      interestCents: ledger.interestCents, totalCents: ledger.totalCents, originalInterestCents: operation.interestCents, originalTotalCents: operation.totalCents,
+      renewals, renewalCount: ledger.renewalCount, periodNumber: ledger.periodNumber, modality, frequency, periods: ledger.periods,
+      installments: ledger.schedule, nextInstallment: ledger.nextItem, nextDueDate: ledger.nextDueDate,
+      periodInterestCents: ledger.periodInterestCents, originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
+      paidCents: ledger.paidCents, interestPaidCents: ledger.interestPaidCents, principalPaidCents: ledger.principalPaidCents,
+      interestRemainingCents: open ? ledger.interestRemainingCents : 0,
+      principalRemainingCents: open ? ledger.principalRemainingCents : 0,
+      balanceCents: open ? ledger.balanceCents : 0,
+      payments: [...ledger.items].reverse(),
       elapsedUntil: operation.status === "PAID" && operation.settledAt ? operation.settledAt : today,
-      paymentMonths: new Set(allocation.items.map((payment) => payment.paidAt.slice(0, 7))).size,
+      paymentMonths: new Set(ledger.items.map((payment) => payment.paidAt.slice(0, 7))).size,
     };
   });
 
@@ -199,7 +204,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     key: operation.id, operationId: operation.id, clientName: operation.clientName, initials: initialsOf(operation.clientName), color: colorFor(operation.clientId),
     detail: operation.nextInstallment
       ? `Op. #${operation.code} · Parcela ${operation.nextInstallment.number}/${operation.installments.length} · Vence ${formatDate(operation.nextDueDate)}`
-      : `Op. #${operation.code} · Vence ${formatDate(operation.dueDate)}`,
+      : `Op. #${operation.code}${operation.periodNumber > 1 ? ` · ${operation.periodNumber}º período` : ""} · Vence ${formatDate(operation.nextDueDate)}`,
     amountCents: operation.nextInstallment ? operation.nextInstallment.remainingCents : operation.balanceCents,
     status: relativeDue(operation.daysUntilDue), tone: operation.daysUntilDue < 0 ? "late" : "due",
   });
@@ -224,13 +229,12 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const upcoming = byDue.filter((operation) => operation.daysUntilDue >= 0).slice(0, 4);
 
   // Saldo a receber da carteira no fim de cada dia, usando só datas registradas.
-  const paidAtById = new Map(payments.map((payment) => [payment.id, payment.paidAt]));
   const receivableAt = (day: string) => sum(live.map((operation) => {
     if (operation.loanDate > day) return 0;
     if (operation.status === "PAID" && operation.settledAt && operation.settledAt <= day) return 0;
     const paid = sum(payments.filter((payment) => payment.operationId === operation.id && payment.paidAt <= day).map((payment) => payment.amountCents));
-    // Os juros de um período renovado só passam a ser devidos a partir do pagamento que fez a renovação.
-    const renewed = sum(operation.renewals.filter((renewal) => (paidAtById.get(renewal.paymentId) ?? today) <= day).map((renewal) => renewal.interestCents));
+    // Os juros de um período renovado só passam a ser devidos a partir da renovação (pagamento ou vencimento).
+    const renewed = sum(operation.periods.filter((period) => period.number > 1 && (period.openedOn ?? today) <= day).map((period) => period.interestCents));
     return Math.max(operation.originalTotalCents + renewed - paid, 0);
   }));
   const series = (spanDays: number, points: number) => {

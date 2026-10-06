@@ -1,0 +1,205 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  calculateDaily, calculateInstallments, commercialDaysBetween, dueDates, installmentRate, interestOnlyRenewal, monthlyEquivalentRate,
+  nextDueDate, operationLedger, proportionalInterest, rateForDays, simpleMonthlyRate,
+} from "../src/lib/finance/rules.ts";
+
+// Termos de uma operação de juros recorrentes (pagamento único mensal ou quinzenal).
+const recurring = (extra) => ({ modality: "SINGLE", frequency: "MONTHLY", installmentCount: null, installmentCents: null, renewals: [], ...extra });
+const pay = (id, amountCents, paidAt) => ({ id, amountCents, paidAt, createdAt: `${paidAt}T12:00:00Z` });
+
+test("A. taxa simples do parcelado: R$ 10.000, juros R$ 6.000, 10 meses = 6% ao mês; 9,61% é a taxa Price", () => {
+  assert.equal(simpleMonthlyRate({ principalCents: 1_000_000, interestCents: 600_000, months: 10 }), 0.06);
+  // Origem do 9,61%: a taxa que iguala R$ 10.000 a 10 parcelas de R$ 1.600 na tabela Price (juros compostos).
+  const price = installmentRate({ presentValueCents: 1_000_000, installmentCents: 160_000, count: 10 });
+  assert.equal(Math.round(price * 10_000), 961);
+  const pv = 160_000 * (1 - (1 + price) ** -10) / price;
+  assert.ok(Math.abs(pv - 1_000_000) < 1);
+  // O cadastro do parcelado passa a gravar a taxa simples (600 pontos-base = 6%).
+  const calculated = calculateInstallments({ presentValueCents: 1_000_000, installmentCents: 160_000, count: 10 });
+  assert.equal(calculated.interestRateBps, 600);
+  assert.equal(calculated.interestCents, 600_000);
+  assert.equal(Math.round(calculated.priceRate * 10_000), 961);
+});
+
+test("B. quinzenal: R$ 8.000 com R$ 1.200 por quinzena, pagamento só dos juros mantém o principal e renova", () => {
+  const terms = recurring({ frequency: "BIWEEKLY", principalCents: 800_000, interestRateBps: 1500, interestCents: 120_000, firstDueDate: "2026-10-15" });
+  const before = operationLedger(terms, [], "2026-10-15");
+  assert.equal(before.state, "DUE_TODAY");
+  assert.equal(before.balanceCents, 920_000);
+  const renewal = interestOnlyRenewal(terms, before, 120_000);
+  assert.deepEqual(renewal, { previousDueDate: "2026-10-15", defaultNewDueDate: "2026-10-30", principalBaseCents: 800_000, nextInterestCents: 120_000 });
+  // Registrado como "somente juros" (linha de renovação), o período seguinte abre na hora.
+  const rows = [{ paymentId: "p1", periodNumber: 2, previousDueDate: "2026-10-15", newDueDate: renewal.defaultNewDueDate, principalBaseCents: 800_000, interestCents: 120_000 }];
+  const after = operationLedger({ ...terms, renewals: rows }, [pay("p1", 120_000, "2026-10-15")], "2026-10-15");
+  assert.equal(after.principalRemainingCents, 800_000);
+  assert.equal(after.interestRemainingCents, 120_000);
+  assert.equal(after.balanceCents, 920_000);
+  assert.equal(after.nextDueDate, "2026-10-30");
+  assert.equal(after.periodNumber, 2);
+  assert.equal(after.state, "ACTIVE");
+  assert.equal(after.items[0].kind, "RENEWAL");
+  // Quitação: principal + juros da quinzena.
+  const settled = operationLedger({ ...terms, renewals: rows }, [pay("p1", 120_000, "2026-10-15"), pay("p2", 920_000, "2026-10-30")], "2026-10-30");
+  assert.equal(settled.state, "PAID");
+  assert.equal(settled.balanceCents, 0);
+  assert.equal(settled.items[1].kind, "SETTLEMENT");
+  assert.equal(settled.interestPaidCents, 240_000);
+  assert.equal(settled.principalPaidCents, 800_000);
+});
+
+test("C. quinzenal: empréstimo dia 01, vencimentos dia 15 e dia 30 (dois ciclos no mês)", () => {
+  assert.deepEqual(dueDates("BIWEEKLY", "2026-10-15", 6), ["2026-10-15", "2026-10-30", "2026-11-15", "2026-11-30", "2026-12-15", "2026-12-30"]);
+  // Fevereiro: o segundo vencimento é o último dia do mês, e março volta para 15 e 30.
+  assert.deepEqual(dueDates("BIWEEKLY", "2027-02-15", 4), ["2027-02-15", "2027-02-28", "2027-03-15", "2027-03-30"]);
+  assert.deepEqual(dueDates("BIWEEKLY", "2026-10-10", 3), ["2026-10-10", "2026-10-25", "2026-11-10"]);
+  assert.deepEqual(dueDates("BIWEEKLY", "2026-10-20", 3), ["2026-10-20", "2026-11-05", "2026-11-20"]);
+});
+
+test("D. quinzenal: só juros nos dois ciclos do mês renova duas vezes, sem juros sobre juros", () => {
+  const terms = recurring({ frequency: "BIWEEKLY", principalCents: 800_000, interestRateBps: 1500, interestCents: 120_000, firstDueDate: "2026-10-15" });
+  // Sem linha de renovação (ex.: pagamento antigo): renova no vencimento, quando os juros já estão pagos.
+  const ledger = operationLedger(terms, [pay("p1", 120_000, "2026-10-15"), pay("p2", 120_000, "2026-10-30")], "2026-10-31");
+  assert.equal(ledger.periodNumber, 3);
+  assert.deepEqual(ledger.periods.map((period) => [period.dueDate, period.interestCents]), [["2026-10-15", 120_000], ["2026-10-30", 120_000], ["2026-11-15", 120_000]]);
+  assert.equal(ledger.principalRemainingCents, 800_000);
+  assert.equal(ledger.interestPaidCents, 240_000);
+  assert.equal(ledger.balanceCents, 920_000);
+  assert.equal(ledger.nextDueDate, "2026-11-15");
+  assert.equal(ledger.state, "ACTIVE");
+  assert.deepEqual(ledger.items.map((item) => item.kind), ["RENEWAL", "RENEWAL"]);
+  // Segunda quinzena sem pagamento: Em atraso a partir do dia seguinte ao vencimento.
+  const late = operationLedger(terms, [pay("p1", 120_000, "2026-10-15")], "2026-11-02");
+  assert.equal(late.nextDueDate, "2026-10-30");
+  assert.equal(late.state, "OVERDUE");
+  assert.equal(late.daysUntilDue, -3);
+  assert.equal(late.balanceCents, 920_000);
+});
+
+test("E/F. diário: R$ 10.000 a 30% em 30 dias = R$ 13.000 em 30 pagamentos, soma exata", () => {
+  const plan = calculateDaily({ principalCents: 1_000_000, interestRateBps: 3000, days: 30, loanDate: "2026-10-01" });
+  assert.equal(plan.interestCents, 300_000);
+  assert.equal(plan.totalCents, 1_300_000);
+  assert.equal(plan.installmentCount, 30);
+  assert.equal(plan.installmentCents, 43_333);
+  assert.equal(plan.lastInstallmentCents, 43_343);
+  assert.equal(plan.firstDueDate, "2026-10-02");
+  assert.equal(plan.lastDueDate, "2026-10-31");
+  const terms = { modality: "SINGLE", frequency: "DAILY", principalCents: 1_000_000, interestRateBps: 3000, interestCents: 300_000, firstDueDate: plan.firstDueDate, installmentCount: 30, installmentCents: 43_333, renewals: [] };
+  const empty = operationLedger(terms, [], "2026-10-01");
+  assert.equal(empty.schedule.length, 30);
+  assert.equal(empty.schedule.reduce((sum, item) => sum + item.amountCents, 0), 1_300_000);
+  assert.equal(empty.schedule[29].amountCents, 43_343);
+  assert.equal(empty.schedule[29].dueDate, "2026-10-31");
+  // Ajuste de centavos em outros valores: a soma sempre fecha.
+  for (const [principalCents, rate, days] of [[100_000, 2000, 7], [123_457, 3333, 13], [50_000, 1000, 30], [99_999, 0, 3]]) {
+    const other = calculateDaily({ principalCents, interestRateBps: rate, days, loanDate: "2026-10-01" });
+    const schedule = operationLedger({ ...terms, principalCents, interestRateBps: rate, interestCents: other.interestCents, installmentCount: days, installmentCents: other.installmentCents }, [], "2026-10-01").schedule;
+    assert.equal(schedule.reduce((sum, item) => sum + item.amountCents, 0), other.totalCents);
+    assert.ok(schedule.at(-1).amountCents - other.installmentCents < days);
+  }
+  // Cada pagamento diário leva principal e juros; pagando todos, quita com juros = R$ 3.000 exatos.
+  const payments = empty.schedule.map((item) => pay(`d${item.number}`, item.amountCents, item.dueDate));
+  const done = operationLedger(terms, payments, "2026-10-31");
+  assert.equal(done.state, "PAID");
+  assert.equal(done.interestPaidCents, 300_000);
+  assert.equal(done.principalPaidCents, 1_000_000);
+  assert.ok(done.items[0].interestCents > 0 && done.items[0].principalCents > 0);
+  // Três dias pagos e o quarto vencido: Em atraso.
+  const late = operationLedger(terms, payments.slice(0, 3), "2026-10-06");
+  assert.equal(late.nextItem.number, 4);
+  assert.equal(late.state, "OVERDUE");
+});
+
+test("G. Alexandre: R$ 360 de juros pagos no vencimento não deixa a operação em atraso; abre o novo ciclo", () => {
+  const terms = recurring({ principalCents: 120_000, interestRateBps: 3000, interestCents: 36_000, firstDueDate: "2026-09-17" });
+  // Pagamento gravado sem linha de renovação (como em produção).
+  const ledger = operationLedger(terms, [pay("pay_alexandre", 36_000, "2026-09-17")], "2026-10-05");
+  assert.equal(ledger.state, "ACTIVE");
+  assert.equal(ledger.nextDueDate, "2026-10-17");
+  assert.equal(ledger.periodNumber, 2);
+  assert.equal(ledger.paidCents, 36_000);
+  assert.equal(ledger.interestPaidCents, 36_000);
+  assert.equal(ledger.principalRemainingCents, 120_000);
+  assert.equal(ledger.interestRemainingCents, 36_000);
+  assert.equal(ledger.balanceCents, 156_000);
+  assert.equal(ledger.items[0].kind, "RENEWAL");
+  // Antes da correção: o mesmo pagamento sem pagar mais nada, um mês depois, fica Em atraso (ciclo 2 sem juros pagos).
+  assert.equal(operationLedger(terms, [pay("pay_alexandre", 36_000, "2026-09-17")], "2026-10-18").state, "OVERDUE");
+  // Sem nenhum pagamento, aí sim estaria em atraso desde 18/09.
+  const unpaid = operationLedger(terms, [], "2026-10-05");
+  assert.equal(unpaid.state, "OVERDUE");
+  assert.equal(unpaid.daysUntilDue, -18);
+});
+
+test("G2. pagamento de juros antes do vencimento seguido da quitação no mesmo período (como em produção) continua quitado", () => {
+  const terms = recurring({ principalCents: 10_000, interestRateBps: 3000, interestCents: 3_000, firstDueDate: "2026-10-30" });
+  const ledger = operationLedger(terms, [pay("a", 3_000, "2026-09-30"), pay("b", 10_000, "2026-10-02")], "2026-10-06");
+  assert.equal(ledger.state, "PAID");
+  assert.deepEqual(ledger.items.map((item) => item.kind), ["INTEREST", "SETTLEMENT"]);
+});
+
+test("H. parcelado (Amany): R$ 2.000 em 2 × R$ 1.500, 1ª paga em 05/10 → próxima em 05/11, Ativa", () => {
+  const terms = { modality: "INSTALLMENT", frequency: "MONTHLY", principalCents: 200_000, interestRateBps: 3187, interestCents: 100_000, firstDueDate: "2026-10-05", installmentCount: 2, installmentCents: 150_000, renewals: [] };
+  const ledger = operationLedger(terms, [pay("amany1", 150_000, "2026-10-05")], "2026-10-06");
+  assert.equal(ledger.state, "ACTIVE");
+  assert.equal(ledger.nextDueDate, "2026-11-05");
+  assert.equal(ledger.nextItem.number, 2);
+  assert.equal(ledger.schedule[0].state, "PAID");
+  assert.equal(ledger.balanceCents, 150_000);
+  // Proporcional: 1/3 de cada parcela é juros (R$ 500) e 2/3 principal (R$ 1.000), como antes.
+  assert.equal(ledger.items[0].interestCents, 50_000);
+  assert.equal(ledger.items[0].principalCents, 100_000);
+  const done = operationLedger(terms, [pay("amany1", 150_000, "2026-10-05"), pay("amany2", 150_000, "2026-11-05")], "2026-11-05");
+  assert.equal(done.state, "PAID");
+  assert.equal(done.interestPaidCents, 100_000);
+});
+
+test("I. pagamento integral quita (mensal)", () => {
+  const terms = recurring({ principalCents: 100_000, interestRateBps: 3000, interestCents: 30_000, firstDueDate: "2026-11-01" });
+  const ledger = operationLedger(terms, [pay("x", 130_000, "2026-11-01")], "2026-11-01");
+  assert.equal(ledger.state, "PAID");
+  assert.equal(ledger.balanceCents, 0);
+  assert.equal(ledger.items[0].kind, "SETTLEMENT");
+});
+
+test("J. pagamento parcial: juros primeiro, depois principal; renova no vencimento sobre o principal que sobrou", () => {
+  const terms = recurring({ principalCents: 100_000, interestRateBps: 3000, interestCents: 30_000, firstDueDate: "2026-11-01" });
+  // Parcial menor que os juros: continua no mesmo período e, vencido, fica Em atraso.
+  const small = operationLedger(terms, [pay("a", 10_000, "2026-10-20")], "2026-11-03");
+  assert.equal(small.interestRemainingCents, 20_000);
+  assert.equal(small.balanceCents, 120_000);
+  assert.equal(small.state, "OVERDUE");
+  // Juros + parte do principal: R$ 500 = R$ 300 juros + R$ 200 principal; saldo R$ 800 até o vencimento.
+  const partial = operationLedger(terms, [pay("a", 50_000, "2026-10-20")], "2026-10-25");
+  assert.equal(partial.items[0].interestCents, 30_000);
+  assert.equal(partial.items[0].principalCents, 20_000);
+  assert.equal(partial.items[0].kind, "PARTIAL");
+  assert.equal(partial.balanceCents, 80_000);
+  assert.equal(partial.state, "ACTIVE");
+  // No vencimento, o período renova com juros de 30% sobre R$ 800 = R$ 240.
+  const renewed = operationLedger(terms, [pay("a", 50_000, "2026-10-20")], "2026-11-01");
+  assert.equal(renewed.periodInterestCents, 24_000);
+  assert.equal(renewed.balanceCents, 104_000);
+  assert.equal(renewed.nextDueDate, "2026-12-01");
+  assert.equal(renewed.state, "ACTIVE");
+});
+
+test("K. calendário comercial 30/360", () => {
+  assert.equal(commercialDaysBetween("2026-01-01", "2027-01-01"), 360);
+  assert.equal(commercialDaysBetween("2026-03-01", "2026-04-01"), 30);
+  assert.equal(commercialDaysBetween("2026-01-31", "2026-02-28"), 28);
+  assert.equal(commercialDaysBetween("2026-10-01", "2026-10-15"), 14);
+  assert.equal(rateForDays(3000, 15), 1500);
+  assert.equal(rateForDays(3000, 1), 100);
+  assert.equal(rateForDays(3000, 360), 36_000);
+  assert.equal(monthlyEquivalentRate(1500, 15), 3000);
+  assert.equal(proportionalInterest({ principalCents: 800_000, monthlyRateBps: 3000, days: 15 }), 120_000);
+  assert.equal(proportionalInterest({ principalCents: 1_000_000, monthlyRateBps: 3000, days: 1 }), 10_000);
+  // Mensal mantém o dia combinado; 31 → fim de fevereiro → 31 de março.
+  assert.equal(nextDueDate("MONTHLY", "2026-01-31", 31), "2026-02-28");
+  assert.equal(nextDueDate("MONTHLY", "2026-02-28", 31), "2026-03-31");
+  assert.equal(nextDueDate("MONTHLY", "2026-09-17", 17), "2026-10-17");
+  assert.equal(nextDueDate("DAILY", "2026-10-31"), "2026-11-01");
+});
