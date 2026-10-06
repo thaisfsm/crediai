@@ -4,11 +4,11 @@ export const CALCULATION_RULE = "RATE_PER_OPERATION_SINGLE_PAYMENT_V1";
 
 export const calculationRuleLabels: Record<string, string> = {
   [CALCULATION_RULE]: "Taxa sobre o principal, pagamento único no vencimento",
-  FIXED_MONTHLY_INSTALLMENTS_V1: "Parcelado: parcelas mensais fixas (PMT)",
+  FIXED_MONTHLY_INSTALLMENTS_V1: "Parcelado: parcelas mensais fixas, juros simples",
 };
 
 export function calculateOperation({ principalCents, interestRateBps }: { principalCents: number; interestRateBps: number }) {
-  const interestCents = Math.round((principalCents * interestRateBps) / 10_000);
+  const interestCents = simpleInterest({ principalCents, rateBps: interestRateBps });
   return { interestCents, totalCents: principalCents + interestCents, calculationRule: CALCULATION_RULE };
 }
 
@@ -17,36 +17,30 @@ export const paymentKindLabels: Record<PaymentKind, string> = {
   INTEREST: "Juros", PARTIAL: "Pagamento de principal", SETTLEMENT: "Quitação", RENEWAL: "Juros / Renovação", INSTALLMENT: "Parcela",
 };
 
-// ── Modalidade parcelada ──────────────────────────────────────────────────────────────────────────────────────────
-// O usuário informa o valor presente (valor emprestado), o valor da parcela (PMT), o primeiro vencimento e o prazo em
-// meses. Uma parcela por mês: quantidade de parcelas = prazo; total = PMT × parcelas; lucro = total − valor presente.
-// A taxa mensal é a que iguala o valor presente às parcelas (tabela Price): VP = PMT × (1 − (1 + i)^−n) / i.
-export const INSTALLMENT_RULE = "FIXED_MONTHLY_INSTALLMENTS_V1";
-
-export function installmentRate({ presentValueCents, installmentCents, count }: { presentValueCents: number; installmentCents: number; count: number }) {
-  const total = installmentCents * count;
-  if (total <= presentValueCents) return 0;
-  const presentValue = (rate: number) => installmentCents * (1 - (1 + rate) ** -count) / rate;
-  // presentValue cai quando a taxa sobe: busca binária até a precisão de centésimo de ponto-base.
-  let low = 1e-9, high = 10;
-  for (let step = 0; step < 200; step += 1) {
-    const middle = (low + high) / 2;
-    if (presentValue(middle) > presentValueCents) low = middle; else high = middle;
-  }
-  return (low + high) / 2;
+// ══ Regra matemática oficial: JUROS SIMPLES ═══════════════════════════════════════════════════════════════════════
+// Todas as operações do CrediAI usam juros simples:  J = P × i × n  e  M = P + J
+//   P = principal, i = taxa simples do período, n = quantidade de períodos, J = juros, M = montante.
+// Os juros incidem só sobre o principal, nunca sobre juros (não há capitalização composta). Ex.: R$ 8.000 a 30% ao mês
+// por 2 períodos sem amortização = 8.000 × 0,30 × 2 = R$ 4.800. Não existe tabela Price em nenhum cálculo do sistema.
+export function simpleInterest({ principalCents, rateBps, periods = 1 }: { principalCents: number; rateBps: number; periods?: number }) {
+  return Math.round((principalCents * rateBps * periods) / 10_000);
 }
 
-export function calculateInstallments({ presentValueCents, installmentCents, count }: { presentValueCents: number; installmentCents: number; count: number }) {
+// ── Modalidade parcelada ──────────────────────────────────────────────────────────────────────────────────────────
+// O usuário informa o valor emprestado (principal), o valor de cada parcela, o primeiro vencimento e o prazo em meses.
+// Uma parcela por mês: total = parcela × parcelas; juros = total − principal.
+// Taxa contratada = juros simples ao mês = juros ÷ principal ÷ meses. Ex.: 6.000 ÷ 10.000 ÷ 10 = 6% ao mês, e de volta
+// J = 10.000 × 0,06 × 10 = 6.000, M = 16.000 = 10 × 1.600. Cada parcela leva juros e principal na mesma proporção.
+export const INSTALLMENT_RULE = "FIXED_MONTHLY_INSTALLMENTS_V1";
+
+export function calculateInstallments({ principalCents, installmentCents, count }: { principalCents: number; installmentCents: number; count: number }) {
   const totalCents = installmentCents * count;
-  const interestCents = totalCents - presentValueCents;
-  // Taxa do CrediAI: juros simples ao mês (juros totais / valor presente / meses). Ex.: 6.000 / 10.000 / 10 = 6%.
-  const monthlyRate = simpleMonthlyRate({ principalCents: presentValueCents, interestCents: Math.max(interestCents, 0), months: count });
+  const interestCents = totalCents - principalCents;
+  const monthlyRate = simpleMonthlyRate({ principalCents, interestCents: Math.max(interestCents, 0), months: count });
   return {
     interestCents, totalCents, calculationRule: INSTALLMENT_RULE,
     // Taxa simples mensal em pontos-base (1% = 100), arredondada; a exata fica em monthlyRate.
     interestRateBps: Math.round(monthlyRate * 10_000), monthlyRate,
-    // Custo efetivo pela tabela Price (juros compostos sobre o saldo devedor), só informativo. Era a taxa exibida antes.
-    priceRate: installmentRate({ presentValueCents, installmentCents, count }),
   };
 }
 
@@ -205,7 +199,6 @@ export function calculateDaily({ principalCents, interestRateBps, days, loanDate
 
 // ── Parcelado: taxa simples ──
 // Taxa simples mensal = juros totais / principal / número de meses. Ex.: R$ 6.000 / R$ 10.000 / 10 = 6% ao mês.
-// A taxa da tabela Price (installmentRate) é outra coisa: juros compostos sobre o saldo que diminui a cada parcela.
 export function simpleMonthlyRate({ principalCents, interestCents, months }: { principalCents: number; interestCents: number; months: number }) {
   if (principalCents <= 0 || months <= 0) return 0;
   return interestCents / principalCents / months;

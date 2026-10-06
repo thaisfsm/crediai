@@ -1,26 +1,70 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import * as rules from "../src/lib/finance/rules.ts";
 import {
-  calculateDaily, calculateFixedInterest, calculateInstallments, commercialDaysBetween, dueDates, installmentRate, interestOnlyRenewal, monthlyEquivalentRate,
-  nextDueDate, operationLedger, proportionalInterest, rateForDays, simpleMonthlyRate,
+  calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, commercialDaysBetween, dueDates, interestOnlyRenewal, monthlyEquivalentRate,
+  nextDueDate, operationLedger, proportionalInterest, rateForDays, simpleInterest, simpleMonthlyRate,
 } from "../src/lib/finance/rules.ts";
 
 // Termos de uma operação de juros recorrentes (pagamento único mensal ou quinzenal).
 const recurring = (extra) => ({ modality: "SINGLE", frequency: "MONTHLY", installmentCount: null, installmentCents: null, renewals: [], ...extra });
 const pay = (id, amountCents, paidAt) => ({ id, amountCents, paidAt, createdAt: `${paidAt}T12:00:00Z` });
 
-test("A. taxa simples do parcelado: R$ 10.000, juros R$ 6.000, 10 meses = 6% ao mês; 9,61% é a taxa Price", () => {
+test("A. juros simples: R$ 10.000 + R$ 6.000 em 10 meses = 6% ao mês (J = P × i × n, M = P + J)", () => {
   assert.equal(simpleMonthlyRate({ principalCents: 1_000_000, interestCents: 600_000, months: 10 }), 0.06);
-  // Origem do 9,61%: a taxa que iguala R$ 10.000 a 10 parcelas de R$ 1.600 na tabela Price (juros compostos).
-  const price = installmentRate({ presentValueCents: 1_000_000, installmentCents: 160_000, count: 10 });
-  assert.equal(Math.round(price * 10_000), 961);
-  const pv = 160_000 * (1 - (1 + price) ** -10) / price;
-  assert.ok(Math.abs(pv - 1_000_000) < 1);
-  // O cadastro do parcelado passa a gravar a taxa simples (600 pontos-base = 6%).
-  const calculated = calculateInstallments({ presentValueCents: 1_000_000, installmentCents: 160_000, count: 10 });
-  assert.equal(calculated.interestRateBps, 600);
+  // J = 10.000 × 0,06 × 10 = 6.000 e M = 16.000 = 10 parcelas de 1.600.
+  assert.equal(simpleInterest({ principalCents: 1_000_000, rateBps: 600, periods: 10 }), 600_000);
+  const calculated = calculateInstallments({ principalCents: 1_000_000, installmentCents: 160_000, count: 10 });
   assert.equal(calculated.interestCents, 600_000);
-  assert.equal(Math.round(calculated.priceRate * 10_000), 961);
+  assert.equal(calculated.totalCents, 1_600_000);
+  assert.equal(calculated.interestRateBps, 600);
+  assert.equal(calculated.monthlyRate, 0.06);
+});
+
+test("A2. a taxa contratada nunca é a taxa Price de 9,61%", () => {
+  const calculated = calculateInstallments({ principalCents: 1_000_000, installmentCents: 160_000, count: 10 });
+  assert.notEqual(calculated.interestRateBps, 961);
+  assert.deepEqual(Object.keys(calculated).sort(), ["calculationRule", "interestCents", "interestRateBps", "monthlyRate", "totalCents"]);
+  for (const value of Object.values(calculated)) if (typeof value === "number") assert.ok(Math.abs(value - 0.0961) > 0.001 && value !== 961);
+  // Operação antiga com a taxa Price gravada (961): o extrato não usa a taxa gravada e dá exatamente o mesmo resultado.
+  const terms = (bps) => ({ modality: "INSTALLMENT", frequency: "MONTHLY", principalCents: 1_000_000, interestRateBps: bps, interestCents: 600_000, firstDueDate: "2026-10-10", installmentCount: 10, installmentCents: 160_000, renewals: [] });
+  const payments = [pay("p1", 160_000, "2026-10-10"), pay("p2", 100_000, "2026-11-10")];
+  assert.deepEqual(operationLedger(terms(961), payments, "2026-11-20"), operationLedger(terms(600), payments, "2026-11-20"));
+  // Cada parcela leva juros e principal na proporção simples do contrato: 1.600 = 600 de juros + 1.000 de principal.
+  const ledger = operationLedger(terms(961), payments, "2026-11-20");
+  assert.equal(ledger.items[0].interestCents, 60_000);
+  assert.equal(ledger.items[0].principalCents, 100_000);
+});
+
+test("N. mensal com juros simples: R$ 8.000 a 30% = R$ 2.400 por período; 2 períodos = R$ 4.800, sem juros sobre juros", () => {
+  assert.equal(calculateOperation({ principalCents: 800_000, interestRateBps: 3000 }).interestCents, 240_000);
+  assert.equal(simpleInterest({ principalCents: 800_000, rateBps: 3000, periods: 2 }), 480_000);
+  const terms = recurring({ principalCents: 800_000, interestRateBps: 3000, interestCents: 240_000, firstDueDate: "2026-11-01" });
+  // Sem nenhum pagamento, o período vencido não gera juros novos: segue em atraso com os mesmos R$ 2.400 (sem mora).
+  const unpaid = operationLedger(terms, [], "2026-12-15");
+  assert.equal(unpaid.state, "OVERDUE");
+  assert.equal(unpaid.balanceCents, 1_040_000);
+  // Pagando só os juros nos dois vencimentos: 2 × R$ 2.400 = R$ 4.800 (nunca 30% de R$ 10.400).
+  const renewed = operationLedger(terms, [pay("a", 240_000, "2026-11-01"), pay("b", 240_000, "2026-12-01")], "2026-12-01");
+  assert.equal(renewed.interestPaidCents, 480_000);
+  assert.equal(renewed.periodInterestCents, 240_000);
+  assert.equal(renewed.principalRemainingCents, 800_000);
+  assert.equal(renewed.balanceCents, 1_040_000);
+  assert.equal(renewed.state, "ACTIVE");
+});
+
+test("P. nenhum código do sistema usa a tabela Price, PMT, juros compostos ou busca de taxa implícita", () => {
+  assert.equal("installmentRate" in rules, false);
+  const files = [];
+  const walk = (dir) => { for (const name of readdirSync(dir)) { const path = join(dir, name); if (statSync(path).isDirectory()) walk(path); else if (/\.(ts|tsx|mjs|js)$/.test(name)) files.push(path); } };
+  walk(new URL("../src", import.meta.url).pathname);
+  const forbidden = [/installmentRate/, /priceRate/, /Math\.pow/, /\(\s*1\s*\+\s*\w+\s*\)\s*\*\*/, /\bPMT\b/, /Custo efetivo/i, /busca bin[aá]ria/i, /tabela Price(?! em nenhum)/i];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    for (const pattern of forbidden) assert.equal(pattern.test(source), false, `${file} contém ${pattern}`);
+  }
 });
 
 test("B. quinzenal: R$ 8.000 com R$ 1.200 por quinzena, pagamento só dos juros mantém o principal e renova", () => {
@@ -154,6 +198,19 @@ test("H. parcelado (Amany): R$ 2.000 em 2 × R$ 1.500, 1ª paga em 05/10 → pr�
   const done = operationLedger(terms, [pay("amany1", 150_000, "2026-10-05"), pay("amany2", 150_000, "2026-11-05")], "2026-11-05");
   assert.equal(done.state, "PAID");
   assert.equal(done.interestPaidCents, 100_000);
+  // Taxa contratada exibida: juros simples, R$ 1.000 ÷ R$ 2.000 ÷ 2 meses = 25% ao mês (não 31,87%).
+  assert.equal(simpleMonthlyRate({ principalCents: 200_000, interestCents: 100_000, months: 2 }), 0.25);
+  // A taxa gravada (31,87%, da época da Price) não muda nenhum valor do extrato.
+  assert.deepEqual(operationLedger({ ...terms, interestRateBps: 2500 }, [pay("amany1", 150_000, "2026-10-05")], "2026-10-06"), ledger);
+});
+
+test("Q. operação parcelada de R$ 5.000: taxa simples de 15% ao mês (antes 22,11%)", () => {
+  // R$ 5.000 em 5 × R$ 1.750: juros R$ 3.750 ÷ R$ 5.000 ÷ 5 = 15% ao mês; J = 5.000 × 0,15 × 5 = 3.750.
+  const calculated = calculateInstallments({ principalCents: 500_000, installmentCents: 175_000, count: 5 });
+  assert.equal(calculated.interestCents, 375_000);
+  assert.equal(calculated.interestRateBps, 1500);
+  assert.notEqual(calculated.interestRateBps, 2211);
+  assert.equal(simpleInterest({ principalCents: 500_000, rateBps: 1500, periods: 5 }), calculated.interestCents);
 });
 
 test("I. pagamento integral quita (mensal)", () => {
@@ -197,6 +254,9 @@ test("K. calendário comercial 30/360", () => {
   assert.equal(monthlyEquivalentRate(1500, 15), 3000);
   assert.equal(proportionalInterest({ principalCents: 800_000, monthlyRateBps: 3000, days: 15 }), 120_000);
   assert.equal(proportionalInterest({ principalCents: 1_000_000, monthlyRateBps: 3000, days: 1 }), 10_000);
+  // J = P × taxa mensal × dias / 30: R$ 10.000 a 30% ao mês por 15 dias = R$ 1.500 (juros simples, sem capitalização).
+  assert.equal(proportionalInterest({ principalCents: 1_000_000, monthlyRateBps: 3000, days: 15 }), 150_000);
+  assert.equal(proportionalInterest({ principalCents: 1_000_000, monthlyRateBps: 3000, days: 60 }), 600_000);
   // Mensal mantém o dia combinado; 31 → fim de fevereiro → 31 de março.
   assert.equal(nextDueDate("MONTHLY", "2026-01-31", 31), "2026-02-28");
   assert.equal(nextDueDate("MONTHLY", "2026-02-28", 31), "2026-03-31");

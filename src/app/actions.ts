@@ -113,23 +113,23 @@ export async function updateClientAction(data: FormData): Promise<ActionResult> 
 // Modalidades (regras em src/lib/finance/rules.ts):
 //  • Pagamento único mensal ou quinzenal: principal + taxa do período; pagando só os juros, o período é renovado.
 //  • Pagamento único diário: principal + taxa do período, total dividido em N pagamentos diários.
-//  • Parcelado: valor presente, parcela fixa, primeiro vencimento e prazo em meses (taxa simples calculada pelo sistema).
+//  • Parcelado: valor emprestado, parcela fixa, primeiro vencimento e prazo em meses (taxa simples calculada pelo sistema).
 function operationTermsFromForm(data: FormData) {
   const loanDate = text(data, "loanDate", 10);
   if (!isIsoDate(loanDate)) return { ok: false as const, error: "Informe a data do empréstimo." };
   if (text(data, "modality", 20) === "INSTALLMENT") {
-    const principalCents = parseMoneyToCents(text(data, "presentValue", 40));
+    const principalCents = parseMoneyToCents(text(data, "loanAmount", 40));
     const installmentCents = parseMoneyToCents(text(data, "installment", 40));
     const termInput = text(data, "term", 10);
     const installmentCount = /^\d+$/.test(termInput) ? Number(termInput) : NaN;
     const firstDueDate = text(data, "firstDueDate", 10);
-    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor presente (valor emprestado) em reais, por exemplo 10.000,00." };
-    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor da parcela (PMT) em reais, por exemplo 1.200,00." };
+    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor emprestado em reais, por exemplo 10.000,00." };
+    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor de cada parcela em reais, por exemplo 1.200,00." };
     if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: "Informe o prazo total em meses, de 1 a 360." };
     if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
     if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const calculated = calculateInstallments({ presentValueCents: principalCents, installmentCents, count: installmentCount });
-    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor presente de ${formatMoney(principalCents)}.` };
+    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount });
+    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
     return {
       ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount),
       values: { modality: "INSTALLMENT", frequency: "MONTHLY", installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },

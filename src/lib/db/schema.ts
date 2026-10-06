@@ -289,7 +289,7 @@ export const loanOperations = pgTable("loan_operation", {
   status: loanOperationStatus("status").notNull().default("OPEN"),
   settledAt: date("settled_at", { mode: "string" }),
   cycleNumber: integer("cycle_number").notNull().default(1),
-  // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (PMT).
+  // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
   // (total dividido em pagamentos diários). O parcelado é sempre MONTHLY. Regras em src/lib/finance/rules.ts.

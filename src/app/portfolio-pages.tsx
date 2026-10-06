@@ -7,7 +7,7 @@ import { addDays, centsToInput, formatCpf, formatDate, formatElapsed, todayIso, 
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, installmentRate, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
 
 function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
@@ -105,8 +105,8 @@ function operationAge(operation: OperationView) {
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 const percent = (fraction: number) => `${(fraction * 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 
-// Taxa como a operação foi combinada. Parcelado: taxa simples ao mês (juros totais ÷ principal ÷ meses), calculada dos
-// valores, também para as operações antigas que gravaram a taxa da tabela Price.
+// Taxa como a operação foi combinada, sempre juros simples. Parcelado: juros totais ÷ principal ÷ meses, calculada dos
+// valores contratados (as operações parceladas antigas têm outra taxa gravada, que não é usada em nenhum cálculo).
 function rateLabel(operation: OperationView) {
   if (operation.modality === "INSTALLMENT") {
     return `${percent(simpleMonthlyRate({ principalCents: operation.principalCents, interestCents: operation.originalInterestCents, months: operation.installments.length }))} ao mês`;
@@ -114,10 +114,6 @@ function rateLabel(operation: OperationView) {
   if (operation.frequency === "DAILY") return `${formatRate(operation.interestRateBps)} em ${operation.installments.length} dias`;
   if (operation.ledgerTerms.interestMode === "FIXED") return `${formatMoney(operation.periodInterestCents)} por quinzena (≈ ${formatRate(operation.interestRateBps)})`;
   return `${formatRate(operation.interestRateBps)} ${operation.frequency === "BIWEEKLY" ? "por quinzena" : "ao mês"}`;
-}
-// Custo efetivo do parcelado pela tabela Price (juros compostos sobre o saldo devedor). Só informativo.
-function priceRateLabel(operation: OperationView) {
-  return percent(installmentRate({ presentValueCents: operation.principalCents, installmentCents: operation.installmentCents ?? 0, count: operation.installments.length }));
 }
 const amortized = (operation: OperationView) => operation.modality === "INSTALLMENT" || operation.frequency === "DAILY";
 function modalityLabel(operation: OperationView) {
@@ -619,14 +615,14 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfoli
 }
 
 // Nova operação. Pagamento único com periodicidade mensal, quinzenal (juros recorrentes, renovação pagando só os juros)
-// ou diária (total dividido em pagamentos diários); ou parcelado (valor presente, parcela fixa, primeiro vencimento e
+// ou diária (total dividido em pagamentos diários); ou parcelado (valor emprestado, parcela fixa, primeiro vencimento e
 // prazo). A prévia usa as mesmas funções de rules.ts que o servidor usa ao gravar.
 function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void }) {
   const [modality, setModality] = useState<"SINGLE" | "INSTALLMENT">("SINGLE");
   const [frequency, setFrequency] = useState<Frequency>("MONTHLY");
   const [principal, setPrincipal] = useState("");
   const [rate, setRate] = useState("");
-  const [presentValue, setPresentValue] = useState("");
+  const [loanAmount, setLoanAmount] = useState("");
   const [installment, setInstallment] = useState("");
   const [term, setTerm] = useState("");
   const [days, setDays] = useState("");
@@ -638,11 +634,11 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   const [dueDate, setDueDate] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const { pending, feedback, onSubmit } = useFormAction(createOperationAction, () => {
-    setPrincipal(""); setRate(""); setPresentValue(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
+    setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
   const daily = single && frequency === "DAILY";
-  const principalCents = parseMoneyToCents(single ? principal : presentValue);
+  const principalCents = parseMoneyToCents(single ? principal : loanAmount);
   const rateBps = parseRateToBps(rate);
   const installmentCents = parseMoneyToCents(installment);
   const count = /^\d+$/.test(term.trim()) ? Number(term.trim()) : null;
@@ -656,7 +652,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
     : rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
   const validFirstDue = /^\d{4}-\d{2}-\d{2}$/.test(firstDue);
   const dailyPreview = daily && principalCents !== null && rateBps !== null && dayCount !== null && validLoan && validFirstDue ? calculateDaily({ principalCents, interestRateBps: rateBps, days: dayCount, loanDate, firstDueDate: firstDue }) : null;
-  const installmentPreview = !single && principalCents !== null && installmentCents !== null && count !== null && count >= 1 ? calculateInstallments({ presentValueCents: principalCents, installmentCents, count }) : null;
+  const installmentPreview = !single && principalCents !== null && installmentCents !== null && count !== null && count >= 1 ? calculateInstallments({ principalCents, installmentCents, count }) : null;
   const preview = recurringPreview ?? dailyPreview ?? installmentPreview;
   const availableAfterCents = portfolio.summary.availableCents - (principalCents ?? 0);
   const exceeds = principalCents !== null && principalCents > portfolio.summary.availableCents;
@@ -677,7 +673,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   ] : installmentPreview && installmentPreview.interestCents >= 0 ? [
     ["Periodicidade", "Mensal (parcelas fixas)"], ["Quantidade de pagamentos", String(count)], ["Valor de cada pagamento", formatMoney(installmentCents ?? 0)],
     ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Último vencimento", upcoming.length ? formatDate(upcoming[upcoming.length - 1]) : "—"],
-    ["Taxa de juros (simples)", `${percent(installmentPreview.monthlyRate)} ao mês`], ["Custo efetivo (tabela Price)", `${percent(installmentPreview.priceRate)} ao mês`],
+    ["Juros totais", formatMoney(installmentPreview.interestCents)], ["Taxa de juros (simples)", `${percent(installmentPreview.monthlyRate)} ao mês`],
   ] : [];
 
   if (portfolio.clients.length === 0) {
@@ -728,8 +724,8 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           </>
         ) : (
           <>
-            <label className="field"><span>Valor presente (R$)</span><input name="presentValue" inputMode="decimal" placeholder="10.000,00" value={presentValue} onChange={(event) => setPresentValue(event.target.value)} required /></label>
-            <label className="field"><span>Valor da parcela – PMT (R$)</span><input name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
+            <label className="field"><span>Valor emprestado (R$)</span><input name="loanAmount" inputMode="decimal" placeholder="10.000,00" value={loanAmount} onChange={(event) => setLoanAmount(event.target.value)} required /></label>
+            <label className="field"><span>Valor de cada parcela (R$)</span><input name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
             <label className="field"><span>Prazo total (meses)</span><input name="term" inputMode="numeric" placeholder="10" value={term} onChange={(event) => setTerm(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
             <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
             <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={dueDate} onChange={setDueDate} required />
@@ -742,7 +738,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           {rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
           <div><span>Capital disponível após</span><strong>{formatMoney(Math.max(availableAfterCents, 0))}</strong><small>Hoje: {formatMoney(portfolio.summary.availableCents)}</small></div>
         </div>
-        {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor presente.</p>}
+        {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor emprestado.</p>}
         {exceeds && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
         <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar operação"}</button></div>
       </form>
@@ -850,7 +846,6 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
             <>
               <div><dt>Parcelas pagas</dt><dd>{operation.installments.filter((item) => item.state === "PAID").length} de {operation.installments.length}</dd></div>
               <div><dt>Taxa de juros</dt><dd>{rateLabel(operation)}</dd></div>
-              {operation.modality === "INSTALLMENT" && <div><dt>Custo efetivo (tabela Price)</dt><dd>{priceRateLabel(operation)} ao mês</dd></div>}
               <div><dt>Próxima parcela</dt><dd>{next ? `${next.number}ª · ${formatMoney(next.remainingCents)} em ${formatDate(next.dueDate)}` : "—"}</dd></div>
             </>
           )}
