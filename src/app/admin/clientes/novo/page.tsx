@@ -1,3 +1,4 @@
+import { todayIso } from "@/lib/finance/format";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
@@ -17,7 +18,7 @@ export default async function NewSaasClientPage() {
       <section className="central-panel central-narrow">
         <Link href="/admin" className="central-back">← Clientes SaaS</Link>
         <header className="central-panel-head"><div><h2>Novo cliente SaaS</h2><p>Cadastre quem vai usar o CrediAI. Ele recebe o próprio ambiente, isolado dos demais.</p></div></header>
-        <SaasClientForm plans={plans} />
+        <SaasClientForm plans={plans} today={todayIso()} />
       </section>
     </AdminShell>
   );

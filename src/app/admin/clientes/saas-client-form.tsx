@@ -5,18 +5,20 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createSaasClientAction, updateSaasClientAction } from "../actions";
 import TemporaryPassword from "./temporary-password";
+import { planLabel } from "@/lib/admin/plan-price";
+import CommercialFields from "./commercial-fields";
 
-type Plan = { id: string; name: string; active: boolean };
+type Plan = { id: string; name: string; priceInCents: number; active: boolean };
 type Initial = { tenantId: string; name: string; email: string; phone: string; planId: string; tenantName: string };
 
 // Formulário do cliente SaaS. Não existe campo de papel: toda conta criada pela plataforma é TENANT_USER.
-export default function SaasClientForm({ plans, initial }: { plans: Plan[]; initial?: Initial }) {
+export default function SaasClientForm({ plans, initial, today }: { plans: Plan[]; initial?: Initial; today: string }) {
   const router = useRouter();
   const editing = Boolean(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [status, setStatus] = useState("ACTIVE");
+  const [status, setStatus] = useState("TRIALING");
   const [created, setCreated] = useState<{ email: string; temporaryPassword: string; tenantId: string } | null>(null);
   const activePlans = plans.filter((plan) => plan.active || plan.id === initial?.planId);
 
@@ -67,13 +69,15 @@ export default function SaasClientForm({ plans, initial }: { plans: Plan[]; init
       <fieldset>
         <legend>Ambiente</legend>
         <label>Nome do ambiente (tenant)<input name="tenantName" maxLength={120} defaultValue={initial?.tenantName} placeholder="Padrão: Nome · CrediAI" /></label>
-        <label>Plano<select name="planId" required defaultValue={initial?.planId ?? activePlans[0]?.id}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label>
         {!editing && (
           <div className="central-form-row">
-            <label>Status inicial<select name="status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option></select></label>
+            <label>Status inicial<select name="status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="TRIALING">Em teste</option><option value="ACTIVE">Ativo</option></select></label>
             {status === "TRIALING" && <label>Dias de teste<input name="trialDays" type="number" min={1} max={90} defaultValue={14} required /></label>}
           </div>
         )}
+        {!editing && status === "TRIALING" && <label>Plano<select name="planId" required defaultValue={activePlans[0]?.id}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan.name, plan.priceInCents)}</option>)}</select></label>}
+        {!editing && status === "ACTIVE" && <CommercialFields plans={plans} mode="activate" today={today} />}
+        {editing && <p className="central-hint">Plano e valor fazem parte da condição comercial: altere em Ativar assinatura ou Alterar condição comercial.</p>}
       </fieldset>
       {!editing && <p className="central-hint">Ao salvar, o CrediAI cria o tenant, a assinatura, a carteira (o cliente informa o capital inicial no primeiro acesso) e o usuário com perfil TENANT_USER e uma senha provisória.</p>}
       {error && <div className="auth-error" role="alert">{error}</div>}

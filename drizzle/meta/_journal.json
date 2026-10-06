@@ -71,6 +71,20 @@
       "when": 1791231837905,
       "tag": "0010_saas_clients_access",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791290000000,
+      "tag": "0011_starter_plan_price",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791299266537,
+      "tag": "0012_commercial_subscription",
+      "breakpoints": true
     }
   ]
 }
