@@ -7,7 +7,7 @@ import { addDays, centsToInput, formatCpf, formatDate, formatElapsed, todayIso, 
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { allocatePayments, CALCULATION_RULE, calculateInstallments, calculateOperation, calculationRuleLabels, checkPayment, INSTALLMENT_RULE, installmentDueDate, paymentKindLabels, renewalInterest } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
 
 function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
@@ -103,6 +103,24 @@ function operationAge(operation: OperationView) {
 }
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+const percent = (fraction: number) => `${(fraction * 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+
+// Taxa como a operação foi combinada, sempre juros simples. Parcelado: juros totais ÷ principal ÷ meses, calculada dos
+// valores contratados (as operações parceladas antigas têm outra taxa gravada, que não é usada em nenhum cálculo).
+function rateLabel(operation: OperationView) {
+  if (operation.modality === "INSTALLMENT") {
+    return `${percent(simpleMonthlyRate({ principalCents: operation.principalCents, interestCents: operation.originalInterestCents, months: operation.installments.length }))} ao mês`;
+  }
+  if (operation.frequency === "DAILY") return `${formatRate(operation.interestRateBps)} em ${operation.installments.length} dias`;
+  if (operation.ledgerTerms.interestMode === "FIXED") return `${formatMoney(operation.periodInterestCents)} por quinzena (≈ ${formatRate(operation.interestRateBps)})`;
+  return `${formatRate(operation.interestRateBps)} ${operation.frequency === "BIWEEKLY" ? "por quinzena" : "ao mês"}`;
+}
+const amortized = (operation: OperationView) => operation.modality === "INSTALLMENT" || operation.frequency === "DAILY";
+function modalityLabel(operation: OperationView) {
+  if (operation.modality === "INSTALLMENT") return `Parcelado em ${operation.installments.length}x de ${formatMoney(operation.installmentCents ?? 0)}`;
+  if (operation.frequency === "DAILY") return `Pagamento único · Diário · ${operation.installments.length} pagamentos`;
+  return `Pagamento único · ${frequencyLabels[operation.frequency]}`;
+}
 
 export function WalletSetup({ onSaved, cycleNumber = 1 }: { onSaved: () => void; cycleNumber?: number }) {
   const { pending, feedback, onSubmit } = useFormAction(saveWalletAction, onSaved);
@@ -135,13 +153,15 @@ export function SettingsPage({ portfolio, onChanged }: { portfolio: TenantPortfo
       <section className="panel form-panel">
         <div className="panel-header"><div><h2>Como a carteira é calculada</h2><p>Regra de cálculo em uso nesta etapa.</p></div></div>
         <ul className="rule-list">
-          <li><strong>Juros:</strong> taxa informada aplicada uma vez sobre o principal da operação.</li>
-          <li><strong>Total a receber:</strong> principal + juros, com vencimento na data informada.</li>
-          <li><strong>Renovação:</strong> pagar exatamente os juros do período, com principal em aberto, é registrado como &quot;Pagamento somente de juros / Renovação de período&quot;. O principal não diminui, o vencimento avança um mês (ou para a data informada) e o novo período tem juros sobre o principal em aberto, sem juros sobre juros. O valor para quitação continua principal + juros do período (ex.: R$ 1.000 a 30% = R$ 1.300). A operação só é quitada quando esse valor é pago.</li>
+          <li><strong>Pagamento único mensal ou quinzenal:</strong> juros = taxa do período × principal em aberto (ex.: R$ 1.000 a 30% ao mês = R$ 300; R$ 8.000 a 15% por quinzena = R$ 1.200). O quinzenal tem dois vencimentos por mês (ex.: dias 15 e 30) e os juros podem ser informados pela taxa ou por um valor fixo em reais; com principal parcialmente pago, o valor fixo fica proporcional ao principal em aberto.</li>
+          <li><strong>Renovação:</strong> pagar só os juros do período, com principal em aberto, é &quot;Pagamento somente de juros / Renovação de período&quot;. O principal não diminui, o vencimento avança um período (ou para a data informada) e o novo período tem juros sobre o principal em aberto, sem juros sobre juros. Se os juros do período foram pagos e o vencimento chegou, o período também renova: a operação fica Ativa, não Em atraso. A operação só é quitada quando principal + juros do período são pagos.</li>
+          <li><strong>Pagamento único diário:</strong> total = principal + taxa do período, dividido em um pagamento por dia corrido, sábados e domingos incluídos, a partir do primeiro vencimento informado (ex.: R$ 10.000 a 30% em 30 dias = 29 × R$ 433,33 + R$ 433,43). Cada pagamento leva principal e juros.</li>
+          <li><strong>Parcelado:</strong> parcelas fixas mensais. A taxa mostrada é a taxa simples ao mês (juros ÷ valor emprestado ÷ meses).</li>
+          <li><strong>Calendário comercial:</strong> mês de 30 dias, quinzena de 15 e ano de 360 para converter taxas entre períodos. Vencimentos e dias de atraso usam as datas reais.</li>
           <li><strong>Pagamentos:</strong> a operação aceita vários pagamentos. Cada valor recebido quita primeiro os juros pendentes e depois o principal. Pagar o saldo inteiro quita a operação; valores acima do saldo são bloqueados.</li>
           <li><strong>Capital disponível:</strong> capital inicial + aportes − retiradas − estornos de aporte − principal emprestado + pagamentos recebidos. Juros ainda não recebidos não contam. Aportes, retiradas e estornos são registrados em Capital.</li>
           <li><strong>Exclusões:</strong> operação sem pagamento pode ser excluída e devolve o principal ao capital; com pagamento fica bloqueada. Cliente sem operações é excluído; com histórico é arquivado.</li>
-          <li><strong>Em atraso:</strong> operação em aberto com vencimento anterior a hoje. Multa e juros de mora ainda não são aplicados.</li>
+          <li><strong>Em atraso:</strong> juros do período (ou a parcela) não pagos depois do vencimento. Principal em aberto com os juros em dia não é atraso. Multa e juros de mora ainda não são aplicados.</li>
           <li><strong>Zerar carteira:</strong> encerra o ciclo atual e abre um novo com capital inicial R$ 0,00. Operações, pagamentos e movimentos de capital do ciclo encerrado ficam guardados e saem dos cards; os clientes continuam cadastrados.</li>
         </ul>
       </section>
@@ -409,11 +429,11 @@ function OperationDetailsButton({ operation, today, onChanged }: { operation: Op
 // Frases de uma operação, como o cliente e a carteira enxergam: quanto emprestou, quanto já recebeu e quanto falta.
 function operationPhrases(operation: OperationView) {
   const phrases = [`Emprestou ${formatMoney(operation.principalCents)} para ${operation.clientName} em ${formatDate(operation.loanDate)}.`];
-  if (operation.modality === "INSTALLMENT") {
-    phrases.push(`Parcelado em ${operation.installments.length}x de ${formatMoney(operation.installmentCents ?? 0)} (taxa de ${formatRate(operation.interestRateBps)} ao mês, lucro previsto de ${formatMoney(operation.interestCents)}).`,
-      `${operation.installments.filter((item) => item.state === "PAID").length} de ${operation.installments.length} parcelas pagas.`);
+  if (amortized(operation)) {
+    phrases.push(`${modalityLabel(operation)} (taxa de ${rateLabel(operation)}, lucro previsto de ${formatMoney(operation.interestCents)}).`,
+      `${operation.installments.filter((item) => item.state === "PAID").length} de ${plural(operation.installments.length, "parcela paga", "parcelas pagas")}.`);
   } else {
-    phrases.push(`Juros por período: ${formatMoney(operation.periodInterestCents)} (${formatRate(operation.interestRateBps)} ao mês sobre ${formatMoney(operation.principalCents)}).`);
+    phrases.push(`${modalityLabel(operation)}. Juros por período: ${formatMoney(operation.periodInterestCents)} (${rateLabel(operation)} sobre ${formatMoney(operation.principalRemainingCents || operation.principalCents)}).`);
   }
   phrases.push(`Já recebeu ${formatMoney(operation.interestPaidCents)} de juros (lucro realizado).`);
   const elapsed = formatElapsed(operation.loanDate, operation.elapsedUntil);
@@ -496,8 +516,9 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
   const open = operations.filter((operation) => operation.status === "OPEN");
   const nextDue = open.reduce<string | null>((first, operation) => (first === null || operation.nextDueDate < first ? operation.nextDueDate : first), null);
   // Juros por período das operações de pagamento único em aberto (no parcelado o lucro vem dentro das parcelas).
-  const periodInterestCents = open.filter((operation) => operation.modality === "SINGLE").reduce((total, operation) => total + operation.periodInterestCents, 0);
-  const rates = [...new Set(open.map((operation) => operation.interestRateBps))];
+  const recurring = open.filter((operation) => !amortized(operation));
+  const periodInterestCents = recurring.reduce((total, operation) => total + operation.periodInterestCents, 0);
+  const rates = [...new Set(recurring.map(rateLabel))];
   const situation = clientSituation(profile);
   // Rentabilidade realizada: juros recebidos sobre o principal emprestado.
   const profitability = profile.principalCents > 0 ? `${((profile.interestPaidCents / profile.principalCents) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—";
@@ -516,7 +537,7 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
           <div className="payment-balance"><dt>Lucro realizado</dt><dd>{formatMoney(profile.interestPaidCents)}</dd><small>Só juros efetivamente recebidos</small></div>
           <div><dt>Principal emprestado</dt><dd>{formatMoney(profile.principalCents)}</dd></div>
           <div><dt>Principal recebido</dt><dd>{formatMoney(profile.principalPaidCents)}</dd></div>
-          <div><dt>Juros por período</dt><dd>{periodInterestCents > 0 ? `${formatMoney(periodInterestCents)}${rates.length === 1 ? ` (${formatRate(rates[0])} ao mês)` : ""}` : "—"}</dd></div>
+          <div><dt>Juros por período</dt><dd>{periodInterestCents > 0 ? `${formatMoney(periodInterestCents)}${rates.length === 1 ? ` (${rates[0]})` : ""}` : "—"}</dd></div>
           <div><dt>Próximo vencimento</dt><dd>{nextDue ? formatDate(nextDue) : "—"}</dd></div>
           <div><dt>Status</dt><dd>{situation.label}</dd></div>
         </dl>
@@ -593,79 +614,131 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfoli
   );
 }
 
-// Nova operação em duas modalidades: pagamento único (principal + taxa no vencimento, com renovação pagando só os juros)
-// ou parcelado (valor presente, parcela fixa, primeiro vencimento e prazo; o sistema calcula parcelas, total, lucro e taxa).
+// Nova operação. Pagamento único com periodicidade mensal, quinzenal (juros recorrentes, renovação pagando só os juros)
+// ou diária (total dividido em pagamentos diários); ou parcelado (valor emprestado, parcela fixa, primeiro vencimento e
+// prazo). A prévia usa as mesmas funções de rules.ts que o servidor usa ao gravar.
 function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void }) {
   const [modality, setModality] = useState<"SINGLE" | "INSTALLMENT">("SINGLE");
+  const [frequency, setFrequency] = useState<Frequency>("MONTHLY");
   const [principal, setPrincipal] = useState("");
   const [rate, setRate] = useState("");
-  const [presentValue, setPresentValue] = useState("");
+  const [loanAmount, setLoanAmount] = useState("");
   const [installment, setInstallment] = useState("");
   const [term, setTerm] = useState("");
+  const [days, setDays] = useState("");
+  // Quinzenal: juros pela taxa da quinzena ou por um valor fixo em reais.
+  const [interestMode, setInterestMode] = useState<"RATE" | "FIXED">("RATE");
+  const [interestAmount, setInterestAmount] = useState("");
+  const [firstDue, setFirstDue] = useState(addDays(portfolio.today, 1));
+  const [loanDate, setLoanDate] = useState(portfolio.today);
+  const [dueDate, setDueDate] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const { pending, feedback, onSubmit } = useFormAction(createOperationAction, () => {
-    setPrincipal(""); setRate(""); setPresentValue(""); setInstallment(""); setTerm(""); setResetKey((key) => key + 1); onChanged();
+    setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
-  const principalCents = parseMoneyToCents(single ? principal : presentValue);
+  const daily = single && frequency === "DAILY";
+  const principalCents = parseMoneyToCents(single ? principal : loanAmount);
   const rateBps = parseRateToBps(rate);
   const installmentCents = parseMoneyToCents(installment);
   const count = /^\d+$/.test(term.trim()) ? Number(term.trim()) : null;
-  const singlePreview = single && principalCents !== null && rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
-  const installmentPreview = !single && principalCents !== null && installmentCents !== null && count !== null && count >= 1 ? calculateInstallments({ presentValueCents: principalCents, installmentCents, count }) : null;
-  const preview = singlePreview ?? installmentPreview;
+  const dayCount = /^\d+$/.test(days.trim()) && Number(days) >= 1 && Number(days) <= 365 ? Number(days) : null;
+  const validLoan = /^\d{4}-\d{2}-\d{2}$/.test(loanDate);
+  const validDue = /^\d{4}-\d{2}-\d{2}$/.test(dueDate);
+  const fixed = single && frequency === "BIWEEKLY" && interestMode === "FIXED";
+  const interestAmountCents = parseMoneyToCents(interestAmount);
+  const recurringPreview = !single || daily || principalCents === null || principalCents <= 0 ? null
+    : fixed ? (interestAmountCents !== null && interestAmountCents > 0 ? calculateFixedInterest({ principalCents, interestCents: interestAmountCents }) : null)
+    : rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
+  const validFirstDue = /^\d{4}-\d{2}-\d{2}$/.test(firstDue);
+  const dailyPreview = daily && principalCents !== null && rateBps !== null && dayCount !== null && validLoan && validFirstDue ? calculateDaily({ principalCents, interestRateBps: rateBps, days: dayCount, loanDate, firstDueDate: firstDue }) : null;
+  const installmentPreview = !single && principalCents !== null && installmentCents !== null && count !== null && count >= 1 ? calculateInstallments({ principalCents, installmentCents, count }) : null;
+  const preview = recurringPreview ?? dailyPreview ?? installmentPreview;
   const availableAfterCents = portfolio.summary.availableCents - (principalCents ?? 0);
   const exceeds = principalCents !== null && principalCents > portfolio.summary.availableCents;
   const installmentsBelowValue = !single && preview !== null && preview.interestCents < 0;
+  // Próximos vencimentos do mensal/quinzenal (renovando pagando só os juros) e do parcelado.
+  const upcoming = validDue ? dueDates(single ? frequency : "MONTHLY", dueDate, single ? 3 : Math.min(count ?? 1, 360)) : [];
+  const rows: [string, string][] = !preview ? [] : daily && dailyPreview ? [
+    ["Periodicidade", "Diário"], ["Quantidade de pagamentos", String(dailyPreview.installmentCount)],
+    ["Valor de cada pagamento", dailyPreview.lastInstallmentCents === dailyPreview.installmentCents ? formatMoney(dailyPreview.installmentCents) : `${formatMoney(dailyPreview.installmentCents)} (o último ${formatMoney(dailyPreview.lastInstallmentCents)})`],
+    ["Primeiro vencimento", formatDate(dailyPreview.firstDueDate)], ["Último vencimento", formatDate(dailyPreview.lastDueDate)],
+    ["Taxa equivalente", `${formatRate(Math.round(dailyPreview.dailyRateBps * 100) / 100)} ao dia · ${formatRate(Math.round(dailyPreview.monthlyEquivalentBps * 100) / 100)} ao mês`],
+  ] : single && recurringPreview ? [
+    ["Periodicidade", frequencyLabels[frequency]], ["Juros por período", `${formatMoney(recurringPreview.interestCents)} a cada ${frequency === "BIWEEKLY" ? "quinzena" : "mês"}`],
+    ["Quantidade de pagamentos", "1 por período: só os juros renovam; principal + juros quita"],
+    ["Valor de cada pagamento", `${formatMoney(recurringPreview.interestCents)} (juros) ou ${formatMoney(recurringPreview.totalCents)} (quitação)`],
+    ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Próximos vencimentos", upcoming.length > 1 ? `${upcoming.slice(1).map(formatDate).join(", ")}…` : "—"],
+    ...(frequency === "BIWEEKLY" && principalCents ? [["Taxa equivalente", `${formatRate(Math.round((recurringPreview.interestCents * 10_000) / principalCents))} por quinzena · ${formatRate(Math.round(monthlyEquivalentRate((recurringPreview.interestCents * 10_000) / principalCents, 15)))} ao mês`] as [string, string]] : []),
+  ] : installmentPreview && installmentPreview.interestCents >= 0 ? [
+    ["Periodicidade", "Mensal (parcelas fixas)"], ["Quantidade de pagamentos", String(count)], ["Valor de cada pagamento", formatMoney(installmentCents ?? 0)],
+    ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Último vencimento", upcoming.length ? formatDate(upcoming[upcoming.length - 1]) : "—"],
+    ["Juros totais", formatMoney(installmentPreview.interestCents)], ["Taxa de juros (simples)", `${percent(installmentPreview.monthlyRate)} ao mês`],
+  ] : [];
 
   if (portfolio.clients.length === 0) {
     return <section className="panel form-panel"><EmptyPanel icon="users" text="Cadastre um cliente antes de criar a primeira operação." action={<button className="primary-button" onClick={onNewClient}><Icon name="plus" size={16} /> Cadastrar cliente</button>} /></section>;
   }
+  const description = !single ? "Parcelas fixas mensais. O sistema calcula total, lucro e a taxa simples ao mês."
+    : daily ? "O total (principal + juros do período) é dividido em um pagamento por dia; cada pagamento leva principal e juros."
+    : `Juros ${frequency === "BIWEEKLY" ? "a cada quinzena (dois vencimentos por mês)" : "a cada mês"} sobre o principal em aberto. Pagando só os juros, o período é renovado.`;
 
   return (
     <section className="panel form-panel" aria-label="Nova operação">
-      <div className="panel-header"><div><h2>Nova operação</h2><p>{single ? `${calculationRuleLabels[CALCULATION_RULE]}. Pagando só os juros no vencimento, o período é renovado.` : `${calculationRuleLabels[INSTALLMENT_RULE]}. A taxa é calculada pelo sistema.`}</p></div></div>
+      <div className="panel-header"><div><h2>Nova operação</h2><p>{description}</p></div></div>
       <div className="modality-switch" role="radiogroup" aria-label="Modalidade">
         <button type="button" role="radio" aria-checked={single} className={single ? "is-active" : ""} onClick={() => setModality("SINGLE")}>Pagamento único</button>
         <button type="button" role="radio" aria-checked={!single} className={!single ? "is-active" : ""} onClick={() => setModality("INSTALLMENT")}>Parcelado</button>
       </div>
-      <form className="form-grid" onSubmit={onSubmit} key={`${modality}-${resetKey}`}>
+      {single && (
+        <div className="modality-switch frequency-switch" role="radiogroup" aria-label="Periodicidade de recebimento">
+          {(["MONTHLY", "BIWEEKLY", "DAILY"] as const).map((option) => (
+            <button key={option} type="button" role="radio" aria-checked={frequency === option} className={frequency === option ? "is-active" : ""} onClick={() => setFrequency(option)}>{frequencyLabels[option]}</button>
+          ))}
+        </div>
+      )}
+      {single && frequency === "BIWEEKLY" && (
+        <div className="modality-switch frequency-switch" role="radiogroup" aria-label="Como informar os juros da quinzena">
+          <button type="button" role="radio" aria-checked={interestMode === "RATE"} className={interestMode === "RATE" ? "is-active" : ""} onClick={() => setInterestMode("RATE")}>Taxa da quinzena (%)</button>
+          <button type="button" role="radio" aria-checked={interestMode === "FIXED"} className={interestMode === "FIXED" ? "is-active" : ""} onClick={() => setInterestMode("FIXED")}>Valor fixo de juros (R$)</button>
+        </div>
+      )}
+      <form className="form-grid" onSubmit={onSubmit} key={`${modality}-${frequency}-${interestMode}-${resetKey}`}>
         <input type="hidden" name="modality" value={modality} />
+        {single && <input type="hidden" name="frequency" value={frequency} />}
+        {fixed && <input type="hidden" name="interestMode" value="FIXED" />}
         <label className="field field-wide"><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
         {single ? (
           <>
-            <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" placeholder="1.000,00" value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
-            <label className="field"><span>Taxa de juros (%)</span><input name="rate" inputMode="decimal" placeholder="30" value={rate} onChange={(event) => setRate(event.target.value)} required /></label>
-            <DateField label="Data do empréstimo" name="loanDate" defaultValue={portfolio.today} required />
-            <DateField label="Vencimento" name="dueDate" required />
+            <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
+            {fixed
+              ? <label className="field"><span>Juros por quinzena (R$)</span><input name="interestAmount" inputMode="decimal" placeholder="1.200,00" value={interestAmount} onChange={(event) => setInterestAmount(event.target.value)} required /></label>
+              : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => setRate(event.target.value)} required /></label>}
+            <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
+            {daily ? (
+              <>
+                <label className="field"><span>Quantidade de dias (pagamentos)</span><input name="days" inputMode="numeric" placeholder="30" value={days} onChange={(event) => setDays(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
+                <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={setFirstDue} min={validLoan ? loanDate : undefined} required />
+              </>
+            ) : <DateField label={frequency === "BIWEEKLY" ? "Primeiro vencimento" : "Vencimento"} name="dueDate" defaultValue={dueDate} onChange={setDueDate} required />}
           </>
         ) : (
           <>
-            <label className="field"><span>Valor presente (R$)</span><input name="presentValue" inputMode="decimal" placeholder="10.000,00" value={presentValue} onChange={(event) => setPresentValue(event.target.value)} required /></label>
-            <label className="field"><span>Valor da parcela – PMT (R$)</span><input name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
+            <label className="field"><span>Valor emprestado (R$)</span><input name="loanAmount" inputMode="decimal" placeholder="10.000,00" value={loanAmount} onChange={(event) => setLoanAmount(event.target.value)} required /></label>
+            <label className="field"><span>Valor de cada parcela (R$)</span><input name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
             <label className="field"><span>Prazo total (meses)</span><input name="term" inputMode="numeric" placeholder="10" value={term} onChange={(event) => setTerm(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
-            <DateField label="Data do empréstimo" name="loanDate" defaultValue={portfolio.today} required />
-            <DateField label="Primeiro vencimento" name="firstDueDate" required />
+            <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
+            <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={dueDate} onChange={setDueDate} required />
           </>
         )}
-        <div className="operation-preview" aria-live="polite">
-          {single ? (
-            <>
-              <div><span>Principal</span><strong>{principalCents !== null ? formatMoney(principalCents) : "—"}</strong></div>
-              <div><span>Juros</span><strong>{preview ? formatMoney(preview.interestCents) : "—"}</strong></div>
-              <div><span>Total a receber</span><strong>{preview ? formatMoney(preview.totalCents) : "—"}</strong></div>
-            </>
-          ) : (
-            <>
-              <div><span>Quantidade de parcelas</span><strong>{count ?? "—"}</strong></div>
-              <div><span>Total a receber</span><strong>{preview ? formatMoney(preview.totalCents) : "—"}</strong></div>
-              <div><span>Lucro</span><strong>{preview ? formatMoney(preview.interestCents) : "—"}</strong></div>
-              <div><span>Taxa de juros aplicada</span><strong>{installmentPreview && installmentPreview.interestCents >= 0 ? `${(installmentPreview.monthlyRate * 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% ao mês` : "—"}</strong></div>
-            </>
-          )}
+        <div className="operation-preview" aria-live="polite" aria-label="Prévia da operação">
+          <div><span>Principal</span><strong>{principalCents !== null ? formatMoney(principalCents) : "—"}</strong></div>
+          <div><span>{single ? "Juros" : "Lucro"}</span><strong>{preview && preview.interestCents >= 0 ? formatMoney(preview.interestCents) : "—"}</strong></div>
+          <div><span>Total a receber</span><strong>{preview ? formatMoney(preview.totalCents) : "—"}</strong></div>
+          {rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
           <div><span>Capital disponível após</span><strong>{formatMoney(Math.max(availableAfterCents, 0))}</strong><small>Hoje: {formatMoney(portfolio.summary.availableCents)}</small></div>
         </div>
-        {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor presente.</p>}
+        {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor emprestado.</p>}
         {exceeds && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
         <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar operação"}</button></div>
       </form>
@@ -675,20 +748,24 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
 }
 
 type AllocatedPaymentView = OperationView["payments"][number];
-// Termos para a prévia, iguais aos do servidor: no parcelado, juros e principal na proporção do contrato.
-const termsOf = (operation: OperationView) => ({ principalCents: operation.principalCents, interestCents: operation.interestCents, proportional: operation.modality === "INSTALLMENT" });
+// Prévias com o mesmo extrato do servidor (operationLedger em rules.ts), a partir dos termos da operação.
+const ledgerOf = (operation: OperationView, payments: { id: string; amountCents: number; paidAt: string; createdAt?: string }[], today: string) => operationLedger(operation.ledgerTerms, payments, today);
+const renewalNote = (payment: AllocatedPaymentView) => payment.renewedPeriod
+  ? ` · Renovou para o ${payment.renewedPeriod.number}º período, vencimento ${formatDate(payment.renewedPeriod.dueDate)}${payment.renewedPeriod.openedBy === "DUE_DATE" ? " (renovado no vencimento)" : ""}`
+  : "";
 // Data e hora (horário de Brasília) de uma correção.
 const formatDateTime = (timestamp: string) => `${formatDate(todayIso(new Date(timestamp)))} às ${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp))}`;
 
 // Correção de um pagamento registrado: mostra na hora o saldo e a situação da operação depois da correção.
-function EditPaymentForm({ operation, payment, onClose, onChanged }: { operation: OperationView; payment: AllocatedPaymentView; onClose: () => void; onChanged: () => void }) {
+function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { operation: OperationView; payment: AllocatedPaymentView; today: string; onClose: () => void; onChanged: () => void }) {
   const [amount, setAmount] = useState(centsToInput(payment.amountCents));
   const { pending, feedback, onSubmit } = useFormAction(editPaymentAction, () => { onChanged(); onClose(); });
   const amountCents = parseMoneyToCents(amount);
   const others = operation.payments.filter((item) => item.id !== payment.id);
-  const maxCents = allocatePayments(termsOf(operation), others).balanceCents;
+  const probe = ledgerOf(operation, [...others, { ...payment, amountCents: amountCents ?? 0 }], today);
+  const maxCents = probe.items.find((item) => item.id === payment.id)?.balanceBeforeCents ?? 0;
   const exceeds = amountCents !== null && amountCents > maxCents;
-  const after = amountCents !== null && amountCents > 0 && !exceeds ? allocatePayments(termsOf(operation), [...others, { ...payment, amountCents }]) : null;
+  const after = amountCents !== null && amountCents > 0 && !exceeds ? probe : null;
   const renewal = operation.renewals.find((item) => item.paymentId === payment.id);
   return (
     <form className="form-grid edit-payment-form" onSubmit={onSubmit} aria-label="Editar pagamento">
@@ -703,7 +780,7 @@ function EditPaymentForm({ operation, payment, onClose, onChanged }: { operation
           <div><span>Juros recebidos após</span><strong>{formatMoney(after.interestPaidCents)}</strong></div>
           <div><span>Principal recebido após</span><strong>{formatMoney(after.principalPaidCents)}</strong></div>
           <div><span>Saldo após</span><strong>{formatMoney(after.balanceCents)}</strong></div>
-          <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : "Ativa"}</strong></div>
+          <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : stateLabels[after.state].label}</strong></div>
         </div>
       )}
       <p className="capital-note field-wide">O valor e a data de antes ficam guardados no histórico deste pagamento.</p>
@@ -722,16 +799,15 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
   const isOpen = operation.status === "OPEN";
   const amountCents = parseMoneyToCents(amount);
   const check = amountCents !== null ? checkPayment({ amountCents, balanceCents: operation.balanceCents, formatMoney }) : null;
-  // Prévia deste pagamento pela mesma regra usada no servidor (juros primeiro, depois principal).
-  const after = check?.ok ? allocatePayments(termsOf(operation), [...operation.payments, { id: "preview", amountCents: amountCents ?? 0, paidAt: "9999-12-31" }]) : null;
-  const thisPayment = after?.items.at(-1);
-  // Regra oficial: pagar exatamente os juros do período, com principal em aberto, renova o período (servidor decide igual).
-  const single = operation.modality === "SINGLE";
-  const canRenew = single && operation.interestRemainingCents > 0 && operation.principalRemainingCents > 0;
+  // Prévia deste pagamento (hoje) pelo mesmo extrato usado no servidor: juros primeiro, depois principal.
+  const after = check?.ok ? ledgerOf(operation, [...operation.payments, { id: "preview", amountCents: amountCents ?? 0, paidAt: today, createdAt: "9999" }], today) : null;
+  const thisPayment = after?.items.find((item) => item.id === "preview");
+  const recurringOp = !amortized(operation);
+  const canRenew = recurringOp && operation.interestRemainingCents > 0 && operation.principalRemainingCents > 0;
   const next = operation.nextInstallment;
-  const renews = canRenew && check?.ok === true && !check.settles && amountCents === operation.interestRemainingCents;
-  const nextInterestCents = renewalInterest({ principalRemainingCents: operation.principalRemainingCents, interestRateBps: operation.interestRateBps });
-  const renewalById = new Map(operation.renewals.map((renewal) => [renewal.paymentId, renewal]));
+  // Pagamento somente de juros: a mesma regra central que o servidor aplica (interestOnlyRenewal).
+  const renewal = check?.ok === true && amountCents !== null ? interestOnlyRenewal(operation.ledgerTerms, operation, amountCents) : null;
+  const renews = renewal !== null;
   const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -744,7 +820,7 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
     <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Pagamentos de ${operation.clientName}`}>
         <div className="panel-header">
-          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{single ? "Pagamento único" : `Parcelado em ${operation.installments.length}x de ${formatMoney(operation.installmentCents ?? 0)}`} · {next ? `Parcela ${next.number}/${operation.installments.length} vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
+          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installments.length} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <dl className="payment-summary">
@@ -759,16 +835,17 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
           <div className="payment-balance"><dt>Saldo</dt><dd>{formatMoney(operation.balanceCents)}</dd></div>
         </dl>
         <dl className="payment-summary">
-          {single ? (
+          {recurringOp ? (
             <>
               <div><dt>Período atual</dt><dd>{operation.periodNumber}º · juros de {formatMoney(operation.periodInterestCents)}</dd></div>
+              <div><dt>Taxa</dt><dd>{rateLabel(operation)}</dd></div>
               <div><dt>Períodos renovados</dt><dd>{operation.renewalCount}</dd></div>
               <div><dt>Primeiro vencimento</dt><dd>{formatDate(operation.originalDueDate)}</dd></div>
             </>
           ) : (
             <>
               <div><dt>Parcelas pagas</dt><dd>{operation.installments.filter((item) => item.state === "PAID").length} de {operation.installments.length}</dd></div>
-              <div><dt>Taxa de juros aplicada</dt><dd>{formatRate(operation.interestRateBps)} ao mês</dd></div>
+              <div><dt>Taxa de juros</dt><dd>{rateLabel(operation)}</dd></div>
               <div><dt>Próxima parcela</dt><dd>{next ? `${next.number}ª · ${formatMoney(next.remainingCents)} em ${formatDate(next.dueDate)}` : "—"}</dd></div>
             </>
           )}
@@ -790,16 +867,16 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
             {check && !check.ok && <p className="form-feedback form-feedback-warning">{check.error}</p>}
             {renews && (
               <div className="renewal-box field-wide" aria-live="polite">
-                <p><strong>Pagamento somente de juros / Renovação de período.</strong> O principal continua {formatMoney(operation.principalRemainingCents)} e não há juros sobre juros: o próximo período tem juros de {formatMoney(nextInterestCents)} e o valor para quitação continua {formatMoney(operation.principalRemainingCents + nextInterestCents)}.</p>
-                <DateField key={operation.dueDate} label="Novo vencimento" name="newDueDate" defaultValue={installmentDueDate(operation.dueDate, 2)} min={addDays(operation.dueDate, 1)} required />
+                <p><strong>Pagamento somente de juros / Renovação de período.</strong> O principal continua {formatMoney(renewal.principalBaseCents)} e não há juros sobre juros: o próximo período tem juros de {formatMoney(renewal.nextInterestCents)} e o valor para quitação continua {formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}.</p>
+                <DateField key={renewal.previousDueDate} label="Novo vencimento" name="newDueDate" defaultValue={renewal.defaultNewDueDate} min={addDays(renewal.previousDueDate, 1)} required />
               </div>
             )}
-            {renews && (
+            {renewal && (
               <div className="operation-preview" aria-live="polite">
                 <div><span>Para juros</span><strong>{formatMoney(amountCents ?? 0)}</strong></div>
                 <div><span>Para principal</span><strong>{formatMoney(0)}</strong></div>
                 <div><span>Saldo principal</span><strong>{formatMoney(operation.principalRemainingCents)}</strong></div>
-                <div><span>Valor para quitação após</span><strong>{formatMoney(operation.principalRemainingCents + nextInterestCents)}</strong></div>
+                <div><span>Valor para quitação após</span><strong>{formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}</strong></div>
                 <div><span>Situação após</span><strong>Renovação / Ativa</strong></div>
               </div>
             )}
@@ -809,14 +886,14 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
                 <div><span>Para principal</span><strong>{formatMoney(thisPayment.principalCents)}</strong></div>
                 <div><span>Saldo principal</span><strong>{formatMoney(after.principalRemainingCents)}</strong></div>
                 <div><span>Saldo após</span><strong>{formatMoney(after.balanceCents)}</strong></div>
-                <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : "Ativa"}</strong></div>
+                <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : `${stateLabels[after.state].label} · vence ${formatDate(after.nextDueDate)}`}</strong></div>
               </div>
             )}
             <div className="form-actions"><button className="primary-button" disabled={pending || (check !== null && !check.ok)}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button></div>
           </form>
         )}
         <Feedback feedback={feedback} />
-        {!single && (
+        {!recurringOp && (
           <div className="table-scroll installment-table">
             <table className="data-table" aria-label="Parcelas">
               <thead><tr><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Pago</th><th>Situação</th></tr></thead>
@@ -836,9 +913,9 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
               <li key={payment.id}>
                 <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
                 {operation.status !== "CANCELED" && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
-                <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalById.has(payment.id) ? ` · Renovou do vencimento ${formatDate(renewalById.get(payment.id)!.previousDueDate)} para ${formatDate(renewalById.get(payment.id)!.newDueDate)} (${renewalById.get(payment.id)!.periodNumber}º período)` : ""}{payment.notes ? ` · ${payment.notes}` : ""}</small>
+                <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
-                {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} onClose={() => setEditingId(null)} onChanged={onChanged} />}
+                {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
               </li>
             ))}</ul>
           )}
@@ -895,7 +972,7 @@ function OperationsTable({ operations, today, onChanged }: { operations: Operati
       <thead><tr><th>Operação</th><th>Cliente</th><th>Principal</th><th>Taxa</th><th>Juros</th><th>Total</th><th>Recebido</th><th>Saldo</th><th>Empréstimo</th><th>Vencimento</th><th>Situação</th><th /></tr></thead>
       <tbody>{operations.map((operation) => (
         <tr key={operation.id}>
-          <td><strong>#{operation.code}</strong></td><td>{operation.clientName}</td><td>{formatMoney(operation.principalCents)}</td><td>{formatRate(operation.interestRateBps)}</td>
+          <td><strong>#{operation.code}</strong></td><td>{operation.clientName}</td><td>{formatMoney(operation.principalCents)}</td><td>{rateLabel(operation)}<small>{operation.modality === "INSTALLMENT" ? "Parcelado" : frequencyLabels[operation.frequency]}</small></td>
           <td>{formatMoney(operation.interestCents)}</td><td>{formatMoney(operation.totalCents)}</td><td>{formatMoney(operation.paidCents)}</td><td><strong>{formatMoney(operation.balanceCents)}</strong></td>
           <td>{formatDate(operation.loanDate)}<small>{operationAge(operation)}</small></td><td>{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installments.length}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}</td>
           <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>

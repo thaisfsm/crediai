@@ -85,6 +85,13 @@
       "when": 1791299266537,
       "tag": "0012_commercial_subscription",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791302203681,
+      "tag": "0013_payment_frequency",
+      "breakpoints": true
     }
   ]
 }

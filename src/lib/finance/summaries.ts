@@ -33,6 +33,7 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
     renewals,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate,
+    frequency: operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY",
   };
 }
 

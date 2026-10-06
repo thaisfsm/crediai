@@ -289,9 +289,14 @@ export const loanOperations = pgTable("loan_operation", {
   status: loanOperationStatus("status").notNull().default("OPEN"),
   settledAt: date("settled_at", { mode: "string" }),
   cycleNumber: integer("cycle_number").notNull().default(1),
-  // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (PMT).
+  // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
-  // Só no parcelado: quantidade de parcelas, valor de cada parcela e primeiro vencimento (as demais vencem mês a mês).
+  // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
+  // (total dividido em pagamentos diários). O parcelado é sempre MONTHLY. Regras em src/lib/finance/rules.ts.
+  frequency: text("frequency").notNull().default("MONTHLY"),
+  // Parcelado e diário: quantidade de parcelas, valor de cada parcela (no diário a última leva o ajuste de centavos) e
+  // primeiro vencimento. Pagamento único mensal/quinzenal: first_due_date guarda o primeiro vencimento combinado
+  // (vazio nas operações antigas, em que ele é o vencimento original).
   installmentCount: integer("installment_count"),
   installmentCents: bigint("installment_cents", { mode: "number" }),
   firstDueDate: date("first_due_date", { mode: "string" }),
@@ -307,8 +312,10 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_rate_non_negative", sql`${table.interestRateBps} >= 0`),
   check("loan_operation_amounts_consistent", sql`${table.interestCents} >= 0 and ${table.totalCents} = ${table.principalCents} + ${table.interestCents}`),
   check("loan_operation_due_after_loan", sql`${table.dueDate} >= ${table.loanDate}`),
-  check("loan_operation_modality_valid", sql`(${table.modality} = 'SINGLE' and ${table.installmentCount} is null and ${table.installmentCents} is null and ${table.firstDueDate} is null)
-    or (${table.modality} = 'INSTALLMENT' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
+  check("loan_operation_modality_valid", sql`(${table.modality} = 'SINGLE' and ${table.frequency} in ('MONTHLY', 'BIWEEKLY') and ${table.installmentCount} is null and ${table.installmentCents} is null)
+    or (${table.modality} = 'SINGLE' and ${table.frequency} = 'DAILY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
+      and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents} and ${table.totalCents} < ${table.installmentCount} * ${table.installmentCents} + ${table.installmentCount})
+    or (${table.modality} = 'INSTALLMENT' and ${table.frequency} = 'MONTHLY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
       and ${table.totalCents} = ${table.installmentCount} * ${table.installmentCents})`),
   ...tenantPolicies("loan_operation", table.tenantId),
 ]).enableRLS();

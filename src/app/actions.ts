@@ -7,7 +7,7 @@ import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, walletCycles, wallets } from "@/lib/db/schema";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
-import { allocatePayments, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, renewalInterest } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -110,37 +110,65 @@ export async function updateClientAction(data: FormData): Promise<ActionResult> 
   return result;
 }
 
-// Duas modalidades: pagamento único (principal + taxa, com renovação pagando só os juros) e parcelado (valor presente,
-// parcela fixa, primeiro vencimento e prazo em meses; a taxa é calculada pelo sistema).
+// Modalidades (regras em src/lib/finance/rules.ts):
+//  • Pagamento único mensal ou quinzenal: principal + taxa do período; pagando só os juros, o período é renovado.
+//  • Pagamento único diário: principal + taxa do período, total dividido em N pagamentos diários.
+//  • Parcelado: valor emprestado, parcela fixa, primeiro vencimento e prazo em meses (taxa simples calculada pelo sistema).
 function operationTermsFromForm(data: FormData) {
   const loanDate = text(data, "loanDate", 10);
   if (!isIsoDate(loanDate)) return { ok: false as const, error: "Informe a data do empréstimo." };
   if (text(data, "modality", 20) === "INSTALLMENT") {
-    const principalCents = parseMoneyToCents(text(data, "presentValue", 40));
+    const principalCents = parseMoneyToCents(text(data, "loanAmount", 40));
     const installmentCents = parseMoneyToCents(text(data, "installment", 40));
     const termInput = text(data, "term", 10);
     const installmentCount = /^\d+$/.test(termInput) ? Number(termInput) : NaN;
     const firstDueDate = text(data, "firstDueDate", 10);
-    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor presente (valor emprestado) em reais, por exemplo 10.000,00." };
-    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor da parcela (PMT) em reais, por exemplo 1.200,00." };
+    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor emprestado em reais, por exemplo 10.000,00." };
+    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor de cada parcela em reais, por exemplo 1.200,00." };
     if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: "Informe o prazo total em meses, de 1 a 360." };
     if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
     if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const calculated = calculateInstallments({ presentValueCents: principalCents, installmentCents, count: installmentCount });
-    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor presente de ${formatMoney(principalCents)}.` };
+    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount });
+    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
     return {
       ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount),
-      values: { modality: "INSTALLMENT", installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
+      values: { modality: "INSTALLMENT", frequency: "MONTHLY", installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
     };
   }
+  const frequencyInput = text(data, "frequency", 20);
+  const frequency: Frequency = frequencyInput === "BIWEEKLY" || frequencyInput === "DAILY" ? frequencyInput : "MONTHLY";
   const principalCents = parseMoneyToCents(text(data, "principal", 40));
-  const interestRateBps = parseRateToBps(text(data, "rate", 20));
-  const dueDate = text(data, "dueDate", 10);
   if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor principal em reais, por exemplo 1.000,00." };
+  // Quinzenal com valor fixo de juros por quinzena (ex.: R$ 1.200): o sistema calcula a taxa equivalente.
+  const fixedInterest = frequency === "BIWEEKLY" && text(data, "interestMode", 10) === "FIXED";
+  const fixedInterestCents = fixedInterest ? parseMoneyToCents(text(data, "interestAmount", 40)) : null;
+  if (fixedInterest && (fixedInterestCents === null || fixedInterestCents <= 0 || fixedInterestCents > MAX_CENTS)) return { ok: false as const, error: "Informe os juros por quinzena em reais, por exemplo 1.200,00." };
+  const interestRateBps = fixedInterest ? 0 : parseRateToBps(text(data, "rate", 20));
   if (interestRateBps === null || interestRateBps > 100_000) return { ok: false as const, error: "Informe a taxa de juros em %, por exemplo 30." };
-  if (!isIsoDate(dueDate)) return { ok: false as const, error: "Informe a data de vencimento." };
+  if (frequency === "DAILY") {
+    const daysInput = text(data, "days", 10);
+    const days = /^\d+$/.test(daysInput) ? Number(daysInput) : NaN;
+    const firstDueDate = text(data, "firstDueDate", 10);
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false as const, error: "Informe a quantidade de dias (pagamentos), de 1 a 365." };
+    if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
+    if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
+    const plan = calculateDaily({ principalCents, interestRateBps, days, loanDate, firstDueDate });
+    return {
+      ok: true as const, principalCents, loanDate, dueDate: plan.lastDueDate,
+      values: { modality: "SINGLE", frequency, interestRateBps, interestCents: plan.interestCents, totalCents: plan.totalCents, calculationRule: plan.calculationRule, installmentCount: plan.installmentCount, installmentCents: plan.installmentCents, firstDueDate: plan.firstDueDate },
+    };
+  }
+  const dueDate = text(data, "dueDate", 10);
+  if (!isIsoDate(dueDate)) return { ok: false as const, error: frequency === "BIWEEKLY" ? "Informe o primeiro vencimento." : "Informe a data de vencimento." };
   if (dueDate < loanDate) return { ok: false as const, error: "O vencimento não pode ser antes da data do empréstimo." };
-  return { ok: true as const, principalCents, loanDate, dueDate, values: { modality: "SINGLE", interestRateBps, ...calculateOperation({ principalCents, interestRateBps }) } };
+  if (fixedInterestCents !== null) {
+    return { ok: true as const, principalCents, loanDate, dueDate, values: { modality: "SINGLE", frequency, ...calculateFixedInterest({ principalCents, interestCents: fixedInterestCents }), firstDueDate: dueDate } };
+  }
+  const calculated = calculateOperation({ principalCents, interestRateBps });
+  return {
+    ok: true as const, principalCents, loanDate, dueDate,
+    values: { modality: "SINGLE", frequency, interestRateBps, ...calculated, ...(frequency === "BIWEEKLY" ? { calculationRule: BIWEEKLY_RULE } : {}), firstDueDate: dueDate },
+  };
 }
 
 export async function createOperationAction(data: FormData): Promise<ActionResult> {
@@ -307,20 +335,36 @@ export async function resetWalletAction(data: FormData): Promise<ActionResult> {
   return result;
 }
 
-// Juros contratados até agora: os do período original mais os de cada renovação. É sobre eles que os pagamentos são
-// apropriados (juros primeiro, depois principal), como na tela.
-async function operationTerms(tx: TenantTransaction, tenantId: string, operation: { id: string; principalCents: number; interestCents: number; modality: string }) {
+type OperationRow = typeof loanOperations.$inferSelect;
+// Termos do extrato da operação (rules.ts → operationLedger), iguais aos que a tela usa.
+async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation: OperationRow): Promise<LedgerTerms> {
   const renewals = await tx.select().from(loanRenewals)
     .where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId))).orderBy(asc(loanRenewals.periodNumber));
-  const interestCents = operation.interestCents + renewals.reduce((total, renewal) => total + renewal.interestCents, 0);
-  return { terms: { principalCents: operation.principalCents, interestCents, proportional: operation.modality === "INSTALLMENT" }, renewals, renewalPaymentIds: new Set(renewals.map((renewal) => renewal.paymentId)) };
+  const modality = operation.modality === "INSTALLMENT" ? "INSTALLMENT" : "SINGLE";
+  const frequency: Frequency = operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY";
+  return {
+    modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
+    firstDueDate: operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate,
+    installmentCount: operation.installmentCount, installmentCents: operation.installmentCents,
+    renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),
+  };
 }
 
+async function operationPayments(tx: TenantTransaction, tenantId: string, operationId: string) {
+  const rows = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt }).from(payments)
+    .where(and(eq(payments.operationId, operationId), eq(payments.tenantId, tenantId)));
+  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+}
 
-// Registra um pagamento (juros, parcial ou quitação). A divisão entre juros e principal e o limite do saldo
-// vêm das regras centrais em src/lib/finance/rules.ts. Pagar exatamente o saldo quita a operação.
-// Pagar exatamente os juros pendentes do período, com principal em aberto, é a renovação (regra oficial): o principal
-// não muda, o vencimento avança um mês (ou para a data informada) e um novo período começa com os juros sobre o principal.
+// Cada centavo pago precisa caber no saldo do momento em que foi pago; senão um pagamento posterior passaria do saldo.
+function fitsLedger(terms: LedgerTerms, list: LedgerPayment[], ledger: ReturnType<typeof operationLedger>) {
+  const sum = list.reduce((total, payment) => total + payment.amountCents, 0);
+  return ledger.paidCents === sum && sum <= terms.principalCents + ledger.interestCents;
+}
+
+// Registra um pagamento. A divisão entre juros e principal, o período, o vencimento, o saldo e a quitação vêm de
+// operationLedger (rules.ts). Pagamento somente de juros (valor = juros que faltam do período, com principal em aberto),
+// no mensal e no quinzenal: renova o período na hora, com o vencimento padrão da periodicidade ou a data informada.
 export async function registerPaymentAction(data: FormData): Promise<ActionResult> {
   const operationId = text(data, "operationId", 80);
   const amountCents = parseMoneyToCents(text(data, "amount", 40));
@@ -339,43 +383,47 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
     if (operation.status !== "OPEN") return { ok: false, error: "Esta operação já não está em aberto." };
     if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
-    const previous = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt }).from(payments)
-      .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
-    const { terms, renewals } = await operationTerms(tx, tenantId, operation);
-    const before = allocatePayments(terms, previous);
-    const check = checkPayment({ amountCents, balanceCents: before.balanceCents, formatMoney });
+    const previous = await operationPayments(tx, tenantId, operation.id);
+    const terms = await ledgerTermsOf(tx, tenantId, operation);
+    const today = todayIso();
+    const paymentId = id("pay");
+    const list = [...previous, { id: paymentId, amountCents, paidAt, createdAt: new Date().toISOString() }];
+    const after = operationLedger(terms, list, today);
+    const item = after.items.find((entry) => entry.id === paymentId)!;
+    const check = checkPayment({ amountCents, balanceCents: item.balanceBeforeCents, formatMoney });
     if (!check.ok) return check;
-    // Renovação só existe no pagamento único; no parcelado cada pagamento abate as parcelas em ordem.
-    const renews = operation.modality === "SINGLE" && !check.settles && amountCents === before.interestRemainingCents && before.principalRemainingCents > 0;
-    if (newDueDateInput && !renews) {
+    if (!fitsLedger(terms, list, after)) return { ok: false, error: "Com esta data, os pagamentos registrados depois dela passariam do saldo da operação. Confira a data do pagamento." };
+    // Renovação na hora só para o pagamento mais recente (os retroativos renovam no vencimento, pela mesma regra).
+    const latest = previous.every((payment) => payment.paidAt <= paidAt);
+    const before = operationLedger(terms, previous, paidAt);
+    const renewal = latest ? interestOnlyRenewal(terms, before, amountCents) : null;
+    if (newDueDateInput && !renewal) {
       return { ok: false, error: `Novo vencimento só vale para o pagamento somente dos juros do período (${formatMoney(before.interestRemainingCents)}).` };
     }
-    const paymentId = id("pay");
-    if (renews) {
-      // Novo período de um mês: 01/11 → 01/12 → 01/01 (ou a data informada).
-      const newDueDate = newDueDateInput || installmentDueDate(operation.dueDate, 2);
-      if (newDueDate <= operation.dueDate) return { ok: false, error: `O novo vencimento precisa ser depois do vencimento atual (${formatDate(operation.dueDate)}).` };
-      const nextInterestCents = renewalInterest({ principalRemainingCents: before.principalRemainingCents, interestRateBps: operation.interestRateBps });
+    if (renewal) {
+      const newDueDate = newDueDateInput || renewal.defaultNewDueDate;
+      if (newDueDate <= renewal.previousDueDate) return { ok: false, error: `O novo vencimento precisa ser depois do vencimento atual (${formatDate(renewal.previousDueDate)}).` };
       await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
       await tx.insert(loanRenewals).values({
-        id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: renewals.length + 2, previousDueDate: operation.dueDate, newDueDate,
-        principalBaseCents: before.principalRemainingCents, interestCents: nextInterestCents, createdByUserId: session.user.id,
+        id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: before.periodNumber + 1, previousDueDate: renewal.previousDueDate, newDueDate,
+        principalBaseCents: renewal.principalBaseCents, interestCents: renewal.nextInterestCents, createdByUserId: session.user.id,
       });
-      await tx.update(loanOperations).set({ dueDate: newDueDate, updatedAt: sql`now()` })
+      // first_due_date guarda o primeiro vencimento combinado (operações antigas não o tinham).
+      await tx.update(loanOperations).set({ dueDate: newDueDate, firstDueDate: terms.firstDueDate, updatedAt: sql`now()` })
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return {
         ok: true,
-        message: `Pagamento somente de juros de ${formatMoney(amountCents)} registrado. Período renovado até ${formatDate(newDueDate)}. Valor para quitação: ${formatMoney(before.principalRemainingCents + nextInterestCents)}.`,
+        message: `Pagamento somente de juros de ${formatMoney(amountCents)} registrado. Período renovado até ${formatDate(newDueDate)}. Valor para quitação: ${formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}.`,
       };
     }
     await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
-    if (check.settles) {
-      const settledAt = previous.reduce((latest, payment) => (payment.paidAt > latest ? payment.paidAt : latest), paidAt);
+    if (after.balanceCents === 0) {
+      const settledAt = list.reduce((latestDate, payment) => (payment.paidAt > latestDate ? payment.paidAt : latestDate), paidAt);
       await tx.update(loanOperations).set({ status: "PAID", settledAt, updatedAt: sql`now()` })
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Operação quitada.` };
     }
-    return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Saldo em aberto: ${formatMoney(before.balanceCents - amountCents)}.` };
+    return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Saldo em aberto: ${formatMoney(after.balanceCents)}. Próximo vencimento: ${formatDate(after.nextDueDate)}.` };
   });
   if (result.ok) revalidatePath("/");
   return result;
@@ -403,7 +451,8 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
     if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
     if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
-    const { terms, renewalPaymentIds } = await operationTerms(tx, tenantId, operation);
+    const terms = await ledgerTermsOf(tx, tenantId, operation);
+    const renewalPaymentIds = new Set(terms.renewals.map((renewal) => renewal.paymentId));
     // O pagamento que renovou um período pagou os juros daquele período (o valor registrado na época). Pode ser corrigido
     // para mais (o excedente abate o principal) e a renovação continua; para menos, os juros do período ficariam sem pagar.
     if (renewalPaymentIds.has(payment.id)) {
@@ -414,12 +463,13 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
         return { ok: false, error: `Este pagamento renovou o período pagando ${formatMoney(renewedInterestCents)} de juros; o valor não pode ficar menor que isso.` };
       }
     }
-    const all = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt }).from(payments)
-      .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
+    const all = await operationPayments(tx, tenantId, operation.id);
     const others = all.filter((item) => item.id !== payment.id);
-    const before = allocatePayments(terms, others.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() })));
-    if (amountCents > before.balanceCents) {
-      return { ok: false, error: `O pagamento não pode ser maior que ${formatMoney(before.balanceCents)}, o saldo da operação sem este pagamento.` };
+    const list = [...others, { id: payment.id, amountCents, paidAt, createdAt: payment.createdAt.toISOString() }];
+    const after = operationLedger(terms, list, todayIso());
+    const edited = after.items.find((item) => item.id === payment.id)!;
+    if (amountCents > edited.balanceBeforeCents || !fitsLedger(terms, list, after)) {
+      return { ok: false, error: `O pagamento não pode ser maior que ${formatMoney(edited.balanceBeforeCents)}, o saldo da operação nessa data sem este pagamento.` };
     }
     // Diminuir um pagamento tira dinheiro do capital disponível; não pode deixá-lo negativo.
     if (amountCents < payment.amountCents) {
@@ -434,12 +484,12 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     });
     await tx.update(payments).set({ amountCents, paidAt, notes }).where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)));
     // Situação da operação conforme o novo total: quitada (data do último pagamento) ou de volta para em aberto.
-    const settles = amountCents === before.balanceCents;
+    const settles = after.balanceCents === 0;
     const settledAt = settles ? others.reduce((latest, item) => (item.paidAt > latest ? item.paidAt : latest), paidAt) : null;
     await tx.update(loanOperations).set({ status: settles ? "PAID" : "OPEN", settledAt, updatedAt: sql`now()` })
       .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
     const reopened = operation.status === "PAID" && !settles;
-    return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(before.balanceCents - amountCents)}.`}` };
+    return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(after.balanceCents)}.`}` };
   });
   if (result.ok) revalidatePath("/");
   return result;
