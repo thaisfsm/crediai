@@ -7,7 +7,7 @@ import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, walletCycles, wallets } from "@/lib/db/schema";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
-import { BIWEEKLY_RULE, calculateDaily, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -138,14 +138,21 @@ function operationTermsFromForm(data: FormData) {
   const frequencyInput = text(data, "frequency", 20);
   const frequency: Frequency = frequencyInput === "BIWEEKLY" || frequencyInput === "DAILY" ? frequencyInput : "MONTHLY";
   const principalCents = parseMoneyToCents(text(data, "principal", 40));
-  const interestRateBps = parseRateToBps(text(data, "rate", 20));
   if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor principal em reais, por exemplo 1.000,00." };
+  // Quinzenal com valor fixo de juros por quinzena (ex.: R$ 1.200): o sistema calcula a taxa equivalente.
+  const fixedInterest = frequency === "BIWEEKLY" && text(data, "interestMode", 10) === "FIXED";
+  const fixedInterestCents = fixedInterest ? parseMoneyToCents(text(data, "interestAmount", 40)) : null;
+  if (fixedInterest && (fixedInterestCents === null || fixedInterestCents <= 0 || fixedInterestCents > MAX_CENTS)) return { ok: false as const, error: "Informe os juros por quinzena em reais, por exemplo 1.200,00." };
+  const interestRateBps = fixedInterest ? 0 : parseRateToBps(text(data, "rate", 20));
   if (interestRateBps === null || interestRateBps > 100_000) return { ok: false as const, error: "Informe a taxa de juros em %, por exemplo 30." };
   if (frequency === "DAILY") {
     const daysInput = text(data, "days", 10);
     const days = /^\d+$/.test(daysInput) ? Number(daysInput) : NaN;
-    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false as const, error: "Informe o período em dias, de 1 a 365." };
-    const plan = calculateDaily({ principalCents, interestRateBps, days, loanDate });
+    const firstDueDate = text(data, "firstDueDate", 10);
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false as const, error: "Informe a quantidade de dias (pagamentos), de 1 a 365." };
+    if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
+    if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
+    const plan = calculateDaily({ principalCents, interestRateBps, days, loanDate, firstDueDate });
     return {
       ok: true as const, principalCents, loanDate, dueDate: plan.lastDueDate,
       values: { modality: "SINGLE", frequency, interestRateBps, interestCents: plan.interestCents, totalCents: plan.totalCents, calculationRule: plan.calculationRule, installmentCount: plan.installmentCount, installmentCents: plan.installmentCents, firstDueDate: plan.firstDueDate },
@@ -154,6 +161,9 @@ function operationTermsFromForm(data: FormData) {
   const dueDate = text(data, "dueDate", 10);
   if (!isIsoDate(dueDate)) return { ok: false as const, error: frequency === "BIWEEKLY" ? "Informe o primeiro vencimento." : "Informe a data de vencimento." };
   if (dueDate < loanDate) return { ok: false as const, error: "O vencimento não pode ser antes da data do empréstimo." };
+  if (fixedInterestCents !== null) {
+    return { ok: true as const, principalCents, loanDate, dueDate, values: { modality: "SINGLE", frequency, ...calculateFixedInterest({ principalCents, interestCents: fixedInterestCents }), firstDueDate: dueDate } };
+  }
   const calculated = calculateOperation({ principalCents, interestRateBps });
   return {
     ok: true as const, principalCents, loanDate, dueDate,
@@ -333,7 +343,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
   const modality = operation.modality === "INSTALLMENT" ? "INSTALLMENT" : "SINGLE";
   const frequency: Frequency = operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY";
   return {
-    modality, frequency, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
+    modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
     firstDueDate: operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents,
     renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),

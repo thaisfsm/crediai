@@ -1,7 +1,7 @@
 // Consolida a carteira do tenant a partir das linhas do banco. Funções puras: sem acesso a banco.
 import { addDays, daysBetween, formatDate, initialsOf, shortDate, todayIso } from "./format";
 import type { ClientProfile } from "./client-profile";
-import { operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
+import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
 
@@ -134,7 +134,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     // primeira renovação registrada ou, sem renovação registrada, o vencimento gravado.
     const originalDueDate = operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate;
     const ledgerTerms: LedgerTerms = {
-      modality, frequency, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
+      modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
       firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, renewals,
     };
     // Toda a conta (juros/principal de cada pagamento, período, vencimento, saldo e situação) vem do extrato em rules.ts.

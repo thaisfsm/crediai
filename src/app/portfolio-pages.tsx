@@ -7,7 +7,7 @@ import { addDays, centsToInput, formatCpf, formatDate, formatElapsed, todayIso, 
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, installmentRate, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, installmentRate, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
 
 function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
@@ -112,6 +112,7 @@ function rateLabel(operation: OperationView) {
     return `${percent(simpleMonthlyRate({ principalCents: operation.principalCents, interestCents: operation.originalInterestCents, months: operation.installments.length }))} ao mês`;
   }
   if (operation.frequency === "DAILY") return `${formatRate(operation.interestRateBps)} em ${operation.installments.length} dias`;
+  if (operation.ledgerTerms.interestMode === "FIXED") return `${formatMoney(operation.periodInterestCents)} por quinzena (≈ ${formatRate(operation.interestRateBps)})`;
   return `${formatRate(operation.interestRateBps)} ${operation.frequency === "BIWEEKLY" ? "por quinzena" : "ao mês"}`;
 }
 // Custo efetivo do parcelado pela tabela Price (juros compostos sobre o saldo devedor). Só informativo.
@@ -156,9 +157,9 @@ export function SettingsPage({ portfolio, onChanged }: { portfolio: TenantPortfo
       <section className="panel form-panel">
         <div className="panel-header"><div><h2>Como a carteira é calculada</h2><p>Regra de cálculo em uso nesta etapa.</p></div></div>
         <ul className="rule-list">
-          <li><strong>Pagamento único mensal ou quinzenal:</strong> juros = taxa do período × principal em aberto (ex.: R$ 1.000 a 30% ao mês = R$ 300; R$ 8.000 a 15% por quinzena = R$ 1.200). O quinzenal tem dois vencimentos por mês (ex.: dias 15 e 30).</li>
+          <li><strong>Pagamento único mensal ou quinzenal:</strong> juros = taxa do período × principal em aberto (ex.: R$ 1.000 a 30% ao mês = R$ 300; R$ 8.000 a 15% por quinzena = R$ 1.200). O quinzenal tem dois vencimentos por mês (ex.: dias 15 e 30) e os juros podem ser informados pela taxa ou por um valor fixo em reais; com principal parcialmente pago, o valor fixo fica proporcional ao principal em aberto.</li>
           <li><strong>Renovação:</strong> pagar só os juros do período, com principal em aberto, é &quot;Pagamento somente de juros / Renovação de período&quot;. O principal não diminui, o vencimento avança um período (ou para a data informada) e o novo período tem juros sobre o principal em aberto, sem juros sobre juros. Se os juros do período foram pagos e o vencimento chegou, o período também renova: a operação fica Ativa, não Em atraso. A operação só é quitada quando principal + juros do período são pagos.</li>
-          <li><strong>Pagamento único diário:</strong> total = principal + taxa do período, dividido em um pagamento por dia (ex.: R$ 10.000 a 30% em 30 dias = 30 × R$ 433,33, o último com o ajuste de centavos). Cada pagamento leva principal e juros.</li>
+          <li><strong>Pagamento único diário:</strong> total = principal + taxa do período, dividido em um pagamento por dia corrido, sábados e domingos incluídos, a partir do primeiro vencimento informado (ex.: R$ 10.000 a 30% em 30 dias = 29 × R$ 433,33 + R$ 433,43). Cada pagamento leva principal e juros.</li>
           <li><strong>Parcelado:</strong> parcelas fixas mensais. A taxa mostrada é a taxa simples ao mês (juros ÷ valor emprestado ÷ meses).</li>
           <li><strong>Calendário comercial:</strong> mês de 30 dias, quinzena de 15 e ano de 360 para converter taxas entre períodos. Vencimentos e dias de atraso usam as datas reais.</li>
           <li><strong>Pagamentos:</strong> a operação aceita vários pagamentos. Cada valor recebido quita primeiro os juros pendentes e depois o principal. Pagar o saldo inteiro quita a operação; valores acima do saldo são bloqueados.</li>
@@ -629,11 +630,15 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   const [installment, setInstallment] = useState("");
   const [term, setTerm] = useState("");
   const [days, setDays] = useState("");
+  // Quinzenal: juros pela taxa da quinzena ou por um valor fixo em reais.
+  const [interestMode, setInterestMode] = useState<"RATE" | "FIXED">("RATE");
+  const [interestAmount, setInterestAmount] = useState("");
+  const [firstDue, setFirstDue] = useState(addDays(portfolio.today, 1));
   const [loanDate, setLoanDate] = useState(portfolio.today);
   const [dueDate, setDueDate] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const { pending, feedback, onSubmit } = useFormAction(createOperationAction, () => {
-    setPrincipal(""); setRate(""); setPresentValue(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
+    setPrincipal(""); setRate(""); setPresentValue(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
   const daily = single && frequency === "DAILY";
@@ -644,8 +649,13 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   const dayCount = /^\d+$/.test(days.trim()) && Number(days) >= 1 && Number(days) <= 365 ? Number(days) : null;
   const validLoan = /^\d{4}-\d{2}-\d{2}$/.test(loanDate);
   const validDue = /^\d{4}-\d{2}-\d{2}$/.test(dueDate);
-  const recurringPreview = single && !daily && principalCents !== null && rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
-  const dailyPreview = daily && principalCents !== null && rateBps !== null && dayCount !== null && validLoan ? calculateDaily({ principalCents, interestRateBps: rateBps, days: dayCount, loanDate }) : null;
+  const fixed = single && frequency === "BIWEEKLY" && interestMode === "FIXED";
+  const interestAmountCents = parseMoneyToCents(interestAmount);
+  const recurringPreview = !single || daily || principalCents === null || principalCents <= 0 ? null
+    : fixed ? (interestAmountCents !== null && interestAmountCents > 0 ? calculateFixedInterest({ principalCents, interestCents: interestAmountCents }) : null)
+    : rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
+  const validFirstDue = /^\d{4}-\d{2}-\d{2}$/.test(firstDue);
+  const dailyPreview = daily && principalCents !== null && rateBps !== null && dayCount !== null && validLoan && validFirstDue ? calculateDaily({ principalCents, interestRateBps: rateBps, days: dayCount, loanDate, firstDueDate: firstDue }) : null;
   const installmentPreview = !single && principalCents !== null && installmentCents !== null && count !== null && count >= 1 ? calculateInstallments({ presentValueCents: principalCents, installmentCents, count }) : null;
   const preview = recurringPreview ?? dailyPreview ?? installmentPreview;
   const availableAfterCents = portfolio.summary.availableCents - (principalCents ?? 0);
@@ -663,7 +673,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
     ["Quantidade de pagamentos", "1 por período: só os juros renovam; principal + juros quita"],
     ["Valor de cada pagamento", `${formatMoney(recurringPreview.interestCents)} (juros) ou ${formatMoney(recurringPreview.totalCents)} (quitação)`],
     ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Próximos vencimentos", upcoming.length > 1 ? `${upcoming.slice(1).map(formatDate).join(", ")}…` : "—"],
-    ...(frequency === "BIWEEKLY" && rateBps !== null ? [["Taxa equivalente", `${formatRate(Math.round(monthlyEquivalentRate(rateBps, 15)))} ao mês (2 quinzenas)`] as [string, string]] : []),
+    ...(frequency === "BIWEEKLY" && principalCents ? [["Taxa equivalente", `${formatRate(Math.round((recurringPreview.interestCents * 10_000) / principalCents))} por quinzena · ${formatRate(Math.round(monthlyEquivalentRate((recurringPreview.interestCents * 10_000) / principalCents, 15)))} ao mês`] as [string, string]] : []),
   ] : installmentPreview && installmentPreview.interestCents >= 0 ? [
     ["Periodicidade", "Mensal (parcelas fixas)"], ["Quantidade de pagamentos", String(count)], ["Valor de cada pagamento", formatMoney(installmentCents ?? 0)],
     ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Último vencimento", upcoming.length ? formatDate(upcoming[upcoming.length - 1]) : "—"],
@@ -691,18 +701,30 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           ))}
         </div>
       )}
-      <form className="form-grid" onSubmit={onSubmit} key={`${modality}-${frequency}-${resetKey}`}>
+      {single && frequency === "BIWEEKLY" && (
+        <div className="modality-switch frequency-switch" role="radiogroup" aria-label="Como informar os juros da quinzena">
+          <button type="button" role="radio" aria-checked={interestMode === "RATE"} className={interestMode === "RATE" ? "is-active" : ""} onClick={() => setInterestMode("RATE")}>Taxa da quinzena (%)</button>
+          <button type="button" role="radio" aria-checked={interestMode === "FIXED"} className={interestMode === "FIXED" ? "is-active" : ""} onClick={() => setInterestMode("FIXED")}>Valor fixo de juros (R$)</button>
+        </div>
+      )}
+      <form className="form-grid" onSubmit={onSubmit} key={`${modality}-${frequency}-${interestMode}-${resetKey}`}>
         <input type="hidden" name="modality" value={modality} />
         {single && <input type="hidden" name="frequency" value={frequency} />}
+        {fixed && <input type="hidden" name="interestMode" value="FIXED" />}
         <label className="field field-wide"><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
         {single ? (
           <>
             <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
-            <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => setRate(event.target.value)} required /></label>
+            {fixed
+              ? <label className="field"><span>Juros por quinzena (R$)</span><input name="interestAmount" inputMode="decimal" placeholder="1.200,00" value={interestAmount} onChange={(event) => setInterestAmount(event.target.value)} required /></label>
+              : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => setRate(event.target.value)} required /></label>}
             <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
-            {daily
-              ? <label className="field"><span>Período (dias)</span><input name="days" inputMode="numeric" placeholder="30" value={days} onChange={(event) => setDays(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
-              : <DateField label={frequency === "BIWEEKLY" ? "Primeiro vencimento" : "Vencimento"} name="dueDate" defaultValue={dueDate} onChange={setDueDate} required />}
+            {daily ? (
+              <>
+                <label className="field"><span>Quantidade de dias (pagamentos)</span><input name="days" inputMode="numeric" placeholder="30" value={days} onChange={(event) => setDays(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
+                <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={setFirstDue} min={validLoan ? loanDate : undefined} required />
+              </>
+            ) : <DateField label={frequency === "BIWEEKLY" ? "Primeiro vencimento" : "Vencimento"} name="dueDate" defaultValue={dueDate} onChange={setDueDate} required />}
           </>
         ) : (
           <>

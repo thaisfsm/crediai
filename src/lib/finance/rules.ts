@@ -50,31 +50,12 @@ export function calculateInstallments({ presentValueCents, installmentCents, cou
   };
 }
 
-// Vencimento da parcela k (1 = primeiro vencimento), mês a mês. Dia 31 em mês curto vira o último dia do mês.
+// Vencimento da parcela k (1 = primeiro vencimento), mês a mês, pela função única de vencimentos (dueDates).
 export function installmentDueDate(firstDueDate: string, number: number) {
-  const [year, month, day] = firstDueDate.split("-").map(Number);
-  const target = new Date(Date.UTC(year, month - 1 + number - 1, 1));
-  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
-  target.setUTCDate(Math.min(day, lastDay));
-  return target.toISOString().slice(0, 10);
+  return dueDates("MONTHLY", firstDueDate, number)[number - 1];
 }
 
 export type InstallmentState = "PAID" | "PARTIAL" | "OPEN";
-// Parcelas cobertas pelo total pago, na ordem: o que foi pago quita a 1ª parcela, depois a 2ª, e assim por diante.
-export function installmentSchedule({ firstDueDate, installmentCount, installmentCents, paidCents }: { firstDueDate: string; installmentCount: number; installmentCents: number; paidCents: number }) {
-  return Array.from({ length: installmentCount }, (_, index) => {
-    const paid = Math.min(Math.max(paidCents - index * installmentCents, 0), installmentCents);
-    const state: InstallmentState = paid === installmentCents ? "PAID" : paid > 0 ? "PARTIAL" : "OPEN";
-    return { number: index + 1, dueDate: installmentDueDate(firstDueDate, index + 1), amountCents: installmentCents, paidCents: paid, remainingCents: installmentCents - paid, state };
-  });
-}
-
-// interestCents = juros contratados até agora: os do período original mais os de cada período renovado.
-// proportional (parcelado): cada pagamento leva juros e principal na proporção do contrato, em vez de juros primeiro.
-type AllocationOperation = { principalCents: number; interestCents: number; proportional?: boolean };
-// renewal: pagamento só dos juros que renovou o período.
-type AllocationPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string; renewal?: boolean };
-
 // RENOVAÇÃO — REGRA OFICIAL (modalidade pagamento único). Exemplo: R$ 1.000 a 30% ao mês, juros R$ 300, quitação R$ 1.300.
 //  • Pagar R$ 1.300 quita: R$ 300 são juros (lucro) e R$ 1.000 voltam como principal.
 //  • Pagar só os R$ 300 de juros NÃO é pagamento de principal: é "Juros / Renovação". Juros recebidos +300, principal em
@@ -83,40 +64,6 @@ type AllocationPayment = { id: string; amountCents: number; paidAt: string; crea
 //    nem de R$ 1.600 (= R$ 480): os juros já pagos são lucro recebido e não entram na base de cálculo.
 export function renewalInterest({ principalRemainingCents, interestRateBps }: { principalRemainingCents: number; interestRateBps: number }) {
   return calculateOperation({ principalCents: principalRemainingCents, interestRateBps }).interestCents;
-}
-
-// Regra de apropriação (versão 1): cada pagamento quita primeiro os juros pendentes e depois o principal.
-// Os pagamentos são aplicados em ordem de data (e de registro, no mesmo dia). Como os juros vêm sempre primeiro,
-// os totais de juros e de principal recebidos não dependem dessa ordem, só da soma paga.
-export function allocatePayments<T extends AllocationPayment>(operation: AllocationOperation, payments: T[]) {
-  const ordered = [...payments].sort((a, b) => a.paidAt.localeCompare(b.paidAt) || (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
-  const totalCents = operation.principalCents + operation.interestCents;
-  let interestPaidCents = 0;
-  let principalPaidCents = 0;
-  const items = ordered.map((payment) => {
-    const interestLeft = Math.max(operation.interestCents - interestPaidCents, 0);
-    const finishes = interestPaidCents + principalPaidCents + payment.amountCents >= totalCents;
-    // Parcelado: juros na proporção do contrato (o último pagamento leva o que faltar). Pagamento único: juros primeiro.
-    const interestPart = operation.proportional && totalCents > 0
-      ? (finishes ? interestLeft : Math.min(interestLeft, Math.round((payment.amountCents * operation.interestCents) / totalCents)))
-      : Math.min(payment.amountCents, interestLeft);
-    const principalPart = payment.amountCents - interestPart;
-    interestPaidCents += interestPart;
-    principalPaidCents += principalPart;
-    const kind: PaymentKind = interestPaidCents + principalPaidCents >= totalCents ? "SETTLEMENT"
-      : operation.proportional ? "INSTALLMENT" : payment.renewal ? "RENEWAL" : principalPart === 0 ? "INTEREST" : "PARTIAL";
-    return { ...payment, interestCents: interestPart, principalCents: principalPart, kind };
-  });
-  const paidCents = interestPaidCents + principalPaidCents;
-  return {
-    items,
-    paidCents,
-    interestPaidCents,
-    principalPaidCents,
-    interestRemainingCents: Math.max(operation.interestCents - interestPaidCents, 0),
-    principalRemainingCents: Math.max(operation.principalCents - principalPaidCents, 0),
-    balanceCents: Math.max(totalCents - paidCents, 0),
-  };
 }
 
 export type PaymentCheck = { ok: true; settles: boolean } | { ok: false; error: string };
@@ -169,8 +116,20 @@ export const frequencyLabels: Record<Frequency, string> = { MONTHLY: "Mensal", B
 export const frequencyPeriodDays: Record<Frequency, number> = { MONTHLY: COMMERCIAL_MONTH_DAYS, BIWEEKLY: COMMERCIAL_FORTNIGHT_DAYS, DAILY: 1 };
 export const DAILY_RULE = "DAILY_AMORTIZED_V1";
 export const BIWEEKLY_RULE = "RATE_PER_FORTNIGHT_RECURRING_V1";
+export const BIWEEKLY_FIXED_RULE = "FIXED_INTEREST_PER_FORTNIGHT_V1";
 calculationRuleLabels[DAILY_RULE] = "Diário: total (principal + juros) dividido em pagamentos diários";
 calculationRuleLabels[BIWEEKLY_RULE] = "Quinzenal: juros a cada quinzena sobre o principal em aberto";
+calculationRuleLabels[BIWEEKLY_FIXED_RULE] = "Quinzenal: valor fixo de juros por quinzena";
+
+// Como os juros do período foram combinados: pela taxa (padrão) ou por um valor fixo em reais (quinzenal).
+export type InterestMode = "RATE" | "FIXED";
+export const interestModeOf = (calculationRule: string): InterestMode => (calculationRule === BIWEEKLY_FIXED_RULE ? "FIXED" : "RATE");
+
+// Valor fixo de juros por período (ex.: R$ 1.200 por quinzena sobre R$ 8.000). A taxa equivalente, juros / principal,
+// é gravada só para exibição (1.200 / 8.000 = 15%); o usuário não precisa calculá-la.
+export function calculateFixedInterest({ principalCents, interestCents }: { principalCents: number; interestCents: number }) {
+  return { interestCents, totalCents: principalCents + interestCents, interestRateBps: Math.round((interestCents * 10_000) / principalCents), calculationRule: BIWEEKLY_FIXED_RULE };
+}
 
 const lastDayOfMonth = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
 const isoOf = (year: number, month: number, day: number) => new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10);
@@ -229,17 +188,16 @@ export function dueDates(frequency: Frequency, firstDueIso: string, count: numbe
 
 // ── Diário ──
 // Juros do período = round(P × taxa); total = P + juros; pagamento = ⌊total / N⌋ centavos; o último pagamento é
-// total − pagamento × (N − 1), então a soma é exatamente o total. Vencimentos: um por dia, do dia seguinte ao empréstimo
-// até o N-ésimo dia (dias corridos, como o restante do sistema; finais de semana não são pulados).
+// total − pagamento × (N − 1), então a soma é exatamente o total. Vencimentos: um por dia corrido (sábado e domingo
+// incluídos), do primeiro vencimento informado (padrão: dia seguinte ao empréstimo) até o N-ésimo dia.
 // Ex.: R$ 10.000 a 30% em 30 dias → juros R$ 3.000, total R$ 13.000, 29 × R$ 433,33 + 1 × R$ 433,43.
-export function calculateDaily({ principalCents, interestRateBps, days, loanDate }: { principalCents: number; interestRateBps: number; days: number; loanDate: string }) {
+export function calculateDaily({ principalCents, interestRateBps, days, loanDate, firstDueDate = plusDays(loanDate, 1) }: { principalCents: number; interestRateBps: number; days: number; loanDate: string; firstDueDate?: string }) {
   const { interestCents, totalCents } = calculateOperation({ principalCents, interestRateBps });
   const installmentCents = Math.floor(totalCents / days);
   const lastInstallmentCents = totalCents - installmentCents * (days - 1);
-  const firstDueDate = plusDays(loanDate, 1);
   return {
     interestCents, totalCents, calculationRule: DAILY_RULE, installmentCount: days, installmentCents, lastInstallmentCents,
-    firstDueDate, lastDueDate: plusDays(loanDate, days),
+    firstDueDate, lastDueDate: plusDays(firstDueDate, days - 1),
     // Taxa ao dia e ao mês equivalentes (juros simples, mês comercial de 30 dias).
     dailyRateBps: interestRateBps / days, monthlyEquivalentBps: monthlyEquivalentRate(interestRateBps, days),
   };
@@ -260,6 +218,8 @@ export type LedgerRenewal = { paymentId: string; periodNumber: number; previousD
 export type LedgerTerms = {
   modality: "SINGLE" | "INSTALLMENT"; frequency: Frequency;
   principalCents: number; interestRateBps: number;
+  // Juros recorrentes: pela taxa ou valor fixo por período (padrão: taxa).
+  interestMode?: InterestMode;
   // Recorrente: juros do primeiro período. Amortizado (parcelado ou diário): juros totais do contrato.
   interestCents: number;
   // Recorrente: primeiro vencimento combinado. Amortizado: primeira parcela, quantidade e valor (o último pode ter ajuste).
@@ -274,6 +234,15 @@ export type LedgerItem<T> = T & { interestCents: number; principalCents: number;
 export type LedgerState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID";
 
 const isAmortized = (terms: LedgerTerms) => terms.modality === "INSTALLMENT" || terms.frequency === "DAILY";
+
+// Juros de um novo período sobre o principal em aberto, sem juros sobre juros:
+//  • taxa: principal em aberto × taxa do período;
+//  • valor fixo: o valor fixo, proporcional ao principal que ainda está em aberto (principal cheio → o valor combinado;
+//    metade do principal pago → metade do valor). Mesma ideia da taxa, sem arredondar a taxa.
+export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "principalCents" | "interestCents" | "interestRateBps">, principalOpenCents: number) {
+  if (terms.interestMode === "FIXED") return Math.round((principalOpenCents * terms.interestCents) / terms.principalCents);
+  return renewalInterest({ principalRemainingCents: principalOpenCents, interestRateBps: terms.interestRateBps });
+}
 
 // Parcelas do contrato amortizado: todas iguais; no diário a última leva o ajuste para fechar o total.
 export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality">, paidCents: number): ScheduleItem[] {
@@ -365,9 +334,10 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
   };
   // Renovação no vencimento: juros do período pagos, principal em aberto e a data chegou.
   const renewOnDue = (date: string) => {
-    while (principalOpen > 0 && periodInterestPaid >= current().interestCents && date >= current().dueDate) {
+    // Período sem juros (taxa 0%) não renova: vencido com principal em aberto, fica Em atraso.
+    while (principalOpen > 0 && current().interestCents > 0 && periodInterestPaid >= current().interestCents && date >= current().dueDate) {
       const due = current().dueDate;
-      open({ dueDate: nextDueDate(terms.frequency, due, anchorDay), interestCents: renewalInterest({ principalRemainingCents: principalOpen, interestRateBps: terms.interestRateBps }), principalBaseCents: principalOpen, openedOn: due, openedBy: "DUE_DATE", paymentId: null });
+      open({ dueDate: nextDueDate(terms.frequency, due, anchorDay), interestCents: periodInterest(terms, principalOpen), principalBaseCents: principalOpen, openedOn: due, openedBy: "DUE_DATE", paymentId: null });
     }
   };
   const items: LedgerItem<T>[] = ordered.map((payment) => {
@@ -417,6 +387,6 @@ export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLe
     previousDueDate: ledger.nextDueDate,
     defaultNewDueDate: nextDueDate(terms.frequency, ledger.nextDueDate, anchorDay),
     principalBaseCents: ledger.principalRemainingCents,
-    nextInterestCents: renewalInterest({ principalRemainingCents: ledger.principalRemainingCents, interestRateBps: terms.interestRateBps }),
+    nextInterestCents: periodInterest(terms, ledger.principalRemainingCents),
   };
 }
