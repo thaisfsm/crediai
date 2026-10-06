@@ -5,8 +5,9 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createSaasClientAction, updateSaasClientAction } from "../actions";
 import TemporaryPassword from "./temporary-password";
+import { planLabel } from "@/lib/admin/plan-price";
 
-type Plan = { id: string; name: string; active: boolean };
+type Plan = { id: string; name: string; priceInCents: number; active: boolean };
 type Initial = { tenantId: string; name: string; email: string; phone: string; planId: string; tenantName: string };
 
 // Formulário do cliente SaaS. Não existe campo de papel: toda conta criada pela plataforma é TENANT_USER.
@@ -67,7 +68,7 @@ export default function SaasClientForm({ plans, initial }: { plans: Plan[]; init
       <fieldset>
         <legend>Ambiente</legend>
         <label>Nome do ambiente (tenant)<input name="tenantName" maxLength={120} defaultValue={initial?.tenantName} placeholder="Padrão: Nome · CrediAI" /></label>
-        <label>Plano<select name="planId" required defaultValue={initial?.planId ?? activePlans[0]?.id}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label>
+        <label>Plano<select name="planId" required defaultValue={initial?.planId ?? activePlans[0]?.id}>{activePlans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan.name, plan.priceInCents)}</option>)}</select></label>
         {!editing && (
           <div className="central-form-row">
             <label>Status inicial<select name="status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option></select></label>

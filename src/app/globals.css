@@ -866,6 +866,7 @@ button { color:inherit; }
 .central-nav a { flex:none; padding:9px 15px; border-radius:9px; color:#a9c2d0; font-size:12px; font-weight:600; text-decoration:none; }
 .central-nav a[aria-current="page"] { color:#04121b; background:linear-gradient(90deg,var(--central-teal),var(--central-cyan)); box-shadow:0 0 18px rgba(79,216,232,.22); }
 .central-kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; margin-bottom:18px; }
+@media(min-width:1100px) { .central-kpis-4 { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 .central-kpis-3 { grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr)); margin-bottom:0; }
 @media(min-width:900px) { .central-kpis-3 { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 .central-kpi { position:relative; display:grid; gap:6px; padding:16px 16px 15px; overflow:hidden; border:1px solid var(--central-line); border-radius:14px; background:var(--central-card); }
@@ -916,6 +917,9 @@ button { color:inherit; }
 .saas-status-suspended { color:var(--central-red); background:rgba(255,133,137,.1); }
 .saas-status-closed { color:#c9d4dc; background:rgba(201,212,220,.08); }
 .saas-status-closed i { box-shadow:none; }
+.saas-card-plan { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; color:#c9dae4; font-size:12px; font-weight:600; }
+.saas-card-plan small { color:#7f97a8; font-size:11px; font-weight:500; }
+.central-hero-meta + .central-hero-meta { margin-top:8px; }
 .saas-card-meta,.central-hero-meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:#7f97a8; font-size:11px; }
 .saas-card-meta b,.central-hero-meta b { color:#c9dae4; font-weight:600; }
 .saas-owner { color:var(--central-cyan); font-weight:700; }

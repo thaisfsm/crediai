@@ -7,6 +7,7 @@ import { withPlatformContext, type TenantTransaction } from "@/lib/auth/guards";
 import { generateTemporaryPassword, hashPassword } from "@/lib/admin/passwords";
 import { accounts, plans, sessions, subscriptions, tenants, users, wallets } from "@/lib/db/schema";
 import { normalizePhone } from "@/lib/finance/format";
+import { planLabel } from "@/lib/admin/plan-price";
 
 // Todas as ações exigem SUPER_ADMIN na sessão e no banco (withPlatformContext). Nenhum papel vem do navegador:
 // toda conta criada aqui é TENANT_USER, e contas SUPER_ADMIN nunca são alteradas por estas ações.
@@ -115,8 +116,10 @@ export async function updateSaasClientAction(data: FormData): Promise<AdminActio
   return { ok: true, message: "Dados do cliente SaaS atualizados." };
 }
 
-// Ativar: tenant ACTIVE e assinatura vigente ACTIVE sem vencimento. Suspender: tenant SUSPENDED e sessões encerradas.
-// Os dados financeiros do tenant não são tocados em nenhum dos dois casos.
+// Ativar: tenant ACTIVE e assinatura vigente ACTIVE, no plano do tenant e sem vencimento. Suspender: tenant SUSPENDED
+// e sessões encerradas. Os dados financeiros do tenant (carteira, clientes, operações, pagamentos) não são tocados.
+// A ativação confere o plano e o valor que o SUPER_ADMIN viu na confirmação (planId e priceInCents enviados pela tela):
+// se mudaram nesse meio-tempo, ou se o plano não tem valor configurado, nada é alterado.
 export async function setSaasClientStatusAction(data: FormData): Promise<AdminActionResult> {
   const tenantId = text(data, "tenantId", 80);
   const action = text(data, "action", 20);
@@ -129,11 +132,17 @@ export async function setSaasClientStatusAction(data: FormData): Promise<AdminAc
       await tx.delete(sessions).where(eq(sessions.userId, target.user.id));
       return { ok: true as const, message: "Cliente SaaS suspenso. O acesso foi encerrado." };
     }
+    const [plan] = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).where(eq(plans.id, target.tenant.planId));
+    if (!plan || !plan.active) return { ok: false as const, error: "O plano deste cliente SaaS não está disponível." };
+    if (plan.priceInCents <= 0) return { ok: false as const, error: `O plano ${plan.name} ainda não tem valor mensal configurado. Nada foi alterado.` };
+    if (text(data, "planId", 80) !== plan.id || Number(text(data, "priceInCents", 12)) !== plan.priceInCents) {
+      return { ok: false as const, error: "O plano ou o valor mudou desde que a tela foi aberta. Recarregue a página e confira antes de ativar." };
+    }
     await tx.update(tenants).set({ status: "ACTIVE", updatedAt: sql`now()` }).where(eq(tenants.id, tenantId));
     const [subscription] = await tx.select({ id: subscriptions.id }).from(subscriptions).where(eq(subscriptions.tenantId, tenantId)).orderBy(desc(subscriptions.createdAt)).limit(1);
     if (subscription) await tx.update(subscriptions).set({ status: "ACTIVE", expiresAt: null, planId: target.tenant.planId, updatedAt: sql`now()` }).where(eq(subscriptions.id, subscription.id));
     else await tx.insert(subscriptions).values({ id: id("sub"), tenantId, planId: target.tenant.planId, status: "ACTIVE", expiresAt: null });
-    return { ok: true as const, message: "Cliente SaaS ativado." };
+    return { ok: true as const, message: `Cliente SaaS ativado no plano ${planLabel(plan.name, plan.priceInCents)}, sem data de vencimento.` };
   });
   if (!result.ok) return result;
   revalidatePath("/admin");

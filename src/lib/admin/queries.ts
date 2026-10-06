@@ -90,7 +90,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
   const rows = await tx.select({
-    tenantId: tenants.id, tenantName: tenants.name, status: tenants.status, planId: tenants.planId, planName: plans.name, contactPhone: tenants.contactPhone, createdAt: tenants.createdAt,
+    tenantId: tenants.id, tenantName: tenants.name, status: tenants.status, planId: tenants.planId, planName: plans.name, planPriceInCents: plans.priceInCents, contactPhone: tenants.contactPhone, createdAt: tenants.createdAt,
     // Conta principal do tenant: o primeiro usuário criado nele.
     userId: sql<string | null>`(select u.id from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
     userName: sql<string | null>`(select u.name from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
@@ -132,7 +132,7 @@ async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
     if (summary.counts.overdue > 0) attention.push(summary.counts.overdue === 1 ? "1 operação em atraso" : `${summary.counts.overdue} operações em atraso`);
     return {
       tenantId: row.tenantId, tenantName: row.tenantName, name: row.userName ?? row.tenantName, email: row.email, userId: row.userId,
-      status: row.status as SaasStatus, planId: row.planId, planName: row.planName, contactPhone: row.contactPhone,
+      status: row.status as SaasStatus, planId: row.planId, planName: row.planName, planPriceInCents: row.planPriceInCents, contactPhone: row.contactPhone,
       createdAt: row.createdAt.toISOString(), lastAccessAt: lastAccessAt?.toISOString() ?? null,
       userActive: Boolean(row.userActive), mustChangePassword: Boolean(row.mustChangePassword), isPlatformOwner: row.isPlatformOwner,
       subscriptionStatus: row.subscriptionStatus, subscriptionExpiresAt: expiresAt?.toISOString() ?? null, subscriptionValid, canAccess,
@@ -159,7 +159,7 @@ export async function loadSaasClients(filters: { q?: string; status?: string; pl
       void portfolio;
       return client;
     });
-    const planRows = await tx.select({ id: plans.id, name: plans.name, active: plans.active }).from(plans).orderBy(asc(plans.name));
+    const planRows = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).orderBy(asc(plans.name));
     const sum = (pick: (row: SaasClient) => number) => all.reduce((total, row) => total + pick(row), 0);
     const customers = all.filter((row) => !row.isPlatformOwner);
     const kpis = {
@@ -168,6 +168,10 @@ export async function loadSaasClients(filters: { q?: string; status?: string; pl
       trialing: customers.filter((row) => row.status === "TRIALING").length,
       suspended: customers.filter((row) => row.status === "SUSPENDED").length,
       closed: customers.filter((row) => row.status === "CLOSED").length,
+      // Receita mensal contratada: soma do preço do plano dos clientes SaaS com assinatura ativa. Clientes em teste
+      // aparecem à parte, como o valor que passaria a entrar se fossem ativados. Ambiente sem usuário não conta.
+      monthlyRevenueCents: sum((row) => (!row.isPlatformOwner && row.userId && row.status === "ACTIVE" ? row.planPriceInCents : 0)),
+      trialRevenueCents: sum((row) => (!row.isPlatformOwner && row.userId && row.status === "TRIALING" ? row.planPriceInCents : 0)),
       finalClients: sum((row) => row.clients.total),
       activeFinalClients: sum((row) => row.clients.active),
       openOperations: sum((row) => row.operations.open),
@@ -176,6 +180,7 @@ export async function loadSaasClients(filters: { q?: string; status?: string; pl
       receivableCents: sum((row) => row.money.receivableCents),
       receivedCents: sum((row) => row.money.receivedCents),
       receivedInterestCents: sum((row) => row.money.receivedInterestCents),
+      expectedInterestCents: sum((row) => row.money.expectedInterestCents),
     };
 
     const query = (filters.q ?? "").trim().toLocaleLowerCase("pt-BR").slice(0, 120);
@@ -208,7 +213,7 @@ export async function loadSaasClientDetail(tenantId: string) {
   return withPlatformContext(async (tx) => {
     const [row] = await loadSaasRows(tx, [tenantId]);
     if (!row) return null;
-    const planRows = await tx.select({ id: plans.id, name: plans.name, active: plans.active }).from(plans).orderBy(asc(plans.name));
+    const planRows = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).orderBy(asc(plans.name));
     const tenantUsers = await tx.select({ id: users.id, name: users.name, email: users.email, role: users.role, active: users.active, mustChangePassword: users.mustChangePassword, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt })
       .from(users).where(eq(users.tenantId, tenantId)).orderBy(asc(users.createdAt));
     const { portfolio, ...client } = row;
@@ -238,5 +243,5 @@ export async function loadSaasClientDetail(tenantId: string) {
 export type SaasClientDetail = NonNullable<Awaited<ReturnType<typeof loadSaasClientDetail>>>;
 
 export async function loadPlans() {
-  return withPlatformContext((tx) => tx.select({ id: plans.id, name: plans.name, active: plans.active }).from(plans).orderBy(asc(plans.name)));
+  return withPlatformContext((tx) => tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).orderBy(asc(plans.name)));
 }

@@ -5,6 +5,7 @@ import { databaseAvailable } from "@/lib/db";
 import { loadSaasClients, type SaasClient } from "@/lib/admin/queries";
 import { formatMoney } from "@/lib/finance/format";
 import { AdminShell, Kpi, StatusBadge, dateLabel, relativeAccess } from "./admin-ui";
+import { planLabel } from "@/lib/admin/plan-price";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +20,14 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
 
   return (
     <AdminShell active="clientes" userName={session.user.name} hasOwnWallet={Boolean(session.user.tenantId)}>
-      <section className="central-kpis" aria-label="Resumo da plataforma">
+      <section className="central-kpis central-kpis-4" aria-label="Resumo da plataforma">
         <Kpi label="Clientes SaaS" value={kpis.total} hint={<><b className="dot-active" />{kpis.active} ativos · <b className="dot-trial" />{kpis.trialing} em teste · <b className="dot-suspended" />{kpis.suspended} suspensos</>} tone="cyan" />
+        <Kpi label="Receita mensal" value={formatMoney(kpis.monthlyRevenueCents)} hint={`${kpis.active} ${kpis.active === 1 ? "assinatura ativa" : "assinaturas ativas"} · ${formatMoney(kpis.trialRevenueCents)} se os em teste forem ativados`} tone="green" />
         <Kpi label="Clientes finais" value={kpis.finalClients} hint={`${kpis.activeFinalClients} ativos nas carteiras`} />
         <Kpi label="Operações abertas" value={kpis.openOperations} hint={kpis.overdueOperations ? `${kpis.overdueOperations} em atraso` : "Nenhuma em atraso"} tone={kpis.overdueOperations ? "red" : undefined} />
         <Kpi label="Capital emprestado" value={formatMoney(kpis.lentCents)} hint="Principal ainda não devolvido" />
         <Kpi label="Total a receber" value={formatMoney(kpis.receivableCents)} hint="Saldo das operações abertas" />
+        <Kpi label="Juros previstos" value={formatMoney(kpis.expectedInterestCents)} hint="Ainda não recebidos" tone="amber" />
         <Kpi label="Recebido" value={formatMoney(kpis.receivedCents)} hint={`${formatMoney(kpis.receivedInterestCents)} de juros`} tone="green" />
       </section>
 
@@ -60,7 +63,7 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
             <option value="">Todos</option><option value="ACTIVE">Ativo</option><option value="TRIALING">Em teste</option><option value="SUSPENDED">Suspenso</option><option value="CLOSED">Encerrado</option>
           </select></label>
           <label><span>Plano</span><select name="plano" defaultValue={filters.plano}>
-            <option value="">Todos</option>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
+            <option value="">Todos</option>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan.name, plan.priceInCents, true)}</option>)}
           </select></label>
           <label><span>Ordenar por</span><select name="ordem" defaultValue={filters.ordem}>
             <option value="nome">Nome</option><option value="emprestado">Capital emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option>
@@ -99,13 +102,18 @@ function SaasCard({ client }: { client: SaasClient }) {
           <h3><Link href={`/admin/clientes/${client.tenantId}`}>{client.name}</Link></h3>
           <small>{client.email ?? "Sem usuário"}</small>
         </div>
-        <StatusBadge status={client.status} />
       </header>
+      {/* Assinatura: status comercial + plano e valor. Fica separada da atividade de uso logo abaixo. */}
+      {client.isPlatformOwner
+        ? <div className="saas-card-plan"><span className="saas-owner">Conta da administração · sem cobrança</span></div>
+        : <div className="saas-card-plan">
+          <StatusBadge status={client.status} />
+          <span>{planLabel(client.planName, client.planPriceInCents, true)}</span>
+          {client.status === "TRIALING" && client.subscriptionExpiresAt && <small>{client.subscriptionValid ? "Teste até" : "Teste venceu em"} {dateLabel(client.subscriptionExpiresAt)}</small>}
+        </div>}
       <div className="saas-card-meta">
-        <span>Plano <b>{client.planName}</b></span>
-        <span>Desde <b>{dateLabel(client.createdAt)}</b></span>
         <span>Último acesso <b>{relativeAccess(client.lastAccessAt)}</b></span>
-        {client.isPlatformOwner && <span className="saas-owner">Sua carteira (SUPER_ADMIN)</span>}
+        <span>Desde <b>{dateLabel(client.createdAt)}</b></span>
       </div>
       <dl className="saas-card-money">
         <div><dt>Capital disponível</dt><dd>{formatMoney(money.availableCents)}</dd></div>

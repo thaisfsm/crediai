@@ -7,6 +7,7 @@ import { formatMoney, formatPhone } from "@/lib/finance/format";
 import { AdminShell, Kpi, StatusBadge, dateLabel, relativeAccess } from "../../admin-ui";
 import SaasClientForm from "../saas-client-form";
 import ClientActions from "./client-actions";
+import { planPriceLabel } from "@/lib/admin/plan-price";
 import { AreaChart, BarChart } from "./charts";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
   const { client, profitability } = detail;
   const { money } = client;
   const subscriptionNote = client.subscriptionExpiresAt
-    ? `${client.subscriptionValid ? "Vence" : "Venceu"} em ${dateLabel(client.subscriptionExpiresAt)}`
+    ? `${client.status === "TRIALING" ? "Teste " : ""}${client.subscriptionValid ? "vence" : "venceu"} em ${dateLabel(client.subscriptionExpiresAt)}`
     : "Sem vencimento";
 
   return (
@@ -31,10 +32,17 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
           <div className="auth-kicker"><i /> CLIENTE SaaS</div>
           <h2>{client.name}</h2>
           <p>{client.email ?? "Sem usuário"}{client.contactPhone ? ` · ${formatPhone(client.contactPhone)}` : ""} · Ambiente “{client.tenantName}”</p>
-          <div className="central-hero-meta">
-            <StatusBadge status={client.status} />
-            <span>Plano <b>{client.planName}</b></span>
-            <span>Assinatura <b>{subscriptionNote}</b></span>
+          {/* Assinatura (situação comercial definida pela administração) e uso (atividade na plataforma) ficam separados:
+              um cliente Ativo pode estar sem acessar há dias, e um cliente Em teste pode estar usando muito. */}
+          {client.isPlatformOwner
+            ? <div className="central-hero-meta" aria-label="Assinatura"><span className="saas-owner">Conta da administração (SUPER_ADMIN) · sem cobrança de plano</span></div>
+            : <div className="central-hero-meta" aria-label="Assinatura">
+              <StatusBadge status={client.status} />
+              <span>Plano <b>{client.planName}</b></span>
+              <span>Valor <b>{planPriceLabel(client.planPriceInCents)}</b></span>
+              <span>Assinatura <b>{subscriptionNote}</b></span>
+            </div>}
+          <div className="central-hero-meta" aria-label="Uso da plataforma">
             <span>Cadastro <b>{dateLabel(client.createdAt)}</b></span>
             <span>Último acesso <b>{relativeAccess(client.lastAccessAt)}</b></span>
             <span className={client.canAccess ? "is-ok" : "is-late"}>{client.canAccess ? "Acesso liberado" : "Sem acesso no momento"}</span>
@@ -111,7 +119,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
             </li>
           ))}
         </ul>
-        <ClientActions tenantId={client.tenantId} status={client.status} userActive={client.userActive} locked={client.isPlatformOwner} />
+        <ClientActions tenantId={client.tenantId} status={client.status} userActive={client.userActive} locked={client.isPlatformOwner} plan={{ id: client.planId, name: client.planName, priceInCents: client.planPriceInCents }} />
       </section>
 
       {!client.isPlatformOwner && client.email && (
