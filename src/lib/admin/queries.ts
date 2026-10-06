@@ -1,14 +1,19 @@
 import "server-only";
-import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { withPlatformContext, type TenantTransaction } from "@/lib/auth/guards";
 import { loadTenantPortfolios } from "@/lib/finance/summaries";
 import { todayIso } from "@/lib/finance/format";
 import { commercialState, type CommercialCondition, type CommercialStatus } from "@/lib/billing/rules";
-import { clients, loanOperations, payments, plans, subscriptionCharges, subscriptions, tenants, users, wallets } from "@/lib/db/schema";
+import { AUDIT_ACTIONS, type AuditAction } from "./audit-rules";
+import { lastAccessOf } from "./last-access";
+import { adminAuditLogs, clients, loanOperations, payments, plans, subscriptionCharges, subscriptions, tenants, users, wallets } from "@/lib/db/schema";
 
 // Visão global da plataforma, somente leitura. Roda em withPlatformContext: exige SUPER_ADMIN na sessão e no banco,
 // e abre o contexto 'SUPER_ADMIN' do RLS só dentro desta transação.
 const LIST_LIMIT = 100;
+
+// Insumos do "Último acesso" (regra em last-access.ts): último login e última atividade de sessão guardada.
+const userLastSessionAt = sql<string | null>`(select max(greatest(s.created_at, s.updated_at))::text from session s where s.user_id = "user".id)`;
 
 export async function loadPlatformOverview() {
   return withPlatformContext(async (tx) => {
@@ -39,6 +44,7 @@ export async function loadPlatformOverview() {
 
     const userRows = await tx.select({
       id: users.id, name: users.name, email: users.email, role: users.role, active: users.active, createdAt: users.createdAt, tenantName: tenants.name,
+      lastLoginAt: users.lastLoginAt, lastSessionAt: userLastSessionAt,
     }).from(users).leftJoin(tenants, eq(tenants.id, users.tenantId)).orderBy(desc(users.createdAt)).limit(LIST_LIMIT);
 
     const clientRows = await tx.select({
@@ -47,7 +53,9 @@ export async function loadPlatformOverview() {
 
     const operationRows = await tx.select({
       id: loanOperations.id, clientName: clients.name, tenantName: tenants.name, principalCents: loanOperations.principalCents, totalCents: loanOperations.totalCents,
-      status: loanOperations.status, modality: loanOperations.modality, loanDate: loanOperations.loanDate, dueDate: loanOperations.dueDate,
+      status: loanOperations.status, modality: loanOperations.modality, frequency: loanOperations.frequency, loanDate: loanOperations.loanDate, dueDate: loanOperations.dueDate,
+      firstDueDate: loanOperations.firstDueDate, installmentCount: loanOperations.installmentCount,
+      firstRenewalPreviousDueDate: sql<string | null>`(select r.previous_due_date::text from loan_renewal r where r.operation_id = loan_operation.id and r.period_number = 2)`,
     }).from(loanOperations)
       .innerJoin(clients, eq(clients.id, loanOperations.clientId))
       .innerJoin(tenants, eq(tenants.id, loanOperations.tenantId))
@@ -74,7 +82,8 @@ export async function loadPlatformOverview() {
       tenants: tenantRows.map((row) => ({
         ...row, clientCount: Number(row.clientCount), openOperationCount: Number(row.openOperationCount), lentCents: Number(row.lentCents), receivedCents: Number(row.receivedCents),
       })),
-      users: userRows, clients: clientRows, operations: operationRows, payments: paymentRows, wallets: walletRows,
+      users: userRows.map(({ lastLoginAt, lastSessionAt, ...user }) => ({ ...user, lastAccessAt: lastAccessOf(lastLoginAt, lastSessionAt) })),
+      clients: clientRows, operations: operationRows, payments: paymentRows, wallets: walletRows,
     };
   });
 }
@@ -112,8 +121,9 @@ async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
     userActive: sql<boolean | null>`(select u.active from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
     mustChangePassword: sql<boolean | null>`(select u.must_change_password from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
     isPlatformOwner: sql<boolean>`exists(select 1 from "user" u where u.tenant_id = tenant.id and u.role = 'SUPER_ADMIN')`,
-    // Último acesso: login registrado (last_login_at) ou, para contas anteriores a esse registro, a sessão mais recente.
-    lastAccessAt: sql<string | null>`(select greatest(max(u.last_login_at), (select max(s.created_at) from session s join "user" su on su.id = s.user_id where su.tenant_id = tenant.id))::text from "user" u where u.tenant_id = tenant.id)`,
+    // Último acesso do ambiente: o mais recente entre os usuários dele, pela regra única de last-access.ts.
+    lastLoginAt: sql<string | null>`(select max(u.last_login_at)::text from "user" u where u.tenant_id = tenant.id)`,
+    lastSessionAt: sql<string | null>`(select max(greatest(s.created_at, s.updated_at))::text from session s join "user" su on su.id = s.user_id where su.tenant_id = tenant.id)`,
     // Assinatura vigente (a mais recente) inteira, e a última mensalidade paga dela.
     subscription: sql<SubscriptionRow | null>`(select json_build_object('id', s.id, 'status', s.status, 'plan_id', s.plan_id, 'expires_at', s.expires_at, 'contracted_price_cents', s.contracted_price_cents, 'commercial_condition', s.commercial_condition, 'activated_at', s.activated_at, 'first_due_date', s.first_due_date, 'next_due_date', s.next_due_date, 'billing_cycle', s.billing_cycle, 'grace_days', s.grace_days, 'last_paid_at', (select max(c.paid_at) from subscription_charge c where c.subscription_id = s.id and c.status = 'PAID')) from subscription s where s.tenant_id = tenant.id order by s.created_at desc limit 1)`,
     clientCount: sql<string>`(select count(*) from client c where c.tenant_id = tenant.id)`,
@@ -135,7 +145,8 @@ async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
     const state = commercialState({ isPlatformOwner: row.isPlatformOwner, tenantStatus: row.status, subscriptionStatus: sub?.status ?? null, trialEndsAt: sub?.expires_at ?? null, nextDueDate: sub?.next_due_date ?? null, graceDays }, today, new Date(now));
     // Mesmo critério de requireTenantUser: o cliente SaaS só entra com tenant e assinatura válidos e usuário ativo.
     const canAccess = Boolean(row.userActive) && (row.isPlatformOwner ? row.status !== "CLOSED" : ["TRIALING", "ACTIVE"].includes(row.status) && subscriptionValid);
-    const lastAccessAt = row.lastAccessAt ? new Date(row.lastAccessAt) : null;
+    const lastAccess = lastAccessOf(row.lastLoginAt, row.lastSessionAt);
+    const lastAccessAt = lastAccess ? new Date(lastAccess) : null;
     const daysToExpire = expiresAt ? Math.ceil((expiresAt.getTime() - now) / DAY_MS) : null;
     const attention: string[] = [];
     if (!row.isPlatformOwner) {
@@ -147,7 +158,8 @@ async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
       if (state.status === "PAST_DUE") attention.push(`Mensalidade vencida há ${state.daysOverdue} ${state.daysOverdue === 1 ? "dia" : "dias"} (na tolerância)`);
       if (state.status === "SUSPENSION_DUE") attention.push(`Mensalidade vencida há ${state.daysOverdue} dias: tolerância esgotada`);
       if (state.status === "ACTIVE" && state.daysToDue !== null && state.daysToDue <= 3) attention.push(state.daysToDue === 0 ? "Mensalidade vence hoje" : `Mensalidade vence em ${state.daysToDue} ${state.daysToDue === 1 ? "dia" : "dias"}`);
-      if (row.mustChangePassword) attention.push("Ainda não trocou a senha provisória");
+      if (!row.userId) attention.push("Ambiente sem usuário de acesso");
+      else if (row.mustChangePassword) attention.push("Ainda não trocou a senha provisória");
       else if (!lastAccessAt) attention.push("Nunca acessou");
       else if (now - lastAccessAt.getTime() > 30 * DAY_MS) attention.push("Sem acesso há mais de 30 dias");
     }
@@ -198,7 +210,9 @@ export async function loadSaasClients(filters: { q?: string; status?: string; pl
     });
     const planRows = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).orderBy(asc(plans.name));
     const sum = (pick: (row: SaasClient) => number) => all.reduce((total, row) => total + pick(row), 0);
-    const customers = all.filter((row) => !row.isPlatformOwner);
+    // Indicadores só com clientes SaaS de verdade: fora a conta da plataforma (MASTER) e ambientes sem nenhum usuário
+    // (sobras de cadastro, que aparecem na lista com o aviso "Ambiente sem usuário de acesso").
+    const customers = all.filter((row) => !row.isPlatformOwner && row.userId);
     const group = (row: SaasClient) => commercialGroup(row.commercial.status);
     const paying = (row: SaasClient) => ["ACTIVE", "PAST_DUE"].includes(group(row));
     const kpis = {
@@ -241,7 +255,7 @@ export async function loadSaasClients(filters: { q?: string; status?: string; pl
 
     return {
       kpis,
-      attention: customers.filter((row) => row.attention.length > 0).slice(0, 8),
+      attention: all.filter((row) => !row.isPlatformOwner && row.attention.length > 0).slice(0, 8),
       clients: filtered.slice((page - 1) * SAAS_PAGE_SIZE, page * SAAS_PAGE_SIZE),
       matched: filtered.length,
       page, pages,
@@ -256,7 +270,7 @@ export async function loadSaasClientDetail(tenantId: string) {
     const [row] = await loadSaasRows(tx, [tenantId]);
     if (!row) return null;
     const planRows = await tx.select({ id: plans.id, name: plans.name, priceInCents: plans.priceInCents, active: plans.active }).from(plans).orderBy(asc(plans.name));
-    const tenantUsers = await tx.select({ id: users.id, name: users.name, email: users.email, role: users.role, active: users.active, mustChangePassword: users.mustChangePassword, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt })
+    const tenantUsers = await tx.select({ id: users.id, name: users.name, email: users.email, role: users.role, active: users.active, mustChangePassword: users.mustChangePassword, lastLoginAt: users.lastLoginAt, lastSessionAt: userLastSessionAt, createdAt: users.createdAt })
       .from(users).where(eq(users.tenantId, tenantId)).orderBy(asc(users.createdAt));
     const { portfolio, ...client } = row;
     // Mensalidades registradas da assinatura vigente (as mais recentes primeiro).
@@ -275,7 +289,7 @@ export async function loadSaasClientDetail(tenantId: string) {
     const receivedByMonth = months.map((month) => ({ month, cents: portfolio.payments.filter((payment) => payment.paidAt.startsWith(month)).reduce((total, payment) => total + payment.amountCents, 0) }));
     return {
       client,
-      users: tenantUsers.map((user) => ({ ...user, lastLoginAt: user.lastLoginAt?.toISOString() ?? null, createdAt: user.createdAt.toISOString() })),
+      users: tenantUsers.map(({ lastLoginAt, lastSessionAt, ...user }) => ({ ...user, lastAccessAt: lastAccessOf(lastLoginAt, lastSessionAt), createdAt: user.createdAt.toISOString() })),
       plans: planRows,
       charges,
       recentPayments: portfolio.charges.Histórico.slice(0, 8),
@@ -308,3 +322,45 @@ export async function loadPlanCatalog() {
 }
 
 export type PlanCatalogItem = Awaited<ReturnType<typeof loadPlanCatalog>>[number];
+
+// ---------------------------------------------------------------------------------------------------------------
+// Auditoria administrativa (somente leitura, só SUPER_ADMIN). Filtro por texto, ação, cliente SaaS e período;
+// ordem mais recentes/mais antigas; 25 por página.
+export const AUDIT_PAGE_SIZE = 25;
+
+export async function loadAdminAuditLog(filters: { q?: string; acao?: string; tenant?: string; de?: string; ate?: string; ordem?: string; pagina?: string }) {
+  return withPlatformContext(async (tx) => {
+    const query = (filters.q ?? "").trim().slice(0, 120);
+    const action = (Object.keys(AUDIT_ACTIONS) as AuditAction[]).find((key) => key === filters.acao) ?? "";
+    const tenantId = (filters.tenant ?? "").trim().slice(0, 80);
+    const isDate = (value?: string) => (value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "");
+    const from = isDate(filters.de), to = isDate(filters.ate);
+    const oldestFirst = filters.ordem === "antigas";
+    const like = `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    const where = and(
+      query ? or(ilike(adminAuditLogs.description, like), ilike(adminAuditLogs.actorName, like), ilike(adminAuditLogs.actorEmail, like), ilike(adminAuditLogs.tenantName, like), ilike(adminAuditLogs.entityId, like)) : undefined,
+      action ? eq(adminAuditLogs.action, action) : undefined,
+      tenantId ? eq(adminAuditLogs.tenantId, tenantId) : undefined,
+      // Datas do filtro no fuso de Brasília.
+      from ? sql`${adminAuditLogs.createdAt} >= (${from}::date)::timestamp at time zone 'America/Sao_Paulo'` : undefined,
+      to ? sql`${adminAuditLogs.createdAt} < (${to}::date + 1)::timestamp at time zone 'America/Sao_Paulo'` : undefined,
+    );
+    const [{ total }] = await tx.select({ total: sql<string>`count(*)` }).from(adminAuditLogs).where(where);
+    const pages = Math.max(1, Math.ceil(Number(total) / AUDIT_PAGE_SIZE));
+    const page = Math.min(Math.max(1, Number.parseInt(filters.pagina ?? "1", 10) || 1), pages);
+    const rows = await tx.select().from(adminAuditLogs).where(where)
+      .orderBy(oldestFirst ? asc(adminAuditLogs.createdAt) : desc(adminAuditLogs.createdAt), oldestFirst ? asc(adminAuditLogs.id) : desc(adminAuditLogs.id))
+      .limit(AUDIT_PAGE_SIZE).offset((page - 1) * AUDIT_PAGE_SIZE);
+    // Clientes SaaS que aparecem na auditoria (inclusive os que já não existem), para o filtro.
+    const tenantOptions = await tx.selectDistinctOn([adminAuditLogs.tenantId], { id: adminAuditLogs.tenantId, name: adminAuditLogs.tenantName })
+      .from(adminAuditLogs).where(sql`${adminAuditLogs.tenantId} is not null`).orderBy(adminAuditLogs.tenantId, desc(adminAuditLogs.createdAt));
+    return {
+      rows: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
+      matched: Number(total), page, pages,
+      tenants: tenantOptions.filter((row): row is { id: string; name: string | null } => Boolean(row.id)).sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "pt-BR")),
+      filters: { q: query, acao: action, tenant: tenantId, de: from, ate: to, ordem: oldestFirst ? "antigas" : "recentes" },
+    };
+  });
+}
+
+export type AdminAuditPage = Awaited<ReturnType<typeof loadAdminAuditLog>>;

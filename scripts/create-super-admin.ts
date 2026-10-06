@@ -3,7 +3,7 @@ for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
   const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
   if (match && process.env[match[1]] === undefined) process.env[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");
 }
-const [{ auth }, { db }, { accounts, users }, { sql }, { randomUUID }] = await Promise.all([
+const [{ auth }, { db }, { accounts, adminAuditLogs, users }, { sql }, { randomUUID }] = await Promise.all([
   import("../src/lib/auth"), import("../src/lib/db"), import("../src/lib/db/schema"), import("drizzle-orm"), import("node:crypto"),
 ]);
 
@@ -25,5 +25,12 @@ await db.transaction(async (tx) => {
   await tx.execute(sql`select set_config('app.crediai_role_grant', 'promote', true)`);
   await tx.insert(users).values({ id: userId, name, email, emailVerified: false, role: "SUPER_ADMIN", tenantId: null, active: true });
   await tx.insert(accounts).values({ id: randomUUID(), accountId: userId, providerId: "credential", userId, password: passwordHash });
+  // Auditoria administrativa: a criação de conta SUPER_ADMIN fica registrada (quem agiu: o procedimento de bootstrap).
+  await tx.execute(sql`select set_config('app.crediai_role', 'SUPER_ADMIN', true)`);
+  await tx.insert(adminAuditLogs).values({
+    id: `aud_${randomUUID().replaceAll("-", "")}`, actorUserId: "script:create-super-admin", actorName: "Procedimento administrativo (pnpm admin:create)", actorEmail: "-",
+    action: "ADMIN_USER_CREATED", entity: "user", entityId: userId, description: `Conta SUPER_ADMIN criada para ${email}.`,
+    after: { name, email, role: "SUPER_ADMIN", active: true },
+  });
 });
 console.info(`SUPER_ADMIN criado para ${email}. A senha não foi exibida.`);

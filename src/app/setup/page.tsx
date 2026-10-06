@@ -1,10 +1,16 @@
 import Link from "next/link";
-import { databaseAvailable, isDatabaseConfigured } from "@/lib/db";
+import { databaseStatus } from "@/lib/db";
+import { DatabaseErrorState } from "@/app/database-error-state";
 
 export const dynamic = "force-dynamic";
 
+// /setup só explica a configuração quando DATABASE_URL não existe. Banco configurado e fora do ar (ou com erro) mostra
+// a mesma tela de nova tentativa das outras páginas, e banco no ar manda de volta para o app.
 export default async function SetupPage() {
-  if (await databaseAvailable()) return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> POSTGRESQL CONECTADO</div><h1>Ambiente pronto para migração</h1><p>O PostgreSQL configurado está acessível. Execute <code>pnpm db:migrate</code> para criar o esquema CrediAI.</p><ol><li>Confirme `DATABASE_URL` e `DATABASE_MIGRATION_URL` em <code>.env.local</code>.</li><li>Aplique as migrations usando a URL de migração.</li><li>Crie a conta administrativa com <code>pnpm admin:create</code>.</li></ol></section></main>;
-  const databaseConfigured = isDatabaseConfigured();
-  return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> CONFIGURAÇÃO LOCAL</div><h1>{databaseConfigured ? "PostgreSQL gerenciado indisponível" : "Conecte o PostgreSQL gerenciado"}</h1><p>O CrediAI pode ser executado localmente sem Docker. Para habilitar cadastro e login, configure a conexão PostgreSQL gerenciada em `DATABASE_URL`.</p><ol><li>Configure `DATABASE_URL` com a URL PostgreSQL de runtime.</li><li>Configure `DATABASE_MIGRATION_URL` para executar as migrations.</li><li>Reinicie o servidor local e aplique <code>pnpm db:migrate</code>.</li></ol><p className="setup-note">Os dados demonstrativos não são persistidos. Sem banco, autenticação e áreas privadas permanecem protegidas.</p><Link href="/" className="auth-submit">Verificar novamente <span>→</span></Link></section></main>;
+  const status = await databaseStatus();
+  if (status === "unavailable" || status === "error") return <DatabaseErrorState kind={status} />;
+  if (status === "ok") {
+    return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> BANCO DE DADOS CONECTADO</div><h1>Tudo certo com o banco de dados</h1><p>O CrediAI está conectado ao PostgreSQL. Você pode voltar para o sistema.</p>{process.env.NODE_ENV !== "production" && <p className="setup-note">Ambiente local novo? Aplique o esquema com <code>pnpm db:migrate</code> e crie a conta administrativa com <code>pnpm admin:create</code>.</p>}<Link href="/" className="auth-submit">Ir para o CrediAI <span>→</span></Link></section></main>;
+  }
+  return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> CONFIGURAÇÃO</div><h1>Conecte o PostgreSQL gerenciado</h1><p>O banco de dados ainda não foi configurado neste ambiente (`DATABASE_URL` ausente).</p><ol><li>Configure `DATABASE_URL` com a URL PostgreSQL de runtime.</li><li>Configure `DATABASE_MIGRATION_URL` para executar as migrations.</li><li>Reinicie o servidor e aplique <code>pnpm db:migrate</code>.</li></ol><p className="setup-note">Sem banco, autenticação e áreas privadas permanecem protegidas.</p><Link href="/" className="auth-submit">Verificar novamente <span>→</span></Link></section></main>;
 }

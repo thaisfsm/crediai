@@ -429,4 +429,34 @@ export const capitalMovements = pgTable("capital_movement", {
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
-export const schema = { accounts, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+// Auditoria administrativa: quem fez o quê na administração da plataforma (somente SUPER_ADMIN grava e lê).
+// Sem chaves estrangeiras de propósito: o registro sobrevive mesmo que o tenant ou o usuário deixem de existir, e por
+// isso guarda também o nome e o e-mail de quem agiu e o nome do tenant no momento da ação. É só de inserção: não há
+// política de UPDATE/DELETE e o gatilho admin_audit_log_append_only (migração 0014) recusa alteração e exclusão até
+// para o dono do banco. Senhas e hashes nunca entram em before/after.
+export const adminAuditLogs = pgTable("admin_audit_log", {
+  id: text("id").primaryKey(),
+  // clock_timestamp(): vários eventos da mesma ação (mesma transação) ficam na ordem em que foram gravados.
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  actorUserId: text("actor_user_id").notNull(),
+  actorName: text("actor_name").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  tenantId: text("tenant_id"),
+  tenantName: text("tenant_name"),
+  action: text("action").notNull(),
+  entity: text("entity").notNull(),
+  entityId: text("entity_id"),
+  description: text("description").notNull(),
+  before: jsonb("before").$type<Record<string, unknown>>(),
+  after: jsonb("after").$type<Record<string, unknown>>(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+}, (table) => [
+  index("admin_audit_log_created_at_idx").on(table.createdAt),
+  index("admin_audit_log_tenant_idx").on(table.tenantId, table.createdAt),
+  index("admin_audit_log_action_idx").on(table.action, table.createdAt),
+  pgPolicy("admin_audit_log_select_admin_only", { for: "select", using: adminScope }),
+  pgPolicy("admin_audit_log_insert_admin_only", { for: "insert", withCheck: adminScope }),
+]).enableRLS();
+
+export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

@@ -117,6 +117,12 @@ function relativePaid(paidAt: string, today: string) {
   return `Recebido em ${shortDate(paidAt)}`;
 }
 
+// Vencimento original (o primeiro combinado): first_due_date; nas operações antigas de pagamento único, o vencimento
+// antes da primeira renovação; sem renovação, o vencimento gravado. Usado na carteira e nos Registros da plataforma.
+export function originalDueDateOf(firstDueDate: string | null | undefined, firstRenewalPreviousDueDate: string | null | undefined, dueDate: string) {
+  return firstDueDate ?? firstRenewalPreviousDueDate ?? dueDate;
+}
+
 // Recebe só os dados do ciclo atual da carteira (operações, pagamentos e movimentos de capital); ciclos encerrados
 // pelo "Zerar carteira" ficam no banco e não entram nos cards.
 export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn = null, cycleNumber = 1, capitalMovements = [], operations, payments, today }: {
@@ -132,7 +138,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     const frequency: Frequency = operation.frequency ?? "MONTHLY";
     // Primeiro vencimento combinado. Operações antigas de pagamento único não o gravavam: é o vencimento antes da
     // primeira renovação registrada ou, sem renovação registrada, o vencimento gravado.
-    const originalDueDate = operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate;
+    const originalDueDate = originalDueDateOf(operation.firstDueDate, renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate, operation.dueDate);
     const ledgerTerms: LedgerTerms = {
       modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
       firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, renewals,

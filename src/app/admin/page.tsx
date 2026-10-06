@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
-import { databaseAvailable } from "@/lib/db";
+import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { loadSaasClients, type SaasClient } from "@/lib/admin/queries";
 import { formatMoney } from "@/lib/finance/format";
 import { AdminShell, CommercialBadge, Kpi, dateLabel, dueLabel, relativeAccess } from "./admin-ui";
@@ -13,7 +13,10 @@ export const dynamic = "force-dynamic";
 type Search = { q?: string; status?: string; plano?: string; ordem?: string; pagina?: string };
 
 export default async function AdminCentralPage({ searchParams }: { searchParams: Promise<Search> }) {
-  if (!(await databaseAvailable())) redirect("/setup");
+  // Só banco não configurado vai para /setup; instabilidade ou erro mostram "tente novamente" aqui mesmo.
+  const gate = await databaseGate();
+  if (gate === "not_configured") redirect("/setup");
+  if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
   const session = await requireSuperAdmin();
   const data = await loadSaasClients(await searchParams);
   const { kpis, filters } = data;

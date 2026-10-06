@@ -88,10 +88,13 @@ export async function withTenantContext<T>(operation: (tx: TenantTransaction, co
   });
 }
 
-export async function withPlatformContext<T>(operation: (tx: TenantTransaction) => Promise<T>) {
-  await requireSuperAdmin();
+export type PlatformSession = Awaited<ReturnType<typeof requireSuperAdmin>>;
+
+// A sessão do SUPER_ADMIN vai junto para que as ações administrativas registrem quem agiu (auditoria).
+export async function withPlatformContext<T>(operation: (tx: TenantTransaction, context: { session: PlatformSession }) => Promise<T>) {
+  const session = await requireSuperAdmin();
   return db.transaction(async (tx) => {
     await tx.execute(sql`select set_config('app.tenant_id', '', true), set_config('app.crediai_role', 'SUPER_ADMIN', true)`);
-    return operation(tx);
+    return operation(tx, { session });
   });
 }

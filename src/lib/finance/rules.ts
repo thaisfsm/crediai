@@ -268,8 +268,17 @@ function stateFor(balanceCents: number, nextDue: string | null, asOf: string): {
   return { state: daysUntilDue < 0 ? "OVERDUE" : daysUntilDue === 0 ? "DUE_TODAY" : "ACTIVE", daysUntilDue };
 }
 
-// Parcelado e diário: cada pagamento leva juros e principal na proporção do contrato (o que zera o saldo leva o resto
-// dos juros). As parcelas são cobertas em ordem pelo total pago; a situação vem da primeira parcela não paga.
+// Parcelado e diário: os juros pagos acompanham a proporção do contrato sobre o TOTAL pago até cada pagamento
+// (juros acumulados = arredondamento de total pago × juros / total do contrato), e cada pagamento leva a diferença.
+// Assim o arredondamento nunca se acumula de um pagamento para o outro (no máximo meio centavo de diferença em
+// relação à proporção exata, em qualquer momento), e o pagamento que zera o saldo leva o resto exato dos juros.
+// As parcelas são cobertas em ordem pelo total pago; a situação vem da primeira parcela não paga.
+export function amortizedInterestPaid(paidCents: number, terms: Pick<LedgerTerms, "principalCents" | "interestCents">) {
+  const totalCents = terms.principalCents + terms.interestCents;
+  if (paidCents >= totalCents) return terms.interestCents;
+  return Math.min(terms.interestCents, Math.round((paidCents * terms.interestCents) / Math.max(totalCents, 1)));
+}
+
 function amortizedLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T[], asOf: string) {
   const totalCents = terms.principalCents + terms.interestCents;
   let interestPaidCents = 0, principalPaidCents = 0;
@@ -277,7 +286,8 @@ function amortizedLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     const balanceBeforeCents = Math.max(totalCents - interestPaidCents - principalPaidCents, 0);
     const interestLeft = Math.max(terms.interestCents - interestPaidCents, 0);
     const finishes = payment.amountCents >= balanceBeforeCents;
-    const interestPart = finishes ? interestLeft : Math.min(interestLeft, Math.round((payment.amountCents * terms.interestCents) / Math.max(totalCents, 1)));
+    const paidAfter = interestPaidCents + principalPaidCents + payment.amountCents;
+    const interestPart = finishes ? interestLeft : Math.min(interestLeft, payment.amountCents, Math.max(amortizedInterestPaid(paidAfter, terms) - interestPaidCents, 0));
     const principalPart = payment.amountCents - interestPart;
     interestPaidCents += interestPart;
     principalPaidCents += principalPart;
