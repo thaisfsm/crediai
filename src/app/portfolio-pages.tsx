@@ -1017,7 +1017,10 @@ function FocusPanel({ focus, portfolio, onClear }: { focus: Exclude<OperationsFo
 
 export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void }) {
   const ids = focus ? new Set(portfolio.operations.filter((operation) => operation.status === "OPEN" && (focus === "lent" ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0)).map((operation) => operation.id)) : null;
-  const operations = ids ? portfolio.operations.filter((operation) => ids.has(operation.id)) : portfolio.operations;
+  // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
+  const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
+  const ordered = portfolio.operationOrder.flatMap((id) => byId.get(id) ?? []);
+  const operations = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description="Cadastre e acompanhe os empréstimos da sua carteira." />

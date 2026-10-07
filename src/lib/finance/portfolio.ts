@@ -52,6 +52,9 @@ export type OperationView = Omit<OperationRecord, "renewals"> & {
   periods: LedgerPeriod[];
   // Próximo vencimento: no pagamento único é o vencimento do período atual; no parcelado/diário, o da próxima parcela.
   nextDueDate: string;
+  // Só para ordenar a lista de operações: a primeira obrigação ainda em aberto (parcela não totalmente paga ou período
+  // atual com saldo), igual ao nextDueDate do extrato; null quando não resta nada em aberto (quitada).
+  nextOpenDueDate: string | null;
   // Próximo valor a cobrar (juros do período ou a próxima parcela) e os termos usados pelas prévias da tela.
   amountDueCents: number; ledgerTerms: LedgerTerms;
   code: string; paidCents: number; interestPaidCents: number; principalPaidCents: number; interestRemainingCents: number; principalRemainingCents: number;
@@ -123,6 +126,16 @@ export function originalDueDateOf(firstDueDate: string | null | undefined, first
   return firstDueDate ?? firstRenewalPreviousDueDate ?? dueDate;
 }
 
+// Ordem da lista "Operações da carteira": pela próxima obrigação em aberto, da mais antiga (inclusive vencida) para a
+// mais distante; empate pela criação e pelo id. Sem obrigação em aberto (quitadas) vão para o fim, das mais recentes
+// para as mais antigas. Só ordena: não muda vencimento, situação nem valor de nenhuma operação.
+export function compareByNextOpenDue(a: Pick<OperationView, "nextOpenDueDate" | "createdAt" | "id" | "loanDate">, b: Pick<OperationView, "nextOpenDueDate" | "createdAt" | "id" | "loanDate">) {
+  if (a.nextOpenDueDate && b.nextOpenDueDate) return a.nextOpenDueDate.localeCompare(b.nextOpenDueDate) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  if (a.nextOpenDueDate) return -1;
+  if (b.nextOpenDueDate) return 1;
+  return b.loanDate.localeCompare(a.loanDate) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+}
+
 // Recebe só os dados do ciclo atual da carteira (operações, pagamentos e movimentos de capital); ciclos encerrados
 // pelo "Zerar carteira" ficam no banco e não entram nos cards.
 export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn = null, cycleNumber = 1, capitalMovements = [], operations, payments, today }: {
@@ -153,6 +166,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       interestCents: ledger.interestCents, totalCents: ledger.totalCents, originalInterestCents: operation.interestCents, originalTotalCents: operation.totalCents,
       renewals, renewalCount: ledger.renewalCount, periodNumber: ledger.periodNumber, modality, frequency, periods: ledger.periods,
       installments: ledger.schedule, nextInstallment: ledger.nextItem, nextDueDate: ledger.nextDueDate,
+      nextOpenDueDate: open && ledger.balanceCents > 0 ? ledger.nextItem?.dueDate ?? ledger.nextDueDate : null,
       periodInterestCents: ledger.periodInterestCents, originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
       paidCents: ledger.paidCents, interestPaidCents: ledger.interestPaidCents, principalPaidCents: ledger.principalPaidCents,
       interestRemainingCents: open ? ledger.interestRemainingCents : 0,
@@ -277,7 +291,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   });
 
   // Operações excluídas (CANCELED) não aparecem em nenhuma lista nem card; só no extrato do capital.
-  return { summary, profitability: summarizeOperations(live), operations: live, charges, upcoming, chart, capitalLedger: capitalLedger.reverse() };
+  return { summary, profitability: summarizeOperations(live), operations: live, operationOrder: [...live].sort(compareByNextOpenDue).map((operation) => operation.id), charges, upcoming, chart, capitalLedger: capitalLedger.reverse() };
 }
 
 export type Portfolio = ReturnType<typeof buildPortfolio>;
