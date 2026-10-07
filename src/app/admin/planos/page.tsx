@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
-import { databaseAvailable } from "@/lib/db";
+import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { loadPlanCatalog } from "@/lib/admin/queries";
 import { AdminShell, dateLabel } from "../admin-ui";
 import PlanForm from "./plan-form";
@@ -10,7 +10,10 @@ export const dynamic = "force-dynamic";
 
 // Administração → Planos: produto e preço PADRÃO. O valor que cada cliente paga fica na assinatura dele.
 export default async function PlansPage() {
-  if (!(await databaseAvailable())) redirect("/setup");
+  // Só banco não configurado vai para /setup; instabilidade ou erro mostram "tente novamente" aqui mesmo.
+  const gate = await databaseGate();
+  if (gate === "not_configured") redirect("/setup");
+  if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
   const session = await requireSuperAdmin();
   const plans = await loadPlanCatalog();
 

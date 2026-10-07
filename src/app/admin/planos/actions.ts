@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withPlatformContext } from "@/lib/auth/guards";
+import { recordAdminAudit } from "@/lib/admin/audit";
 import { plans } from "@/lib/db/schema";
 import { parseMoneyToCents } from "@/lib/finance/format";
 
@@ -28,12 +29,14 @@ const slugify = (name: string) => name.normalize("NFD").replace(/[̀-ͯ]/g, "").
 export async function createPlanAction(data: FormData): Promise<PlanActionResult> {
   const plan = readPlan(data);
   if (!plan.ok) return plan;
-  const result = await withPlatformContext(async (tx) => {
+  const result = await withPlatformContext(async (tx, { session }) => {
     const sameName = await tx.select({ id: plans.id }).from(plans).where(sql`lower(${plans.name}) = ${plan.name.toLowerCase()}`);
     if (sameName.length) return { ok: false as const, error: "Já existe um plano com este nome." };
     const suffix = randomUUID().replaceAll("-", "").slice(0, 6);
     const slug = `${slugify(plan.name)}-${suffix}`;
-    await tx.insert(plans).values({ id: `plan_${slug.replaceAll("-", "_")}`, slug, name: plan.name, description: plan.description, priceInCents: plan.priceInCents, active: plan.active });
+    const planId = `plan_${slug.replaceAll("-", "_")}`;
+    await tx.insert(plans).values({ id: planId, slug, name: plan.name, description: plan.description, priceInCents: plan.priceInCents, active: plan.active });
+    await recordAdminAudit(tx, session, { action: "PLAN_CREATED", entity: "plan", entityId: planId, tenantId: null, tenantName: null, description: `Plano ${plan.name} criado no catálogo.`, after: { name: plan.name, description: plan.description, priceInCents: plan.priceInCents, active: plan.active } });
     return { ok: true as const, message: `Plano ${plan.name} criado.` };
   });
   if (result.ok) { revalidatePath("/admin/planos"); revalidatePath("/admin"); }
@@ -44,13 +47,16 @@ export async function updatePlanAction(data: FormData): Promise<PlanActionResult
   const plan = readPlan(data);
   if (!plan.ok) return plan;
   const planId = text(data, "planId", 80);
-  const result = await withPlatformContext(async (tx) => {
-    const [current] = await tx.select({ id: plans.id }).from(plans).where(eq(plans.id, planId));
+  const result = await withPlatformContext(async (tx, { session }) => {
+    const [current] = await tx.select({ id: plans.id, name: plans.name, description: plans.description, priceInCents: plans.priceInCents, active: plans.active }).from(plans).where(eq(plans.id, planId));
     if (!current) return { ok: false as const, error: "Plano não encontrado." };
     const sameName = await tx.select({ id: plans.id }).from(plans).where(and(sql`lower(${plans.name}) = ${plan.name.toLowerCase()}`, ne(plans.id, planId)));
     if (sameName.length) return { ok: false as const, error: "Já existe outro plano com este nome." };
     // Só a linha do plano muda. Assinaturas, tenants e valores contratados ficam como estão.
     await tx.update(plans).set({ name: plan.name, description: plan.description, priceInCents: plan.priceInCents, active: plan.active, updatedAt: sql`now()` }).where(eq(plans.id, planId));
+    const { id: _id, ...before } = current;
+    void _id;
+    await recordAdminAudit(tx, session, { action: "PLAN_UPDATED", entity: "plan", entityId: planId, tenantId: null, tenantName: null, description: `Plano ${plan.name} alterado no catálogo (assinaturas não mudam).`, before, after: { name: plan.name, description: plan.description, priceInCents: plan.priceInCents, active: plan.active } });
     return { ok: true as const, message: `Plano ${plan.name} atualizado. Os valores contratados dos clientes não mudaram.` };
   });
   if (result.ok) { revalidatePath("/admin/planos"); revalidatePath("/admin"); }

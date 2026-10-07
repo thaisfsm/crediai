@@ -92,6 +92,13 @@
       "when": 1791302203681,
       "tag": "0013_payment_frequency",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791318086265,
+      "tag": "0014_admin_audit_log",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireSuperAdmin } from "@/lib/auth/guards";
-import { databaseAvailable } from "@/lib/db";
+import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { loadSaasClientDetail } from "@/lib/admin/queries";
 import { formatMoney, formatPhone, todayIso } from "@/lib/finance/format";
 import { AdminShell, CommercialBadge, Kpi, dateLabel, dueLabel, relativeAccess } from "../../admin-ui";
@@ -14,7 +14,10 @@ import { AreaChart, BarChart } from "./charts";
 export const dynamic = "force-dynamic";
 
 export default async function SaasClientPage({ params }: { params: Promise<{ id: string }> }) {
-  if (!(await databaseAvailable())) redirect("/setup");
+  // Só banco não configurado vai para /setup; instabilidade ou erro mostram "tente novamente" aqui mesmo.
+  const gate = await databaseGate();
+  if (gate === "not_configured") redirect("/setup");
+  if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
   const session = await requireSuperAdmin();
   const { id } = await params;
   const detail = await loadSaasClientDetail(id.slice(0, 80));
@@ -138,7 +141,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
         <ul className="central-list">
           {detail.users.map((user) => (
             <li key={user.id}>
-              <span><strong>{user.name}</strong><small>{user.email} · {user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "TENANT_USER"} · último acesso {relativeAccess(user.lastLoginAt)}</small></span>
+              <span><strong>{user.name}</strong><small>{user.email} · {user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "TENANT_USER"} · último acesso {relativeAccess(user.lastAccessAt)}</small></span>
               <b className={user.active ? "is-ok" : "is-late"}>{user.active ? (user.mustChangePassword ? "Senha provisória" : "Ativo") : "Bloqueado"}</b>
             </li>
           ))}

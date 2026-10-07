@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { activateSubscriptionAction, registerSubscriptionPaymentAction, resetSaasClientPasswordAction, setSaasClientAccessAction, setSaasClientStatusAction, updateCommercialTermsAction } from "../../actions";
 import TemporaryPassword from "../temporary-password";
 import CommercialFields, { type PlanOption, type TermsInitial } from "../commercial-fields";
-import { formatDate, formatMoney } from "@/lib/finance/format";
+import { formatDate, formatMoney, parseMoneyToCents } from "@/lib/finance/format";
+import { CONDITION_LABEL } from "@/lib/billing/rules";
 
 type Subscription = { activatedAt: string | null; nextDueDate: string | null; contractedPriceCents: number | null; courtesy: boolean; terms: TermsInitial };
 type Result = { ok: boolean; message?: string; error?: string; email?: string; temporaryPassword?: string };
@@ -49,10 +50,28 @@ export default function ClientActions({ tenantId, status, userActive, locked, pl
     for (const [key, value] of Object.entries(entries)) data.set(key, value);
     return data;
   };
-  const submitPanel = (action: (data: FormData) => Promise<Result>) => (event: FormEvent<HTMLFormElement>) => {
+  // Ativar, alterar a condição comercial e registrar mensalidade mudam o que o cliente paga: antes de enviar, o
+  // SUPER_ADMIN confirma o resumo do que vai ser gravado (um clique sozinho não ativa nem altera nada).
+  const summary = (data: FormData) => {
+    const condition = String(data.get("condition") ?? "") as keyof typeof CONDITION_LABEL;
+    const plan = plans.find((item) => item.id === data.get("planId"))?.name ?? "—";
+    const cents = condition === "COURTESY" ? 0 : parseMoneyToCents(String(data.get("contractedPrice") ?? ""));
+    const lines = [`Plano: ${plan}`, `Condição: ${CONDITION_LABEL[condition] ?? "—"}`, `Valor contratado: ${cents === null ? "—" : `${formatMoney(cents)}/mês`}`];
+    if (data.get("activatedAt")) lines.push(`Data de ativação: ${formatDate(String(data.get("activatedAt")))}`);
+    if (data.get("dueDate") && condition !== "COURTESY") lines.push(`Vencimento: ${formatDate(String(data.get("dueDate")))}`);
+    if (data.get("graceDays")) lines.push(`Tolerância: ${data.get("graceDays")} dias`);
+    return lines.join("\n");
+  };
+  const QUESTIONS: Record<"activate" | "terms" | "payment", (data: FormData) => string> = {
+    activate: (data) => `Ativar a assinatura deste cliente SaaS?\n\n${summary(data)}\n\nO período de teste termina agora.`,
+    terms: (data) => `Salvar a nova condição comercial deste cliente?\n\n${summary(data)}`,
+    payment: (data) => `Registrar como paga a mensalidade de ${formatDate(String(data.get("dueDate")))} (${formatMoney(subscription.contractedPriceCents ?? 0)}), paga em ${formatDate(String(data.get("paidAt")))}?`,
+  };
+  const submitPanel = (kind: "activate" | "terms" | "payment", action: (data: FormData) => Promise<Result>) => (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     data.set("tenantId", tenantId);
+    if (!window.confirm(QUESTIONS[kind](data))) return;
     void execute(() => action(data));
   };
 
@@ -76,7 +95,7 @@ export default function ClientActions({ tenantId, status, userActive, locked, pl
       </div>
 
       {panel === "activate" && (
-        <form className="central-form commercial-panel" onSubmit={submitPanel(activateSubscriptionAction)} aria-label="Ativar assinatura">
+        <form className="central-form commercial-panel" onSubmit={submitPanel("activate", activateSubscriptionAction)} aria-label="Ativar assinatura">
           <h3>Ativar assinatura</h3>
           <CommercialFields plans={plans} initial={subscription.terms} mode="activate" today={today} />
           <p className="central-hint">O tenant e a assinatura passam a Ativo e o período de teste termina. A carteira, os clientes finais, as operações e os pagamentos deste cliente não são alterados.</p>
@@ -88,7 +107,7 @@ export default function ClientActions({ tenantId, status, userActive, locked, pl
       )}
 
       {panel === "terms" && (
-        <form className="central-form commercial-panel" onSubmit={submitPanel(updateCommercialTermsAction)} aria-label="Alterar condição comercial">
+        <form className="central-form commercial-panel" onSubmit={submitPanel("terms", updateCommercialTermsAction)} aria-label="Alterar condição comercial">
           <h3>Alterar condição comercial</h3>
           <CommercialFields plans={plans} initial={subscription.terms} mode="edit" today={today} />
           <p className="central-hint">Muda só este cliente. O preço padrão do plano e os outros clientes não são alterados.</p>
@@ -100,7 +119,7 @@ export default function ClientActions({ tenantId, status, userActive, locked, pl
       )}
 
       {panel === "payment" && subscription.nextDueDate && (
-        <form className="central-form commercial-panel" onSubmit={submitPanel(registerSubscriptionPaymentAction)} aria-label="Registrar mensalidade paga">
+        <form className="central-form commercial-panel" onSubmit={submitPanel("payment", registerSubscriptionPaymentAction)} aria-label="Registrar mensalidade paga">
           <h3>Registrar mensalidade paga</h3>
           <input type="hidden" name="dueDate" value={subscription.nextDueDate} />
           <p>Mensalidade com vencimento em <b>{formatDate(subscription.nextDueDate)}</b> · {formatMoney(subscription.contractedPriceCents ?? 0)}</p>

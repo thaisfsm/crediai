@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { authClient } from "@/lib/auth-client";
@@ -10,6 +11,18 @@ import { Icon, type IconName } from "./ui-icon";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
+
+// Cada tela do menu tem um endereço (/?tela=…). Os itens do menu são links de verdade: um clique dado antes de o
+// JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
+// o clique troca a tela na hora, sem recarregar, e só atualiza o endereço.
+export const NAV_SLUGS: Record<NavKey, string> = {
+  "Visão geral": "visao-geral", Capital: "capital", Clientes: "clientes", Operações: "operacoes",
+  Pagamentos: "pagamentos", Cobranças: "cobrancas", Relatórios: "relatorios", Configurações: "configuracoes",
+};
+export function navKeyFromSlug(slug: string | undefined): NavKey {
+  return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
+}
+const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?tela=${NAV_SLUGS[label]}`);
 
 const navGroups: { title: string; items: { label: NavKey; icon: IconName }[] }[] = [
   { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
@@ -146,10 +159,10 @@ function useTableLabels() {
   }, []);
 }
 
-export default function Dashboard({ userName, portfolio, isSuperAdmin = false }: { userName: string; portfolio: TenantPortfolio; isSuperAdmin?: boolean }) {
+export default function Dashboard({ userName, portfolio, isSuperAdmin = false, initialSection }: { userName: string; portfolio: TenantPortfolio; isSuperAdmin?: boolean; initialSection?: string }) {
   const router = useRouter();
   const initials = userName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
-  const [active, setActive] = useState<NavKey>("Visão geral");
+  const [active, setActive] = useState<NavKey>(() => navKeyFromSlug(initialSection));
   const [period, setPeriod] = useState<ChartPeriod>("30D");
   const [chargeFilter, setChargeFilter] = useState<ChargeFilter>("Hoje");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -183,15 +196,17 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false }:
     setChargesView(options.charges ?? "Em aberto");
     setActive(label);
     setMobileMenuOpen(false);
+    // Endereço da tela atual (recarregar a página mantém a tela). replaceState não refaz a requisição ao servidor.
+    if (window.location.pathname === "/" && window.location.search !== navHref(label).slice(1)) window.history.replaceState(window.history.state, "", navHref(label));
   };
 
   return (
     <div className="app-shell">
       {mobileMenuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <aside className={`sidebar ${mobileMenuOpen ? "sidebar-open" : ""}`} aria-label="Navegação principal">
-        <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); navigate("Visão geral"); }} aria-label="CrediAI, início">
+        <Link prefetch={false} className="brand" href="/" onClick={(event) => { event.preventDefault(); navigate("Visão geral"); }} aria-label="CrediAI, início">
           <span className="brand-logo-image" role="img" aria-label="CrediAI — Crédito + Inteligência" />
-        </a>
+        </Link>
         <div className="workspace-switcher">
           <div className="workspace-avatar">{initials}</div>
           <div className="workspace-copy"><span>Minha carteira</span><small>Espaço de trabalho</small></div>
@@ -202,10 +217,10 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false }:
             <div className="nav-group" key={group.title}>
               <p className="nav-heading">{group.title}</p>
               {group.items.map((item) => (
-                <button key={item.label} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={() => navigate(item.label)} aria-current={active === item.label ? "page" : undefined}>
+                <Link prefetch={false} key={item.label} href={navHref(item.label)} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={(event) => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); navigate(item.label); }} aria-current={active === item.label ? "page" : undefined}>
                   <Icon name={item.icon} size={18} /><span>{item.label}</span>
                   {item.label === "Cobranças" && pendingCharges > 0 && <span className="nav-count">{pendingCharges}</span>}
-                </button>
+                </Link>
               ))}
             </div>
           ))}
@@ -258,10 +273,10 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false }:
               {summary.needsInitialCapital && <WalletSetup onSaved={refresh} cycleNumber={summary.cycleNumber} />}
 
               <section className="metric-grid" aria-label="Indicadores financeiros da carteira">
-                <a href="#capital" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir capital da carteira" onClick={(event) => { event.preventDefault(); navigate("Capital"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Aportado {formatMoney(summary.investedCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></a>
-                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Capital emprestado, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "lent" }); }}><div className="metric-top"><span>Capital emprestado</span><span className="metric-icon metric-icon-teal"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={summary.lentCents} /></div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">Principal a receber</span></div><MetricSignal /></a>
-                <a href="#cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></a>
-                <a href="#operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></a>
+                <Link prefetch={false} href="/?tela=capital" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir capital da carteira" onClick={(event) => { event.preventDefault(); navigate("Capital"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Aportado {formatMoney(summary.investedCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></Link>
+                <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Capital emprestado, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "lent" }); }}><div className="metric-top"><span>Capital emprestado</span><span className="metric-icon metric-icon-teal"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={summary.lentCents} /></div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">Principal a receber</span></div><MetricSignal /></Link>
+                <Link prefetch={false} href="/?tela=cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></Link>
+                <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></Link>
               </section>
 
               <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">

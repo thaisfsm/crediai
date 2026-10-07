@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import SignOutButton from "@/app/sign-out-button";
 import { formatDate, todayIso } from "@/lib/finance/format";
+import { relativeAccessLabel } from "@/lib/admin/last-access";
 
 // Peças visuais compartilhadas pela Central de Gestão (somente servidor).
 
@@ -48,14 +49,8 @@ export function dateLabel(value: string | Date | null) {
   return formatDate(typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : todayIso(new Date(value)));
 }
 
-export function relativeAccess(value: string | null) {
-  if (!value) return "Nunca acessou";
-  const days = Math.floor((Date.now() - new Date(value).getTime()) / (24 * 60 * 60 * 1000));
-  if (days <= 0) return "Hoje";
-  if (days === 1) return "Ontem";
-  if (days < 30) return `Há ${days} dias`;
-  return dateLabel(value);
-}
+// Último acesso: mesma regra e mesmo texto em todas as telas (src/lib/admin/last-access.ts).
+export const relativeAccess = (value: string | null) => relativeAccessLabel(value);
 
 const NAV = [
   ["clientes", "/admin", "Clientes SaaS"],
