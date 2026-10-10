@@ -9,6 +9,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
+import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
 export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
   const [pending, startTransition] = useTransition();
@@ -334,6 +335,10 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
         <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
         <label className="field"><span>Telefone</span><MaskedInput name="phone" mask={maskPhone} initial={editing ? formatPhone(editing.phone) ?? "" : ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
+        <label className="field"><span>WhatsApp</span><MaskedInput name="whatsapp" mask={maskPhone} initial={formatPhone(editing?.whatsapp ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
+        <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
+        <label className="field"><span>Instagram</span><input name="instagram" maxLength={200} defaultValue={editing?.instagram ?? ""} placeholder="@usuario ou instagram.com/usuario" /></label>
+        <label className="field"><span>Facebook</span><input name="facebook" maxLength={200} defaultValue={editing?.facebook ?? ""} placeholder="@usuario ou facebook.com/usuario" /></label>
         <label className="field field-wide"><span>Observações</span><input name="notes" placeholder="Opcional" maxLength={500} defaultValue={editing?.notes ?? ""} /></label>
         <AddressFields kind="residential" client={editing} />
         <AddressFields kind="business" client={editing} />
@@ -498,6 +503,12 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
       <dl className="payment-summary profile-summary">
         <div><dt>CPF</dt><dd>{formatCpf(client.document) ?? "—"}</dd></div>
         <div><dt>Telefone</dt><dd>{formatPhone(client.phone) ?? "—"}</dd></div>
+        <div><dt>WhatsApp</dt><dd>{client.whatsapp ? (whatsappHref(client.whatsapp) ? <a className="text-link inline-link" href={whatsappHref(client.whatsapp) ?? undefined} target="_blank" rel="noreferrer noopener">{formatPhone(client.whatsapp)}</a> : formatPhone(client.whatsapp)) : "—"}</dd></div>
+        <div><dt>E-mail</dt><dd>{client.email ? <a className="text-link inline-link" href={`mailto:${client.email}`}>{client.email}</a> : "—"}</dd></div>
+        {(Object.keys(SOCIAL_NETWORKS) as SocialNetwork[]).map((network) => {
+          const href = socialHref(network, client[network]);
+          return <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd>{!client[network] ? "—" : href ? <a className="text-link inline-link" href={href} target="_blank" rel="noreferrer noopener">{socialLabel(client[network])}</a> : client[network]}</dd></div>;
+        })}
         {(Object.keys(addressKinds) as AddressKind[]).map((kind) => <div key={kind}><dt>{addressKinds[kind]}</dt><dd>{formatAddress(client, kind) ?? "Não informado"}</dd></div>)}
         {references.map((reference) => (
           <div key={reference.slot}><dt>Referência {reference.slot}</dt><dd>{reference.name ? [reference.name, reference.relationship, reference.phone].filter(Boolean).join(" · ") : "Não informada"}</dd></div>
@@ -604,7 +615,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfoli
         {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente cadastrado ainda." /> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Operações</th><th>Emprestado</th><th>Juros recebidos</th><th>Saldo</th><th /></tr></thead>
-            <tbody>{portfolio.clients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td>{formatPhone(client.phone) ?? "—"}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button><button className="outline-button" onClick={() => { setEditing(client); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></span></td></tr>)}</tbody>
+            <tbody>{portfolio.clients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td>{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button><button className="outline-button" onClick={() => { setEditing(client); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></span></td></tr>)}</tbody>
           </table></div>
         )}
         {portfolio.archivedClients.length > 0 && <p className="capital-note">Arquivados ({portfolio.archivedClients.length}): {portfolio.archivedClients.map((client) => client.name).join(", ")}. O histórico deles continua em Operações e Pagamentos.</p>}

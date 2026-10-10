@@ -117,7 +117,7 @@ export function investorFilters(search: { q?: string; status?: string; carteira?
   const page = Number(search.pagina);
   return {
     q: (search.q ?? "").trim().slice(0, 120),
-    status: parseInvestorStatus(search.status ?? "") ?? "",
+    status: (parseInvestorStatus(search.status ?? "") ?? "") as InvestorStatus | "",
     carteira: (search.carteira ?? "").trim().slice(0, 80),
     page: Number.isInteger(page) && page > 0 ? page : 1,
   };
