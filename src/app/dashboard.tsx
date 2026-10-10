@@ -2,34 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
-import { Icon, type IconName } from "./ui-icon";
+import { Icon } from "./ui-icon";
+import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
-
-type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
-
-// Cada tela do menu tem um endereço (/?tela=…). Os itens do menu são links de verdade: um clique dado antes de o
-// JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
-// o clique troca a tela na hora, sem recarregar, e só atualiza o endereço.
-export const NAV_SLUGS: Record<NavKey, string> = {
-  "Visão geral": "visao-geral", Capital: "capital", Clientes: "clientes", Operações: "operacoes",
-  Pagamentos: "pagamentos", Cobranças: "cobrancas", Relatórios: "relatorios", Configurações: "configuracoes",
-};
-export function navKeyFromSlug(slug: string | undefined): NavKey {
-  return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
-}
-const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?tela=${NAV_SLUGS[label]}`);
-
-const navGroups: { title: string; items: { label: NavKey; icon: IconName }[] }[] = [
-  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
-  { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Relatórios", icon: "chart" }] },
-  { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
-];
-
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
 const chargeHeadings: Record<ChargeFilter, { heading: string; description: string; totalLabel: string; empty: string }> = {
@@ -137,31 +117,9 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 }
 
 
-// Em telas estreitas as tabelas viram cartões (CSS): cada célula recebe o título da sua coluna em data-label.
-// Observa a página porque as tabelas mudam a cada navegação e atualização dos dados.
-function useTableLabels() {
-  useEffect(() => {
-    const label = () => document.querySelectorAll<HTMLTableElement>(".data-table").forEach((table) => {
-      const heads = [...table.querySelectorAll("thead th")].map((th) => th.textContent?.trim() ?? "");
-      table.querySelectorAll<HTMLTableRowElement>("tbody tr, tfoot tr").forEach((row) => {
-        let column = 0;
-        for (const cell of row.cells) {
-          const text = heads[column] ?? "";
-          if (cell.dataset.label !== text) cell.dataset.label = text;
-          column += cell.colSpan || 1;
-        }
-      });
-    });
-    label();
-    const observer = new MutationObserver(label);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, []);
-}
-
 export default function Dashboard({ userName, portfolio, isSuperAdmin = false, initialSection }: { userName: string; portfolio: TenantPortfolio; isSuperAdmin?: boolean; initialSection?: string }) {
   const router = useRouter();
-  const initials = userName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");
+  const initials = initialsOfUser(userName);
   const [active, setActive] = useState<NavKey>(() => navKeyFromSlug(initialSection));
   const [period, setPeriod] = useState<ChartPeriod>("30D");
   const [chargeFilter, setChargeFilter] = useState<ChargeFilter>("Hoje");
@@ -203,33 +161,7 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
   return (
     <div className="app-shell">
       {mobileMenuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
-      <aside className={`sidebar ${mobileMenuOpen ? "sidebar-open" : ""}`} aria-label="Navegação principal">
-        <Link prefetch={false} className="brand" href="/" onClick={(event) => { event.preventDefault(); navigate("Visão geral"); }} aria-label="CrediAI, início">
-          <span className="brand-logo-image" role="img" aria-label="CrediAI — Crédito + Inteligência" />
-        </Link>
-        <div className="workspace-switcher">
-          <div className="workspace-avatar">{initials}</div>
-          <div className="workspace-copy"><span>Minha carteira</span><small>Espaço de trabalho</small></div>
-          <Icon name="chevron" size={15} />
-        </div>
-        <nav className="side-nav">
-          {navGroups.map((group) => (
-            <div className="nav-group" key={group.title}>
-              <p className="nav-heading">{group.title}</p>
-              {group.items.map((item) => (
-                <Link prefetch={false} key={item.label} href={navHref(item.label)} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={(event) => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return; event.preventDefault(); navigate(item.label); }} aria-current={active === item.label ? "page" : undefined}>
-                  <Icon name={item.icon} size={18} /><span>{item.label}</span>
-                  {item.label === "Cobranças" && pendingCharges > 0 && <span className="nav-count">{pendingCharges}</span>}
-                </Link>
-              ))}
-            </div>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="security-note"><span className="security-icon"><Icon name="shield" size={15} /></span><span><strong>Ambiente isolado</strong><small>Separação reforçada por tenant</small></span></div>
-          <button className="nav-item help-link" onClick={() => navigate("Configurações")}><Icon name="help" size={18} /><span>Central de ajuda</span><Icon name="arrow" size={14} /></button>
-        </div>
-      </aside>
+      <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} onNavigate={navigate} />
 
       <main className="main-area">
         <header className="topbar">
