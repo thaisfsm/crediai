@@ -40,6 +40,16 @@ export const billingCycle = pgEnum("billing_cycle", ["MONTHLY"]);
 // usa as mesmas linhas (PENDING ao gerar, PAID ao confirmar), guardando o identificador externo.
 export const subscriptionChargeStatus = pgEnum("subscription_charge_status", ["PENDING", "PAID", "CANCELED", "FAILED"]);
 
+// Investidores: quem coloca dinheiro na carteira por meio de um contrato de investimento. Nenhuma regra financeira do
+// investimento (rendimento, capitalização, resgate, multa, renovação) está definida ainda: os contratos guardam só o
+// que foi combinado (valor, taxa e o período da taxa, datas) e o status.
+export const investorStatus = pgEnum("investor_status", ["ACTIVE", "INACTIVE"]);
+export const investmentStatus = pgEnum("investment_status", ["PENDING_SIGNATURE", "ACTIVE", "CLOSED", "CANCELED"]);
+// Período a que a taxa combinada se refere, escolhido explicitamente em cada contrato (o sistema não presume nenhum).
+export const investmentRatePeriod = pgEnum("investment_rate_period", ["MONTHLY", "YEARLY", "CONTRACT_TERM", "OTHER"]);
+// Tipos de documento do investimento. Novos tipos entram aqui (ALTER TYPE … ADD VALUE) sem mudar a tabela.
+export const investmentDocumentKind = pgEnum("investment_document_kind", ["SIGNED_CONTRACT", "ADDENDUM", "TRANSFER_RECEIPT", "OTHER"]);
+
 export const plans = pgTable("plan", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -236,6 +246,11 @@ export const clients = pgTable("client", {
   document: text("document"),
   phone: text("phone"),
   notes: text("notes"),
+  // Contatos e redes sociais (opcionais). Instagram/Facebook guardam @usuário ou o endereço do perfil, como digitado.
+  whatsapp: text("whatsapp"),
+  email: text("email"),
+  instagram: text("instagram"),
+  facebook: text("facebook"),
   // Endereço residencial
   residentialCep: text("residential_cep"),
   residentialStreet: text("residential_street"),
@@ -429,7 +444,94 @@ export const capitalMovements = pgTable("capital_movement", {
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
-// Auditoria administrativa: quem fez o quê na administração da plataforma (somente SUPER_ADMIN grava e lê).
+// Investidor do tenant (pessoa física ou jurídica). Não há cadastro público: só usuários do tenant e o SUPER_ADMIN criam.
+export const investors = pgTable("investor", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  // Nome ou razão social.
+  name: text("name").notNull(),
+  // CPF (11) ou CNPJ (14), só dígitos.
+  document: text("document"),
+  phone: text("phone"),
+  whatsapp: text("whatsapp"),
+  email: text("email"),
+  // @usuário ou endereço do perfil, como digitado.
+  instagram: text("instagram"),
+  facebook: text("facebook"),
+  notes: text("notes"),
+  status: investorStatus("status").notNull().default("ACTIVE"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investor_tenant_id_idx").on(table.tenantId),
+  unique("investor_tenant_id_id_unique").on(table.tenantId, table.id),
+  // O mesmo CPF/CNPJ não aparece duas vezes na mesma carteira.
+  uniqueIndex("investor_tenant_document_unique").on(table.tenantId, table.document).where(sql`${table.document} is not null`),
+  check("investor_name_not_blank", sql`length(trim(${table.name})) > 0`),
+  ...tenantPolicies("investor", table.tenantId),
+]).enableRLS();
+
+// Contrato de investimento: um investidor pode ter vários. Guarda só o combinado; os cálculos (rendimento, saldo, total
+// a devolver, vencimentos de rendimento, renovação, resgate) dependem de regras ainda não definidas. calculation_rule
+// fica vazio até lá, e as tabelas futuras (pagamentos de rendimento, resgates, renovações) se ligam por (tenant_id, id).
+export const investments = pgTable("investment", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investorId: text("investor_id").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  // Taxa combinada em pontos-base (1% = 100) e o período a que ela se refere. Nenhum cálculo usa estes campos ainda.
+  agreedRateBps: integer("agreed_rate_bps").notNull(),
+  ratePeriod: investmentRatePeriod("rate_period").notNull(),
+  startDate: date("start_date", { mode: "string" }).notNull(),
+  // Vencimento do contrato e, se combinado, o dia do mês de vencimento. Informativos: não geram cobranças nem rendimentos.
+  maturityDate: date("maturity_date", { mode: "string" }),
+  dueDay: integer("due_day"),
+  notes: text("notes"),
+  status: investmentStatus("status").notNull().default("ACTIVE"),
+  calculationRule: text("calculation_rule"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investment_tenant_id_idx").on(table.tenantId),
+  index("investment_investor_id_idx").on(table.investorId),
+  unique("investment_tenant_id_id_unique").on(table.tenantId, table.id),
+  foreignKey({ name: "investment_investor_same_tenant_fk", columns: [table.tenantId, table.investorId], foreignColumns: [investors.tenantId, investors.id] }).onDelete("restrict"),
+  check("investment_amount_positive", sql`${table.amountCents} > 0`),
+  check("investment_rate_not_negative", sql`${table.agreedRateBps} >= 0`),
+  check("investment_maturity_after_start", sql`${table.maturityDate} is null or ${table.maturityDate} >= ${table.startDate}`),
+  check("investment_due_day_valid", sql`${table.dueDay} is null or ${table.dueDay} between 1 and 31`),
+  ...tenantPolicies("investment", table.tenantId),
+]).enableRLS();
+
+// Documentos do INVESTIMENTO (não do investidor): contrato assinado, aditivos, comprovantes. O arquivo fica no banco,
+// como os documentos de clientes. Substituir não apaga: a versão anterior fica no histórico com replaced_at.
+export const investmentDocuments = pgTable("investment_document", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  kind: investmentDocumentKind("kind").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  content: bytea("content").notNull(),
+  uploadedByUserId: text("uploaded_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  replacedAt: timestamp("replaced_at", { withTimezone: true }),
+  replacedByDocumentId: text("replaced_by_document_id"),
+}, (table) => [
+  index("investment_document_investment_id_idx").on(table.investmentId),
+  foreignKey({ name: "investment_document_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  // Um único contrato assinado vigente por investimento; os anteriores ficam como substituídos.
+  uniqueIndex("investment_document_current_contract_unique").on(table.investmentId).where(sql`${table.kind} = 'SIGNED_CONTRACT' and ${table.replacedAt} is null`),
+  check("investment_document_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
+  check("investment_document_replaced_link", sql`(${table.replacedAt} is null) = (${table.replacedByDocumentId} is null)`),
+  ...tenantPolicies("investment_document", table.tenantId),
+]).enableRLS();
+
+// Auditoria administrativa: quem fez o quê na administração da plataforma (somente SUPER_ADMIN lê; grava o SUPER_ADMIN e,
+// no módulo Investidores, também o usuário do próprio tenant).
 // Sem chaves estrangeiras de propósito: o registro sobrevive mesmo que o tenant ou o usuário deixem de existir, e por
 // isso guarda também o nome e o e-mail de quem agiu e o nome do tenant no momento da ação. É só de inserção: não há
 // política de UPDATE/DELETE e o gatilho admin_audit_log_append_only (migração 0014) recusa alteração e exclusão até
@@ -457,6 +559,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   index("admin_audit_log_action_idx").on(table.action, table.createdAt),
   pgPolicy("admin_audit_log_select_admin_only", { for: "select", using: adminScope }),
   pgPolicy("admin_audit_log_insert_admin_only", { for: "insert", withCheck: adminScope }),
+  // O usuário do tenant também registra o que faz no módulo Investidores, só no próprio tenant (e continua sem ler o log).
+  pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document')` }),
 ]).enableRLS();
 
-export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

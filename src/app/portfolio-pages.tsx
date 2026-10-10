@@ -10,7 +10,7 @@ import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianSta
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
 
-function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
+export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
   const [pending, startTransition] = useTransition();
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -36,12 +36,12 @@ function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone
   return { pending, feedback, onSubmit };
 }
 
-function Feedback({ feedback }: { feedback: { tone: "ok" | "error"; text: string } | null }) {
+export function Feedback({ feedback }: { feedback: { tone: "ok" | "error"; text: string } | null }) {
   if (!feedback) return null;
   return <p className={`form-feedback ${feedback.tone === "error" ? "form-feedback-error" : ""}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.text}</p>;
 }
 
-function PageHeading({ eyebrow, title, description, children }: { eyebrow: string; title: string; description: string; children?: ReactNode }) {
+export function PageHeading({ eyebrow, title, description, children }: { eyebrow: string; title: string; description: string; children?: ReactNode }) {
   return (
     <section className="page-heading">
       <div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>
@@ -50,7 +50,7 @@ function PageHeading({ eyebrow, title, description, children }: { eyebrow: strin
   );
 }
 
-function EmptyPanel({ icon, text, action }: { icon: IconName; text: string; action?: ReactNode }) {
+export function EmptyPanel({ icon, text, action }: { icon: IconName; text: string; action?: ReactNode }) {
   return <div className="empty-panel"><span className="coming-icon"><Icon name={icon} size={22} /></span><p>{text}</p>{action}</div>;
 }
 
@@ -252,7 +252,7 @@ function ResetWalletPanel({ portfolio, onChanged }: { portfolio: TenantPortfolio
 type ClientRow = TenantPortfolio["clients"][number];
 
 // Campo com máscara (CPF, telefone, CEP) que guarda o valor digitado já formatado.
-function MaskedInput({ name, mask, initial, ...props }: { name: string; mask: (value: string) => string; initial: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue">) {
+export function MaskedInput({ name, mask, initial, ...props }: { name: string; mask: (value: string) => string; initial: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue">) {
   const [value, setValue] = useState(initial);
   return <input name={name} value={value} onChange={(event) => setValue(mask(event.target.value))} {...props} />;
 }
@@ -450,7 +450,7 @@ function operationPhrases(operation: OperationView) {
   return phrases;
 }
 
-const formatBytes = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(Math.round(bytes / 1024), 1)} KB` : `${(bytes / 1024 / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`);
+export const formatBytes = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(Math.round(bytes / 1024), 1)} KB` : `${(bytes / 1024 / 1024).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`);
 
 // Documentos anexados ao cadastro do cliente (PDF ou imagem, até 5 MB). Cada arquivo fica ligado a este cliente.
 function ClientDocuments({ client, onChanged }: { client: ClientRow; onChanged: () => void }) {
