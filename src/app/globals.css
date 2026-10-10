@@ -1051,6 +1051,7 @@ button { color:inherit; }
 @media (max-width:960px) { .investor-filters { grid-template-columns:1fr 1fr; } .investor-filters .field:first-child { grid-column:1 / -1; } }
 @media (max-width:740px) {
   .metric-grid.metric-grid-3 { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .metric-grid-3 .metric-foot { flex-direction:column; align-items:flex-start; gap:3px; }
   .breadcrumb-step:not(:last-child) { display:none; }
   .replace-document .form-grid-inline { grid-template-columns:1fr; }
 }
