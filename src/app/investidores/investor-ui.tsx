@@ -360,7 +360,7 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
         <UploadDocumentForm key={String(hasContract)} investmentId={investment.id} hasContract={hasContract} onDone={refresh} />
         {history.length > 0 && (
           <details className="document-history">
-            <summary>Versões substituídas ({history.length})</summary>
+            <summary>{`Versões substituídas (${history.length})`}</summary>
             <ul className="document-list">{history.map((document) => (
               <li key={document.id}>
                 <div><strong>{DOCUMENT_KINDS[document.kind]}</strong><small>{document.fileName} · enviado em {dateOf(document.createdAt)} · substituído em {dateOf(document.replacedAt as string)}</small></div>

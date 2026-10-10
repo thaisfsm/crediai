@@ -7,6 +7,7 @@ e nunca devem ser apontados para a produção. Não usam dados financeiros reais
 |---|---|
 | `isolation.e2e.mjs` | Tenant A não lê nem altera clientes, operações, pagamentos, carteira, documentos, dashboard ou relatórios do tenant B (inclusive forjando ids nas server actions); TENANT_USER não entra na administração, não usa nenhuma ação administrativa, não muda assinatura/plano/valor e não vira SUPER_ADMIN; SUPER_ADMIN acessa a administração. |
 | `admin-audit.e2e.mjs` | Cada ação administrativa grava auditoria (quem, quando, cliente SaaS, antes/depois, IP, navegador); tela Auditoria com busca, filtros e ordem; último acesso igual nas três telas; Registros com a conta MASTER e o vencimento original corretos. |
+| `investors.e2e.mjs` | Investidores: cadastro, edição e status; investimentos com período da taxa explícito; lista, busca, filtros e fichas; documentos do investimento (enviar, visualizar, baixar, substituir com histórico); contatos e redes sociais do cliente; TENANT_USER não acessa outro tenant (páginas, download e ações com ids forjados); MASTER vê e administra todas as carteiras; auditoria sem conteúdo sensível; nenhum dado financeiro alterado. |
 | `browser.e2e.mjs` | Clique no menu antes da hidratação; telas sem rolagem horizontal em 390 px; banco fora do ar sem ir para `/setup` e sem perder a sessão; sessões (várias, saída, vencida, senha provisória). |
 
 ## Ambiente
@@ -19,6 +20,6 @@ e nunca devem ser apontados para a produção. Não usam dados financeiros reais
 3. Rodar um arquivo por vez (os logins são espaçados por causa do limite de tentativas):
 
 ```
-E2E_DATABASE_URL=postgres://dono:senha@127.0.0.1:5432/crediai node --test --test-concurrency=1 tests/e2e/isolation.e2e.mjs tests/e2e/admin-audit.e2e.mjs
+E2E_DATABASE_URL=postgres://dono:senha@127.0.0.1:5432/crediai node --test --test-concurrency=1 tests/e2e/investors.e2e.mjs tests/e2e/isolation.e2e.mjs tests/e2e/admin-audit.e2e.mjs
 E2E_DATABASE_URL=… PLAYWRIGHT_MODULE=/caminho/playwright/index.mjs node --test tests/e2e/browser.e2e.mjs
 ```

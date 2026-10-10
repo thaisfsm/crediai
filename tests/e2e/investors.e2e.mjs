@@ -122,7 +122,7 @@ test("V4. listar e acessar detalhes: painel, lista com busca/filtros, ficha e co
   for (const expected of ["Investidores", "Capital investido", "R$ 65.000,00", "Investimentos ativos", "Rendimentos previstos", "Aguardando regra", "Total a devolver", "Próximos vencimentos", "Investidora do Robério Ltda", "411.797.058-58", "investidora@teste.local", "Instagram", "Facebook"]) assert.ok(list.html.includes(expected), `lista sem "${expected}"`);
   assert.ok(!list.html.includes("Investidor do Fernando"));
   assert.ok((await page(robério, "/investidores?q=79705")).html.includes("Investidora do Robério Ltda"), "busca por CPF");
-  assert.ok(!(await page(robério, "/investidores?q=zzz")).html.includes("Investidora do Robério Ltda"));
+  assert.ok((await page(robério, "/investidores?q=zzz")).html.includes("Nenhum investidor com esses filtros"));
   assert.ok((await page(robério, "/investidores?status=INACTIVE")).html.includes("Nenhum investidor com esses filtros"));
   const detail = await page(robério, `/investidores/${ids.investorA}`);
   assert.equal(detail.status, 200);
@@ -152,7 +152,7 @@ test("V5. vincular documento ao investimento: enviar, visualizar, baixar e subst
   assert.equal(replaced?.ok, true, JSON.stringify(replaced));
   ids.documentA2 = replaced.id;
   const versions = await admin(`select id, replaced_by_document_id, replaced_at is not null as replaced from investment_document where investment_id = '${ids.investmentA}' order by created_at`);
-  assert.deepEqual(versions, [{ id: ids.documentA, replaced_by_document_id: ids.documentA2, replaced: true }, { id: ids.documentA2, replaced_by_document_id: null, replaced: false }]);
+  assert.deepEqual([...versions], [{ id: ids.documentA, replaced_by_document_id: ids.documentA2, replaced: true }, { id: ids.documentA2, replaced_by_document_id: null, replaced: false }]);
   assert.equal((await action(robério, "replaceInvestmentDocumentAction", { documentId: ids.documentA }, { file: [PDF2, "application/pdf", "x.pdf"] }))?.ok, false, "versão antiga não é substituída de novo");
   const contract = await page(robério, `/investidores/investimentos/${ids.investmentA}`);
   assert.ok(contract.html.includes("contrato-assinado.pdf") && contract.html.includes("Versões substituídas (1)") && !contract.html.includes("Contrato assinado ainda não enviado"));
@@ -176,7 +176,7 @@ test("V6. editar cliente adicionando WhatsApp, e-mail, Instagram e Facebook (nad
 });
 
 test("V7. TENANT_USER não acessa investidores, investimentos nem documentos de outro tenant", async () => {
-  const before = await one(`select md5(string_agg(row(x.*)::text, '|' order by x.id)) from (select id, tenant_id, name, document, status, updated_at from investor union all select id, tenant_id, investor_id, amount_cents::text, status::text, updated_at from investment) x`);
+  const before = await one(`select md5(string_agg(row(x.*)::text, '|' order by x.id)) from (select id, tenant_id, name, document, status::text, updated_at from investor union all select id, tenant_id, investor_id, amount_cents::text, status::text, updated_at from investment) x`);
   const docsBefore = await one(`select md5(string_agg(row(d.id, d.replaced_at)::text, '|' order by d.id)) from investment_document d`);
   for (const path of [`/investidores/${ids.investorB}`, `/investidores/investimentos/${ids.investmentB}`]) assert.equal((await page(robério, path)).status, 404, path);
   assert.equal((await fetch(`${BASE}/investidores/documentos/${ids.documentB}`, { headers: { cookie: robério } })).status, 404);
@@ -196,7 +196,7 @@ test("V7. TENANT_USER não acessa investidores, investimentos nem documentos de 
   }
   assert.equal((await action(robério, "uploadInvestmentDocumentAction", { investmentId: ids.investmentB, kind: "OTHER" }, { file: [PDF, "application/pdf", "x.pdf"] }))?.ok, false);
   assert.equal((await action(robério, "replaceInvestmentDocumentAction", { documentId: ids.documentB }, { file: [PDF, "application/pdf", "x.pdf"] }))?.ok, false);
-  assert.equal(await one(`select md5(string_agg(row(x.*)::text, '|' order by x.id)) from (select id, tenant_id, name, document, status, updated_at from investor union all select id, tenant_id, investor_id, amount_cents::text, status::text, updated_at from investment) x`), before);
+  assert.equal(await one(`select md5(string_agg(row(x.*)::text, '|' order by x.id)) from (select id, tenant_id, name, document, status::text, updated_at from investor union all select id, tenant_id, investor_id, amount_cents::text, status::text, updated_at from investment) x`), before);
   assert.equal(await one(`select md5(string_agg(row(d.id, d.replaced_at)::text, '|' order by d.id)) from investment_document d`), docsBefore);
   // Sem sessão: login.
   assert.equal((await page("", "/investidores")).location?.endsWith("/login"), true);
