@@ -33,7 +33,11 @@ async function audit(tx: TenantTransaction, actor: AuditActor, tenantId: string,
   await recordAdminAudit(tx, actor, { action, entity, entityId, tenantId, tenantName: await tenantName(tx, tenantId), before, after, description });
 }
 
-const duplicateDocument = (error: unknown) => error instanceof Error && /investor_tenant_document_unique/.test(`${error.message} ${(error as { cause?: Error }).cause?.message ?? ""}`);
+const violates = (constraint: RegExp) => (error: unknown) => error instanceof Error && constraint.test(`${error.message} ${(error as { cause?: Error }).cause?.message ?? ""}`);
+const duplicateDocument = violates(/investor_tenant_document_unique/);
+// Dois envios simultâneos de contrato assinado: o índice único garante um só vigente; o segundo recebe esta mensagem.
+const duplicateSignedContract = violates(/investment_document_current_contract_unique/);
+const SIGNED_CONTRACT_ERROR = { ok: false as const, error: "Este investimento já tem contrato assinado. Use \"Substituir\" para enviar uma nova versão." };
 const DUPLICATE_ERROR = { ok: false as const, error: "Já existe um investidor com este CPF/CNPJ nesta carteira." };
 
 function refresh() {
@@ -173,21 +177,27 @@ export async function uploadInvestmentDocumentAction(data: FormData): Promise<In
   if (!kind) return { ok: false, error: "Escolha o tipo do documento." };
   const file = await readDocumentFile(data);
   if (!file.ok) return file;
-  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
-    const [investment] = await tx.select().from(investments).where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId)));
-    if (!investment) return { ok: false, error: "Investimento não encontrado." };
-    if (kind === "SIGNED_CONTRACT") {
-      const [existing] = await tx.select({ id: investmentDocuments.id }).from(investmentDocuments)
-        .where(and(eq(investmentDocuments.investmentId, investment.id), eq(investmentDocuments.tenantId, investment.tenantId), eq(investmentDocuments.kind, "SIGNED_CONTRACT"), isNull(investmentDocuments.replacedAt)));
-      if (existing) return { ok: false, error: "Este investimento já tem contrato assinado. Use \"Substituir\" para enviar uma nova versão." };
-    }
-    const documentId = id("idoc");
-    const values = { kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.length };
-    await tx.insert(investmentDocuments).values({ id: documentId, tenantId: investment.tenantId, investmentId: investment.id, ...values, content: file.content, uploadedByUserId: scope.user.id });
-    await audit(tx, scope, investment.tenantId, "INVESTMENT_DOCUMENT_UPLOADED", "investment_document", documentId, null, { investmentId: investment.id, ...fileSnapshot(values) },
-      `${DOCUMENT_KINDS[kind]} enviado (${file.fileName})`);
-    return { ok: true, message: `${DOCUMENT_KINDS[kind]} enviado.`, id: documentId };
-  });
+  let result: InvestorActionResult;
+  try {
+    result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+      const [investment] = await tx.select().from(investments).where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId)));
+      if (!investment) return { ok: false, error: "Investimento não encontrado." };
+      if (kind === "SIGNED_CONTRACT") {
+        const [existing] = await tx.select({ id: investmentDocuments.id }).from(investmentDocuments)
+          .where(and(eq(investmentDocuments.investmentId, investment.id), eq(investmentDocuments.tenantId, investment.tenantId), eq(investmentDocuments.kind, "SIGNED_CONTRACT"), isNull(investmentDocuments.replacedAt)));
+        if (existing) return SIGNED_CONTRACT_ERROR;
+      }
+      const documentId = id("idoc");
+      const values = { kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.length };
+      await tx.insert(investmentDocuments).values({ id: documentId, tenantId: investment.tenantId, investmentId: investment.id, ...values, content: file.content, uploadedByUserId: scope.user.id });
+      await audit(tx, scope, investment.tenantId, "INVESTMENT_DOCUMENT_UPLOADED", "investment_document", documentId, null, { investmentId: investment.id, ...fileSnapshot(values) },
+        `${DOCUMENT_KINDS[kind]} enviado (${file.fileName})`);
+      return { ok: true, message: `${DOCUMENT_KINDS[kind]} enviado.`, id: documentId };
+    });
+  } catch (error) {
+    if (duplicateSignedContract(error)) return SIGNED_CONTRACT_ERROR;
+    throw error;
+  }
   if (result.ok) refresh();
   return result;
 }
@@ -208,8 +218,11 @@ export async function replaceInvestmentDocumentAction(data: FormData): Promise<I
     if (previous.replacedAt) return { ok: false, error: "Esta versão já foi substituída. Substitua a versão atual." };
     const newId = id("idoc");
     // Primeiro marca a anterior como substituída (o índice só aceita um contrato assinado vigente), depois grava a nova.
-    await tx.update(investmentDocuments).set({ replacedAt: sql`now()`, replacedByDocumentId: newId })
-      .where(and(eq(investmentDocuments.id, previous.id), eq(investmentDocuments.tenantId, previous.tenantId), isNull(investmentDocuments.replacedAt)));
+    // Se outra substituição simultânea chegou antes, nada é marcado e esta não grava uma segunda versão vigente.
+    const marked = await tx.update(investmentDocuments).set({ replacedAt: sql`now()`, replacedByDocumentId: newId })
+      .where(and(eq(investmentDocuments.id, previous.id), eq(investmentDocuments.tenantId, previous.tenantId), isNull(investmentDocuments.replacedAt)))
+      .returning({ id: investmentDocuments.id });
+    if (marked.length === 0) return { ok: false, error: "Esta versão já foi substituída. Substitua a versão atual." };
     const values = { kind: previous.kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.length };
     await tx.insert(investmentDocuments).values({ id: newId, tenantId: previous.tenantId, investmentId: previous.investmentId, ...values, content: file.content, uploadedByUserId: scope.user.id });
     const kindLabel = DOCUMENT_KINDS[previous.kind as keyof typeof DOCUMENT_KINDS] ?? "Documento";

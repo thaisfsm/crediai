@@ -159,9 +159,17 @@ test("V5. vincular documento ao investimento: enviar, visualizar, baixar e subst
   // A ficha do investidor lista os documentos vigentes de todos os investimentos dele.
   const investorPage = await page(robério, `/investidores/${ids.investorA}`);
   assert.ok(investorPage.html.includes("Documentos dos investimentos") && investorPage.html.includes("contrato-assinado.pdf") && !investorPage.html.includes("contrato.pdf ·"));
-  const bDoc = await action(fernando, "uploadInvestmentDocumentAction", { investmentId: ids.investmentB, kind: "SIGNED_CONTRACT" }, { file: [PDF, "application/pdf", "b.pdf"] });
-  assert.equal(bDoc?.ok, true);
-  ids.documentB = bDoc.id;
+  // Envios e substituições simultâneos: um só contrato assinado vigente, e o pedido que perde recebe mensagem (não erro 500).
+  const currentContracts = () => one(`select count(*)::int from investment_document where investment_id = '${ids.investmentB}' and kind = 'SIGNED_CONTRACT' and replaced_at is null`);
+  const uploads = await Promise.all(["b.pdf", "b-dup.pdf"].map((name) => action(fernando, "uploadInvestmentDocumentAction", { investmentId: ids.investmentB, kind: "SIGNED_CONTRACT" }, { file: [PDF, "application/pdf", name] })));
+  assert.equal(uploads.filter((result) => result?.ok === true).length, 1, JSON.stringify(uploads));
+  assert.ok(uploads.every((result) => typeof result?.ok === "boolean"), JSON.stringify(uploads));
+  assert.equal(await currentContracts(), 1);
+  ids.documentB = uploads.find((result) => result.ok).id;
+  const replaces = await Promise.all(["b-v2.pdf", "b-v2-dup.pdf"].map((name) => action(fernando, "replaceInvestmentDocumentAction", { documentId: ids.documentB }, { file: [PDF2, "application/pdf", name] })));
+  assert.equal(replaces.filter((result) => result?.ok === true).length, 1, JSON.stringify(replaces));
+  assert.ok(replaces.every((result) => typeof result?.ok === "boolean"), JSON.stringify(replaces));
+  assert.equal(await currentContracts(), 1);
 });
 
 test("V6. editar cliente adicionando WhatsApp, e-mail, Instagram e Facebook (nada financeiro muda)", async () => {
