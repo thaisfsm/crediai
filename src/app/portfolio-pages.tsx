@@ -7,6 +7,7 @@ import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type Bank
 import type { ClientSearchResult } from "@/lib/finance/client-search";
 import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
+import { INVESTOR_CATEGORIES, isInvestorCategory } from "@/lib/investors/payables";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
@@ -1365,11 +1366,11 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
             <tbody>{portfolio.capitalLedger.map((entry) => (
               <tr key={entry.key}>
                 <td>{formatDate(entry.date)}</td>
-                <td><span className={`status-chip ${entry.amountCents < 0 ? "status-due" : entry.kind === "PAYMENT" ? "status-paid" : "status-active"}`}><i />{capitalLedgerLabels[entry.kind]}</span></td>
+                <td><span className={`status-chip ${entry.amountCents < 0 ? "status-due" : entry.kind === "PAYMENT" ? "status-paid" : "status-active"}`}><i />{entry.source === "INVESTOR" && entry.category && isInvestorCategory(entry.category) ? INVESTOR_CATEGORIES[entry.category] : capitalLedgerLabels[entry.kind]}</span></td>
                 <td>{entry.description}</td>
                 <td><strong>{entry.amountCents < 0 ? "− " : "+ "}{formatMoney(Math.abs(entry.amountCents))}</strong></td>
                 <td>{formatMoney(entry.balanceCents)}</td>
-                <td className="actions-cell">{entry.kind === "CONTRIBUTION" && (entry.reversed ? <span className="status-chip status-muted"><i />Estornado</span> : <button className="outline-button danger-outline" onClick={() => setReversing(entry)}>Estornar aporte</button>)}</td>
+                <td className="actions-cell">{entry.kind === "CONTRIBUTION" && entry.source !== "INVESTOR" && (entry.reversed ? <span className="status-chip status-muted"><i />Estornado</span> : <button className="outline-button danger-outline" onClick={() => setReversing(entry)}>Estornar aporte</button>)}</td>
               </tr>
             ))}</tbody>
           </table></div>

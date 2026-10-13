@@ -782,6 +782,10 @@ button { color:inherit; }
   .data-table td[data-label=""]::before, .data-table td:not([data-label])::before { content: none; }
   .data-table tr td:last-child { border-bottom: 0; }
   .data-table td small { font-size: 10px; }
+  /* Detalhe e baixa de uma obrigação (Contas a Pagar): ocupam a largura toda do cartão, sem título de coluna */
+  .data-table tr.obligation-detail-row > td { padding-left: 0; text-align: left; }
+  .data-table tr.obligation-detail-row > td::before { content: none; }
+  .obligation-detail .data-table tr { margin-top: 6px; }
   .data-table td.actions-cell { position: static; background: transparent; box-shadow: none; text-align: left; }
   .row-actions { justify-content: flex-start; }
   .row-actions .outline-button { min-height: 36px; }
@@ -1121,3 +1125,7 @@ button { color:inherit; }
 @media (max-width: 640px) { .report-filters { padding:0 12px 12px; } .report-filters .field { flex:1 1 100%; } }
 /* No celular, a linha da operação não é um cliente: a 1ª célula (Abrir #código) fica sem título e a 2ª mostra a situação */
 @media (max-width: 740px) { .report-operation-row td:first-child { padding-left:0; } .report-operation-row td:first-child::before { content:none; } .report-operation-row td:nth-child(2)::before { content:"Situação"; } }
+
+/* Contas a Pagar: linha de detalhe e baixa de uma obrigação */
+.obligation-detail-row > td { white-space: normal; }
+.obligation-detail { display: grid; gap: 10px; padding: 6px 0; }

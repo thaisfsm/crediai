@@ -5,6 +5,8 @@ import { investmentContracts, investmentDocuments, investmentRevisions, investme
 import { onlyDigits, todayIso } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext, type InvestorScope } from "./access";
 import { missingContractData } from "./contract";
+import { buildObligations, entryDateOf } from "./payables";
+import { loadInvestmentCash } from "./payables-queries";
 import { contractDataHash, contractSource, contractorData, loadContractor } from "./contract-source";
 import { INVESTORS_PAGE_SIZE, investorFilters, scheduleTotals, summarizeInvestments, type DocumentKind, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type RatePeriod } from "./rules";
 
@@ -168,6 +170,12 @@ export async function loadInvestmentDetail(investmentId: string) {
       .where(and(eq(investmentRevisions.investmentId, row.investment.id), eq(investmentRevisions.tenantId, row.investment.tenantId)))
       .orderBy(desc(investmentRevisions.createdAt), desc(investmentRevisions.id));
 
+    // Contas a Pagar: entrada no capital e baixas deste contrato, e as obrigações do cronograma com o que já foi pago.
+    const cash = await loadInvestmentCash(tx, row.investment, scope.tenantId);
+    const obligations = buildObligations({
+      investments: [{ id: row.investment.id, investorId: row.investor.id, investorName: row.investor.name, contractNumber: row.investment.contractNumber, status: row.investment.status, startDate: row.investment.startDate, amountCents: row.investment.amountCents }],
+      items: scheduleRows.map((item) => ({ ...item, investmentId: row.investment.id })), payments: cash.payments, today: todayIso(),
+    });
     const contractorRow = await loadContractor(tx, row.investment.tenantId);
     const source = contractSource(row.investment, row.investor, contractorRow);
     const current = contracts.find((contract) => !contract.supersededAt) ?? null;
@@ -181,6 +189,7 @@ export async function loadInvestmentDetail(investmentId: string) {
       investment: toInvestmentView(row.investment),
       investor: { id: row.investor.id, name: row.investor.name, status: row.investor.status as InvestorStatus },
       schedule: { items: scheduleRows, totals: scheduleTotals(scheduleRows) },
+      cash: { ...cash, today: todayIso(), entryDate: entryDateOf(row.investment), obligations, paidItemIds: [...new Set(cash.payments.map((payment) => payment.scheduleItemId))] },
       revisions: revisionRows.map((revision) => ({ ...revision, kind: revision.kind as "CONTRACT" | "SCHEDULE", createdAt: revision.createdAt.toISOString(), changedBy: revision.changedBy ?? null })),
       documents: documents.map(({ contractId, ...document }) => ({
         ...document, kind: document.kind as DocumentKind, createdAt: document.createdAt.toISOString(), replacedAt: document.replacedAt?.toISOString() ?? null, uploadedBy: document.uploadedBy ?? null,

@@ -7,8 +7,8 @@ import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { AuditAction } from "@/lib/admin/audit-rules";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { bankKeys } from "@/lib/bank-account";
-import { investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, tenants } from "@/lib/db/schema";
-import { formatMoney } from "@/lib/finance/format";
+import { investmentCapitalEntries, investmentContractors, investmentContracts, investmentDocuments, investmentPayments, investmentRevisions, investmentScheduleItems, investments, investors, tenants } from "@/lib/db/schema";
+import { formatDate, formatMoney } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext } from "@/lib/investors/access";
 import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
 import { contractFonts } from "@/lib/investors/contract-fonts";
@@ -61,7 +61,19 @@ const CONTRACT_NUMBER_ERROR = { ok: false as const, error: "Já existe um contra
 
 function refresh() {
   revalidatePath("/investidores", "layout");
+  revalidatePath("/contas-a-pagar");
 }
+
+// Dinheiro já movimentado pelo contrato (Contas a Pagar): a entrada registrada no capital e as linhas do cronograma com
+// baixa. Com eles, o que deu origem aos lançamentos não muda mais, para preservar o histórico financeiro.
+async function cashOf(tx: TenantTransaction, investment: { id: string; tenantId: string }) {
+  const [entry] = await tx.select({ amountCents: investmentCapitalEntries.amountCents, enteredOn: investmentCapitalEntries.enteredOn }).from(investmentCapitalEntries)
+    .where(and(eq(investmentCapitalEntries.investmentId, investment.id), eq(investmentCapitalEntries.tenantId, investment.tenantId)));
+  const paid = await tx.selectDistinct({ itemId: investmentPayments.scheduleItemId }).from(investmentPayments)
+    .where(and(eq(investmentPayments.investmentId, investment.id), eq(investmentPayments.tenantId, investment.tenantId)));
+  return { entry: entry ?? null, paidItemIds: new Set(paid.map((row) => row.itemId)) };
+}
+const PAID_ITEM_ERROR = { ok: false as const, error: "Esta linha do cronograma já tem pagamento registrado em Contas a Pagar. Para preservar o histórico financeiro, ela não pode ser alterada nem retirada." };
 
 export async function createInvestorAction(data: FormData): Promise<InvestorActionResult> {
   const read = reader(data);
@@ -154,9 +166,19 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
   const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
     const [current] = await tx.select({ investment: investments, investorName: investors.name }).from(investments)
       .innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
-      .where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId)));
+      .where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId))).for("update", { of: investments });
     if (!current) return { ok: false, error: "Investimento não encontrado." };
     const { investment } = current;
+    const cash = await cashOf(tx, investment);
+    if (cash.entry && (fields.values.amountCents !== investment.amountCents || (fields.values.investedOn ?? fields.values.startDate) !== (investment.investedOn ?? investment.startDate))) {
+      return { ok: false, error: `A entrada deste investimento já foi registrada no capital (${formatMoney(cash.entry.amountCents)} em ${formatDate(cash.entry.enteredOn)}). Para preservar o histórico financeiro, o valor e a data do investimento não podem mais ser alterados.` };
+    }
+    if (cash.paidItemIds.size > 0 && fields.values.startDate !== investment.startDate) {
+      return { ok: false, error: "Este contrato já tem pagamentos registrados em Contas a Pagar. Para preservar o histórico financeiro, a data de início não pode mais ser alterada." };
+    }
+    if ((cash.entry || cash.paidItemIds.size > 0) && fields.values.status === "CANCELED" && investment.status !== "CANCELED") {
+      return { ok: false, error: "Este contrato já movimentou o capital (entrada ou pagamentos registrados) e não pode ser cancelado. A regra para desfazer esses lançamentos ainda não foi definida." };
+    }
     await tx.update(investments).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investments.id, investment.id), eq(investments.tenantId, investment.tenantId)));
     const beforeValues: InvestmentValues = {
       amountCents: investment.amountCents, agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod, startDate: investment.startDate,
@@ -222,6 +244,7 @@ export async function buildInvestmentScheduleAction(data: FormData): Promise<Inv
   const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
     const context = await lockSchedule(tx, scope, investmentId);
     if ("ok" in context) return context;
+    if ((await cashOf(tx, context.investment)).paidItemIds.size > 0) return { ok: false, error: "Este cronograma já tem pagamentos registrados em Contas a Pagar e não pode ser substituído. Inclua novas linhas ou edite as que ainda não foram pagas." };
     if (context.items.length > 0 && read("replace", 4) !== "1") return { ok: false, error: `Este investimento já tem um cronograma com ${context.items.length} ${context.items.length === 1 ? "pagamento" : "pagamentos"}. Confirme que deseja substituí-lo.` };
     const { investment } = context;
     await tx.delete(investmentScheduleItems).where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId)));
@@ -269,6 +292,7 @@ export async function updateInvestmentScheduleItemAction(data: FormData): Promis
     if ("ok" in context) return context;
     const item = context.items.find((row) => row.id === itemId);
     if (!item) return { ok: false, error: "Pagamento não encontrado neste cronograma." };
+    if ((await cashOf(tx, context.investment)).paidItemIds.has(item.id)) return PAID_ITEM_ERROR;
     await tx.update(investmentScheduleItems).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investmentScheduleItems.id, item.id), eq(investmentScheduleItems.tenantId, item.tenantId)));
     await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, itemValues(context.items).map((row, index) => (context.items[index].id === item.id ? fields.values : row)), "Pagamento do cronograma alterado")));
     return { ok: true, message: "Pagamento do cronograma alterado.", id: context.investment.id };
@@ -287,6 +311,7 @@ export async function deleteInvestmentScheduleItemAction(data: FormData): Promis
     if ("ok" in context) return context;
     const item = context.items.find((row) => row.id === itemId);
     if (!item) return { ok: false, error: "Pagamento não encontrado neste cronograma." };
+    if ((await cashOf(tx, context.investment)).paidItemIds.has(item.id)) return PAID_ITEM_ERROR;
     await tx.delete(investmentScheduleItems).where(and(eq(investmentScheduleItems.id, item.id), eq(investmentScheduleItems.tenantId, item.tenantId)));
     await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, itemValues(context.items.filter((row) => row.id !== item.id)), "Pagamento retirado do cronograma")));
     return { ok: true, message: "Pagamento retirado do cronograma.", id: context.investment.id };

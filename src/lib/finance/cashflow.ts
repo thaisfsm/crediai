@@ -6,6 +6,7 @@
 // sempre positivo, tipo explícito); empréstimos e recebimentos continuam vindo das tabelas de operações e pagamentos e só
 // são exibidos no extrato.
 import { formatDate, formatMoney, isIsoDate, parseMoneyToCents } from "./format";
+import { INVESTOR_CATEGORIES, isInvestorCategory } from "../investors/payables";
 import { capitalLedgerLabels, type CapitalLedgerEntry, type CapitalMovementKind } from "./portfolio";
 
 export type FinanceDirection = "IN" | "OUT";
@@ -39,6 +40,8 @@ export const statementCategoryLabels = {
   PAYMENT: "Recebimento de operação",
   CONTRIBUTION_REVERSAL: "Estorno de aporte",
   LEGACY_WITHDRAWAL: "Retirada (sem categoria)",
+  // Contas a Pagar: entrada confirmada de um contrato de investimento e baixas de rendimento e de principal.
+  ...INVESTOR_CATEGORIES,
 } as const;
 export type StatementCategory = keyof typeof statementCategoryLabels;
 export const isStatementCategory = (value: string): value is StatementCategory => Object.hasOwn(statementCategoryLabels, value);
@@ -126,9 +129,9 @@ const categoryOfEntry = (entry: CapitalLedgerEntry): StatementCategory => {
     case "LOAN_CANCELED": return "LOAN_CANCELED";
     case "PAYMENT": return "PAYMENT";
     case "CONTRIBUTION_REVERSAL": return "CONTRIBUTION_REVERSAL";
-    case "CONTRIBUTION": return "CAPITAL_CONTRIBUTION";
+    case "CONTRIBUTION": return entry.category === "INVESTOR_CONTRIBUTION" ? "INVESTOR_CONTRIBUTION" : "CAPITAL_CONTRIBUTION";
     case "OTHER_INCOME": return "OTHER_INCOME";
-    case "WITHDRAWAL": return entry.category && isManualCategory(entry.category) ? entry.category : "LEGACY_WITHDRAWAL";
+    case "WITHDRAWAL": return entry.category && (isManualCategory(entry.category) || isInvestorCategory(entry.category)) ? entry.category : "LEGACY_WITHDRAWAL";
   }
 };
 
@@ -138,6 +141,7 @@ function originOf(entry: CapitalLedgerEntry) {
   if (entry.kind === "LOAN_CANCELED") return `Operações · exclusão ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "PAYMENT") return `Pagamentos · ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "CONTRIBUTION_REVERSAL") return "Capital · estorno de aporte";
+  if (entry.source === "INVESTOR") return entry.kind === "CONTRIBUTION" ? "Investidores · entrada do contrato" : "Contas a pagar · baixa";
   return entry.source === "FINANCE" ? "Financeiro · lançamento manual" : "Capital · lançamento manual";
 }
 

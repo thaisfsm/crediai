@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 import { centsToInput, cpfCnpjProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCpfCnpj, maskPhone, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
@@ -15,6 +15,8 @@ import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/inve
 import { DateField } from "../date-field";
 import { AddressFieldset, BankFieldset, BankSummaryRows, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
+import { registerInvestmentEntryAction } from "../contas-a-pagar/actions";
+import { ObligationsTable } from "../contas-a-pagar/payables-ui";
 import {
   addInvestmentScheduleItemAction, buildInvestmentScheduleAction, createInvestmentAction, createInvestorAction, deleteInvestmentScheduleItemAction, generateContractAction,
   markContractSentAction, replaceInvestmentDocumentAction, saveContractorAction, updateInvestmentAction, updateInvestmentScheduleItemAction, updateInvestorAction,
@@ -509,10 +511,12 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
 
       <ScheduleSection data={data} onDone={refresh} />
 
+      <CashSection data={data} onDone={refresh} />
+
       <section className="panel form-panel" aria-label="Cálculos do investimento">
-        <div className="panel-header"><div><h2>Rendimento e devolução</h2><p>Estrutura preparada: os valores aparecem quando as regras financeiras dos investimentos forem definidas.</p></div></div>
+        <div className="panel-header"><div><h2>Rendimento e devolução</h2><p>Estrutura preparada: os valores calculados aparecem quando as regras financeiras dos investimentos forem definidas. Os pagamentos já registrados estão em &ldquo;Capital e pagamentos&rdquo;.</p></div></div>
         <dl className="payment-summary">
-          {["Rendimento previsto", "Rendimentos pagos", "Saldo", "Total a devolver", "Próximo vencimento de rendimento", "Renovação", "Resgate"].map((label) => (
+          {["Rendimento previsto (cálculo)", "Saldo do investidor", "Total a devolver", "Renovação", "Resgate"].map((label) => (
             <div key={label}><dt>{label}</dt><dd className="muted-value">Aguardando regra</dd></div>
           ))}
         </dl>
@@ -553,6 +557,59 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
   );
 }
 
+const newRequestId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`);
+
+// Entrada do dinheiro deste contrato no capital (só com confirmação explícita, uma vez) e as obrigações do cronograma
+// com o que já foi pago. Só a carteira dona do contrato registra; o MASTER vendo outra carteira só consulta.
+function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => void }) {
+  const { investment, cash } = data;
+  const [confirming, setConfirming] = useState(false);
+  const requestId = useRef<string | null>(null);
+  const entry = useFormAction(registerInvestmentEntryAction, () => { requestId.current = null; setConfirming(false); onDone(); });
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    const input = event.currentTarget.elements.namedItem("requestId") as HTMLInputElement;
+    requestId.current ??= newRequestId();
+    input.value = requestId.current;
+    entry.onSubmit(event);
+  };
+  const paidYield = cash.payments.filter((payment) => payment.kind === "YIELD").reduce((total, payment) => total + payment.amountCents, 0);
+  const paidPrincipal = cash.payments.filter((payment) => payment.kind === "PRINCIPAL").reduce((total, payment) => total + payment.amountCents, 0);
+  const open = cash.obligations.reduce((total, obligation) => total + obligation.balanceCents, 0);
+  const canRegister = cash.ownWallet && !cash.entry && investment.status !== "CANCELED";
+  return (
+    <section className="panel form-panel" aria-label="Capital e pagamentos do investimento">
+      <div className="panel-header"><div><h2>Capital e pagamentos</h2><p>A entrada do dinheiro no capital só é registrada quando você confirma. Os pagamentos ao investidor são as baixas feitas em Contas a Pagar.</p></div>
+        {canRegister && !confirming && <span className="row-actions"><button type="button" className="primary-button" onClick={() => setConfirming(true)}>Registrar a entrada deste investimento no capital</button></span>}
+      </div>
+      <dl className="payment-summary">
+        <div><dt>Entrada no capital</dt><dd>{cash.entry ? <>{formatMoney(cash.entry.amountCents)} em {formatDate(cash.entry.enteredOn)}<small className="admin-cell-note">Registrada em {dateOf(cash.entry.createdAt)}{cash.entry.createdBy ? ` por ${cash.entry.createdBy}` : ""}</small></> : <span className="muted-value">Não registrada</span>}</dd></div>
+        <div><dt>Rendimentos pagos</dt><dd>{formatMoney(paidYield)}</dd></div>
+        <div><dt>Principal devolvido</dt><dd>{formatMoney(paidPrincipal)}</dd></div>
+        <div><dt>Em aberto no cronograma</dt><dd>{formatMoney(open)}</dd></div>
+      </dl>
+      {!cash.ownWallet && <p className="capital-note">Este contrato é de outra carteira: a entrada no capital e as baixas só podem ser registradas pela própria carteira.</p>}
+      {confirming && canRegister && (
+        <form className="schedule-form" onSubmit={submit} aria-label="Confirmar entrada no capital">
+          <input type="hidden" name="investmentId" value={investment.id} />
+          <input type="hidden" name="amountCents" value={investment.amountCents} />
+          <input type="hidden" name="enteredOn" value={cash.entryDate} />
+          <input type="hidden" name="requestId" defaultValue="" />
+          <p><strong>Entrada de {formatMoney(investment.amountCents)} em {formatDate(cash.entryDate)}</strong> ({investment.investedOn ? "data do investimento" : "data de início do contrato"}). Vai aparecer no Financeiro como &ldquo;Entrada de investidor&rdquo; e somar ao capital disponível. Só pode ser registrada uma vez e não se desfaz por aqui.</p>
+          <label className="check-field"><input type="checkbox" name="confirm" value="1" required /><span>Confirmo que {formatMoney(investment.amountCents)} entraram na carteira em {formatDate(cash.entryDate)}.</span></label>
+          <div className="form-actions">
+            <button type="button" className="outline-button" onClick={() => setConfirming(false)}>Cancelar</button>
+            <button className="primary-button" disabled={entry.pending}><Icon name="check" size={16} /> {entry.pending ? "Registrando…" : "Confirmar entrada"}</button>
+          </div>
+        </form>
+      )}
+      <Feedback feedback={entry.feedback} />
+      {cash.obligations.length > 0 && (
+        <ObligationsTable obligations={cash.obligations} today={cash.today} cycleStartedOn={cash.cycleStartedOn} availableCents={null} canPay={cash.ownWallet && cash.hasWallet} showInvestor={false} label="Obrigações deste contrato" onDone={onDone} />
+      )}
+    </section>
+  );
+}
+
 type ScheduleItem = InvestmentDetail["schedule"]["items"][number];
 const moneyInput = (cents: number) => (cents ? centsToInput(cents) : "");
 
@@ -565,19 +622,21 @@ function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDone: () 
   const [editingId, setEditingId] = useState<string | null>(null);
   const done = () => { setBuilding(false); setAdding(false); setEditingId(null); onDone(); };
   const { totals, items } = schedule;
+  const paid = new Set(data.cash.paidItemIds);
   return (
     <section className="panel form-panel" aria-label="Cronograma de pagamentos ao investidor">
       <div className="panel-header">
         <div><div className="panel-title-row"><h2>Cronograma de pagamentos</h2><span className="today-count">{totals.count}</span></div>
-          <p>Datas e valores combinados com {data.investor.name}, digitados por você. O sistema não calcula rendimento e o cronograma não mexe no capital: o registro dos pagamentos vem na etapa de contas a pagar.</p></div>
+          <p>Datas e valores combinados com {data.investor.name}, digitados por você. O sistema não calcula rendimento e o cronograma não mexe no capital: cada pagamento é registrado (baixa) em Contas a Pagar.</p></div>
         {editable && (
           <span className="row-actions">
             <button type="button" className="outline-button" onClick={() => { setAdding(!adding); setBuilding(false); }}>{adding ? "Fechar" : "Incluir pagamento"}</button>
-            <button type="button" className="primary-button" onClick={() => { setBuilding(!building); setAdding(false); }}>{building ? "Fechar" : items.length ? "Substituir cronograma" : "Montar cronograma"}</button>
+            {paid.size === 0 && <button type="button" className="primary-button" onClick={() => { setBuilding(!building); setAdding(false); }}>{building ? "Fechar" : items.length ? "Substituir cronograma" : "Montar cronograma"}</button>}
           </span>
         )}
       </div>
       {!editable && <p className="capital-note">Investimento encerrado ou cancelado: o cronograma fica só para consulta.</p>}
+      {editable && paid.size > 0 && <p className="capital-note">Linhas com pagamento registrado ficam travadas para preservar o histórico financeiro; o cronograma não pode mais ser substituído.</p>}
       {building && <ScheduleBuildForm data={data} onDone={done} onCancel={() => setBuilding(false)} />}
       {adding && <ScheduleItemForm investmentId={investment.id} onDone={done} onCancel={() => setAdding(false)} />}
       {items.length === 0 ? <EmptyPanel icon="calendar" text="Nenhum pagamento no cronograma ainda." /> : (
@@ -590,7 +649,7 @@ function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDone: () 
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>#</th><th>Data</th><th>Rendimento</th><th>Devolução do principal</th><th>Total</th><th>Descrição</th>{editable && <th />}</tr></thead>
             <tbody>{items.map((item, index) => (
-              <ScheduleRow key={item.id} item={item} position={index + 1} investmentId={investment.id} editable={editable} editing={editingId === item.id}
+              <ScheduleRow key={item.id} item={item} position={index + 1} investmentId={investment.id} editable={editable} locked={paid.has(item.id)} editing={editingId === item.id}
                 onEdit={() => setEditingId(editingId === item.id ? null : item.id)} onDone={done} />
             ))}</tbody>
           </table></div>
@@ -600,7 +659,7 @@ function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDone: () 
   );
 }
 
-function ScheduleRow({ item, position, investmentId, editable, editing, onEdit, onDone }: { item: ScheduleItem; position: number; investmentId: string; editable: boolean; editing: boolean; onEdit: () => void; onDone: () => void }) {
+function ScheduleRow({ item, position, investmentId, editable, locked, editing, onEdit, onDone }: { item: ScheduleItem; position: number; investmentId: string; editable: boolean; locked: boolean; editing: boolean; onEdit: () => void; onDone: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const remove = useFormAction(deleteInvestmentScheduleItemAction, onDone);
   return (
@@ -612,7 +671,8 @@ function ScheduleRow({ item, position, investmentId, editable, editing, onEdit, 
         <td>{item.principalCents ? formatMoney(item.principalCents) : "—"}</td>
         <td><strong>{formatMoney(item.yieldCents + item.principalCents)}</strong></td>
         <td>{item.description ?? "—"}</td>
-        {editable && (
+        {editable && locked && <td className="actions-cell"><span className="status-chip status-paid"><i />Com pagamento</span></td>}
+        {editable && !locked && (
           <td className="actions-cell">
             <form className="row-actions" onSubmit={remove.onSubmit}>
               <input type="hidden" name="investmentId" value={investmentId} /><input type="hidden" name="itemId" value={item.id} />
