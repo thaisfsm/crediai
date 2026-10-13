@@ -320,7 +320,7 @@
           "to": [
             "public"
           ],
-          "withCheck": "coalesce(current_setting('app.crediai_role', true), '') = 'TENANT_USER' and \"admin_audit_log\".\"tenant_id\" = nullif(current_setting('app.tenant_id', true), '') and \"admin_audit_log\".\"entity\" = 'capital_movement'"
+          "withCheck": "coalesce(current_setting('app.crediai_role', true), '') = 'TENANT_USER' and \"admin_audit_log\".\"tenant_id\" = nullif(current_setting('app.tenant_id', true), '') and \"admin_audit_log\".\"entity\" in ('capital_movement', 'wallet')"
         }
       },
       "checkConstraints": {},

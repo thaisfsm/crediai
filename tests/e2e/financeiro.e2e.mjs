@@ -228,6 +228,64 @@ test("FE9. falha no meio da gravação (auditoria recusada) não deixa saldo nem
   assert.equal(await one(`select count(*)::int from capital_movement where description = 'Não pode ficar gravado'`), 0);
 });
 
+test("FE9b. concorrência: saídas e operação simultâneas nunca usam o mesmo capital", async () => {
+  const balance = await available("ten_roberio");
+  const before = await movementCount("ten_roberio");
+  // Três pedidos ao mesmo tempo, cada um cabe sozinho no saldo, mas juntos não: no máximo o que cabe é gravado.
+  const share = Math.floor(balance * 0.6);
+  const reais = (cents) => (cents / 100).toFixed(2).replace(".", ",");
+  const [first, second, loan] = await Promise.all([
+    register(robério, { amount: reais(share), category: "OPERATING_EXPENSE", description: "Concorrente 1" }),
+    register(robério, { amount: reais(share), category: "OPERATING_EXPENSE", description: "Concorrente 2" }),
+    action(robério, "createOperationAction", { clientId: "c_rob", modality: "SINGLE", frequency: "MONTHLY", principal: reais(share), rate: "10", loanDate: TODAY, dueDate: daysAgo(-30) }, "/"),
+  ]);
+  const succeeded = [first, second, loan].filter((response) => response.result?.ok === true).length;
+  assert.equal(succeeded, 1, JSON.stringify([first, second, loan].map((response) => response.result)));
+  assert.ok(await available("ten_roberio") >= 0, "saldo nunca negativo");
+  assert.equal(await available("ten_roberio"), balance - share);
+  // Desfaz no banco local o que passou, para o roteiro seguir com o mesmo saldo.
+  await admin(`delete from capital_movement where tenant_id = 'ten_roberio' and description like 'Concorrente %'`);
+  const extraOperation = await one(`select id from loan_operation where tenant_id = 'ten_roberio' and id <> '${ids.operation}' limit 1`);
+  if (extraOperation) await admin(`delete from loan_operation where id = '${extraOperation}'`);
+  assert.equal(await movementCount("ten_roberio"), before);
+  assert.equal(await available("ten_roberio"), balance);
+});
+
+test("FE9c. mesma chave com dados diferentes (formulário antigo) não grava e não diz que gravou", async () => {
+  const fields = movement({ amount: "10,00", description: "Chave reaproveitada" });
+  assert.equal((await action(robério, "registerFinanceMovementAction", fields)).result?.ok, true);
+  const changed = await action(robério, "registerFinanceMovementAction", { ...fields, amount: "20,00" });
+  assert.equal(changed.result?.ok, false);
+  assert.match(changed.result.error, /já registrou uma movimentação com outros dados/);
+  assert.equal(await one(`select count(*)::int from capital_movement where description = 'Chave reaproveitada'`), 1);
+  await admin(`delete from capital_movement where description = 'Chave reaproveitada'`);
+});
+
+test("FE9d. capital inicial e retirada da tela Capital seguem a mesma proteção de saldo, com auditoria", async () => {
+  const [wallet] = await admin(`select initial_capital_cents from wallet where tenant_id = 'ten_roberio'`);
+  const balance = await available("ten_roberio");
+  // Reduzir o capital inicial além do menor saldo do extrato: recusado, nada muda.
+  const blocked = await action(robério, "saveWalletAction", { initialCapital: "0,00" }, "/");
+  assert.equal(blocked.result?.ok, false, JSON.stringify(blocked.result));
+  assert.match(blocked.result.error, /ficaria negativo/);
+  assert.equal(Number(await one(`select initial_capital_cents from wallet where tenant_id = 'ten_roberio'`)), Number(wallet.initial_capital_cents));
+  // Aumentar passa e fica na auditoria com antes e depois; depois volta ao valor original (também auditado).
+  const raised = await action(robério, "saveWalletAction", { initialCapital: ((Number(wallet.initial_capital_cents) + 100) / 100).toFixed(2).replace(".", ",") }, "/");
+  assert.equal(raised.result?.ok, true, JSON.stringify(raised.result));
+  assert.equal(await available("ten_roberio"), balance + 100);
+  const [audit] = await admin(`select * from admin_audit_log where action = 'WALLET_INITIAL_CAPITAL_CHANGED' and tenant_id = 'ten_roberio' order by created_at desc limit 1`);
+  assert.equal(Number(audit.before.initialCapitalCents), Number(wallet.initial_capital_cents));
+  assert.equal(Number(audit.after.initialCapitalCents), Number(wallet.initial_capital_cents) + 100);
+  assert.equal((await action(robério, "saveWalletAction", { initialCapital: (Number(wallet.initial_capital_cents) / 100).toFixed(2).replace(".", ",") }, "/")).result?.ok, true);
+  assert.equal(await available("ten_roberio"), balance);
+  // Retirada antiga (tela Capital): mesma regra retroativa e de início do ciclo.
+  const retro = await action(robério, "registerWithdrawalAction", { amount: "10.500,00", occurredAt: daysAgo(10), notes: "" }, "/");
+  assert.equal(retro.result?.ok, false);
+  const beforeCycle = await action(robério, "registerWithdrawalAction", { amount: "1,00", occurredAt: daysAgo(30), notes: "" }, "/");
+  assert.match(beforeCycle.result?.error ?? "", /início do ciclo/);
+  assert.equal(await available("ten_roberio"), balance);
+});
+
 test("FE10. isolamento: o tenant vem da sessão; A não vê nem grava em B", async () => {
   const response = await register(robério, { tenantId: "ten_fernando", tenant_id: "ten_fernando", amount: "10,00", description: "Tentativa no tenant B" });
   assert.equal(response.result?.ok, true);

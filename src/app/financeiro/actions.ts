@@ -32,7 +32,14 @@ export async function registerFinanceMovementAction(data: FormData): Promise<Act
     const repeated = await tx.query.capitalMovements.findFirst({
       where: and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.idempotencyKey, movement.requestId)),
     });
-    if (repeated) return { ok: true, message: "Esta movimentação já estava registrada. Nada foi lançado em dobro." };
+    if (repeated) {
+      // Mesmo envio repetido (clique duplo, reenvio após queda de conexão): nada é gravado de novo. Se os dados mudaram
+      // com a mesma chave, o formulário é antigo: não grava nada e pede para conferir, em vez de dizer que registrou.
+      const same = repeated.category === movement.category && repeated.amountCents === movement.amountCents && repeated.occurredAt === movement.occurredAt && repeated.description === movement.description;
+      return same
+        ? { ok: true, message: "Esta movimentação já estava registrada. Nada foi lançado em dobro." }
+        : { ok: false, error: "Este formulário já registrou uma movimentação com outros dados. Confira o histórico e, para um novo lançamento, abra o formulário de novo." };
+    }
     if (movement.direction === "OUT") {
       const capital = await tenantCapital(tx, tenantId);
       const check = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents: movement.amountCents, occurredAt: movement.occurredAt, availableCents: capital.summary.availableCents });

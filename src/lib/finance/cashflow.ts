@@ -97,6 +97,19 @@ export function checkOutflow({ ledger, amountCents, occurredAt, availableCents }
   return { ok: true };
 }
 
+// O capital inicial abre o extrato: mudar o valor desloca todos os saldos pela diferença. Uma redução não pode deixar
+// nenhum ponto do extrato (nem o capital disponível de hoje) negativo; um aumento sempre passa.
+export function checkInitialCapitalChange({ ledger, previousCents, nextCents }: { ledger: CapitalLedgerEntry[]; previousCents: number; nextCents: number }):
+  { ok: true } | { ok: false; error: string } {
+  const reduction = previousCents - nextCents;
+  if (reduction <= 0 || ledger.length === 0) return { ok: true };
+  const lowest = ledger.reduce((low, entry) => (entry.balanceCents < low.balanceCents ? entry : low), ledger[0]);
+  if (lowest.balanceCents - reduction < 0) {
+    return { ok: false, error: `Não é possível reduzir o capital inicial em ${formatMoney(reduction)}: o saldo de ${formatDate(lowest.date)} ficaria negativo (${formatMoney(lowest.balanceCents)} − ${formatMoney(reduction)}). Registre uma saída no Financeiro se o dinheiro saiu da carteira. Nada foi alterado.` };
+  }
+  return { ok: true };
+}
+
 // ── Extrato financeiro ───────────────────────────────────────────────────────────────────────────────────────────────
 export type FinanceRow = {
   key: string; date: string; direction: FinanceDirection; category: StatementCategory; categoryLabel: string; description: string;

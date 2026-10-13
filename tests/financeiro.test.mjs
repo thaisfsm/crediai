@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { buildPortfolio } from "../src/lib/finance/portfolio.ts";
 import {
-  INFLOW_KINDS, categoriesOf, checkOutflow, financeRows, financeStatement, manualCategories, movementSign, parseFinanceFilters, parseManualMovement, presetPeriods,
+  INFLOW_KINDS, categoriesOf, checkInitialCapitalChange, checkOutflow, financeRows, financeStatement, manualCategories, movementSign, parseFinanceFilters, parseManualMovement, presetPeriods,
 } from "../src/lib/finance/cashflow.ts";
 
 const TODAY = "2026-10-13";
@@ -185,4 +185,43 @@ test("F11. a fórmula SQL do servidor usa os mesmos tipos de entrada que a tela"
   assert.doesNotMatch(source, /kind\} = 'CONTRIBUTION' then/, "nada de tipo de entrada escrito à mão no SQL");
   const migration = readFileSync(new URL("../drizzle/0017_financial_movements.sql", import.meta.url), "utf8");
   assert.doesNotMatch(migration, /\b(DROP TABLE|DELETE FROM|TRUNCATE|UPDATE "?capital_movement"? SET)\b/i, "migration só aditiva");
+});
+
+test("F12. operação com data futura também protege o saldo: a saída de hoje não pode deixar a data futura negativa", () => {
+  // Capital 10.000; empréstimo de 7.000 lançado para daqui a 5 dias. Disponível hoje (fórmula): 3.000.
+  const portfolio = build({ operations: [op("op_f", 700_000, "2026-10-18")] });
+  const ledger = chronological(portfolio);
+  assert.equal(portfolio.summary.availableCents, 300_000);
+  assert.equal(checkOutflow({ ledger, amountCents: 300_000, occurredAt: TODAY, availableCents: 300_000 }).ok, true);
+  const tooMuch = checkOutflow({ ledger, amountCents: 300_001, occurredAt: TODAY, availableCents: 300_000 });
+  assert.equal(tooMuch.ok, false);
+  // O último saldo do extrato (depois da operação futura) é o capital disponível: as duas contas batem.
+  assert.equal(ledger.at(-1).balanceCents, portfolio.summary.availableCents);
+});
+
+test("F13. reduzir o capital inicial não pode deixar nenhum saldo negativo; aumentar sempre pode", () => {
+  // Capital 10.000; saída de 6.000 em 05/10; empréstimo de 3.000 em 08/10. Menor saldo do extrato: 1.000.
+  const portfolio = build({
+    movements: [mov("s1", "WITHDRAWAL", 600_000, "2026-10-05", { category: "PARTNER_WITHDRAWAL", description: "Sócio", source: "FINANCE" })],
+    operations: [op("op_a", 300_000, "2026-10-08")],
+  });
+  assert.equal(portfolio.summary.availableCents, 100_000);
+  const ledger = portfolio.capitalLedger;
+  assert.deepEqual(checkInitialCapitalChange({ ledger, previousCents: 1_000_000, nextCents: 2_000_000 }), { ok: true });
+  assert.deepEqual(checkInitialCapitalChange({ ledger, previousCents: 1_000_000, nextCents: 900_000 }), { ok: true });
+  const blocked = checkInitialCapitalChange({ ledger, previousCents: 1_000_000, nextCents: 899_999 });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.error, /ficaria negativo/);
+});
+
+test("F14. registros antigos (sem categoria, origem CAPITAL) continuam somando igual e a soma bate com o extrato", () => {
+  const legacy = [mov("a", "CONTRIBUTION", 50_000, "2026-10-02"), mov("w", "WITHDRAWAL", 20_000, "2026-10-03"), mov("r", "CONTRIBUTION_REVERSAL", 50_000, "2026-10-04", { reversedMovementId: "a" })];
+  const portfolio = build({ movements: legacy, operations: [op("op_a", 100_000, "2026-10-02")], payments: [pay("p1", "op_a", 30_000, "2026-10-06")] });
+  // Antes do Financeiro: 10.000 + 500 − 200 − 500 − 1.000 + 300 = 9.100.
+  assert.equal(portfolio.summary.availableCents, 910_000);
+  assert.equal(portfolio.capitalLedger[0].balanceCents, 910_000, "último saldo do extrato = capital disponível");
+  const rows = financeRows(portfolio.capitalLedger, new Map());
+  assert.deepEqual(rows.map((row) => row.category).sort(), ["CAPITAL_CONTRIBUTION", "CONTRIBUTION_REVERSAL", "INITIAL_CAPITAL", "LEGACY_WITHDRAWAL", "LOAN", "PAYMENT"]);
+  const statement = financeStatement(rows, { from: "2026-09-01", to: TODAY, direction: null, category: null });
+  assert.equal(statement.netCents, portfolio.summary.availableCents, "entradas − saídas do ciclo inteiro = capital disponível");
 });

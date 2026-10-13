@@ -4,11 +4,13 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
-import { INFLOW_KINDS } from "@/lib/finance/cashflow";
+import { recordAdminAudit } from "@/lib/admin/audit";
+import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
+import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
@@ -20,15 +22,31 @@ const MAX_CENTS = 100_000_000_000; // R$ 1 bilhão: limite técnico contra valor
 
 // O tenant sempre vem da sessão no servidor (withTenantContext); nenhum identificador de tenant é aceito do navegador.
 
+// Capital inicial: abre o extrato do capital, então mudá-lo desloca todos os saldos. Trava a carteira (como as saídas e
+// as operações), recusa uma redução que deixaria algum saldo negativo e registra o antes e o depois na auditoria.
 export async function saveWalletAction(data: FormData): Promise<ActionResult> {
   const cents = parseMoneyToCents(text(data, "initialCapital", 40));
   if (cents === null || cents > MAX_CENTS) return { ok: false, error: "Informe o capital inicial em reais, por exemplo 20.000,00." };
-  await withTenantContext(async (tx, { tenantId }) => {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [wallet] = await tx.select().from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+    if (wallet && wallet.initialCapitalCents === cents) return { ok: true, message: "Capital inicial salvo." };
+    if (wallet && cents < wallet.initialCapitalCents) {
+      const capital = await tenantCapital(tx, tenantId);
+      const check = checkInitialCapitalChange({ ledger: capital.capitalLedger, previousCents: wallet.initialCapitalCents, nextCents: cents });
+      if (!check.ok) return check;
+    }
     await tx.insert(wallets).values({ id: id("wal"), tenantId, initialCapitalCents: cents })
       .onConflictDoUpdate({ target: wallets.tenantId, set: { initialCapitalCents: cents, updatedAt: sql`now()` } });
+    const tenant = await tx.query.tenants.findFirst({ where: eq(tenants.id, tenantId), columns: { name: true } });
+    await recordAdminAudit(tx, session, {
+      action: "WALLET_INITIAL_CAPITAL_CHANGED", entity: "wallet", entityId: wallet?.id ?? null, tenantId, tenantName: tenant?.name ?? null,
+      before: wallet ? { initialCapitalCents: wallet.initialCapitalCents, cycleNumber: wallet.cycleNumber } : null,
+      after: { initialCapitalCents: cents, cycleNumber: wallet?.cycleNumber ?? 1 },
+    });
+    return { ok: true, message: "Capital inicial salvo." };
   });
-  revalidatePath("/");
-  return { ok: true, message: "Capital inicial salvo." };
+  if (result.ok) revalidatePath("/");
+  return result;
 }
 
 // Aporte: dinheiro novo colocado na carteira depois do capital inicial. Entra no capital disponível na hora.
@@ -211,7 +229,8 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
   return result;
 }
 
-// Retirada: dinheiro tirado da carteira. Não pode passar do capital disponível.
+// Retirada (tela Capital, sem categoria): dinheiro tirado da carteira. Mesmas regras de saldo e de data das saídas do
+// Financeiro: não pode deixar o capital disponível negativo nem hoje nem em nenhum saldo depois da data escolhida.
 export async function registerWithdrawalAction(data: FormData): Promise<ActionResult> {
   const amountCents = parseMoneyToCents(text(data, "amount", 40));
   const occurredAt = text(data, "occurredAt", 10) || todayIso();
@@ -219,13 +238,18 @@ export async function registerWithdrawalAction(data: FormData): Promise<ActionRe
   if (amountCents === null || amountCents <= 0 || amountCents > MAX_CENTS) return { ok: false, error: "Informe o valor da retirada em reais, por exemplo 2.000,00." };
   if (!isIsoDate(occurredAt)) return { ok: false, error: "Informe a data da retirada." };
   if (occurredAt > todayIso()) return { ok: false, error: "A data da retirada não pode ser depois de hoje." };
-  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Mesma trava da criação de operação: duas saídas simultâneas não usam o mesmo capital.
-    const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+    const [wallet] = await tx.select().from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
     if (!wallet) return { ok: false, error: "Defina o capital inicial antes de registrar retiradas." };
+    const startedOn = cycleStartedOn(wallet);
+    if (startedOn && occurredAt < startedOn) return { ok: false, error: `A data da retirada não pode ser anterior ao início do ciclo atual da carteira (${formatDate(startedOn)}).` };
     const availableCents = await availableCapitalCents(tx, tenantId, wallet);
     if (amountCents > availableCents) return { ok: false, error: `A retirada não pode ser maior que o capital disponível de ${formatMoney(Math.max(availableCents, 0))}.` };
-    await tx.insert(capitalMovements).values({ id: id("cap"), tenantId, kind: "WITHDRAWAL", amountCents, occurredAt, notes, cycleNumber: wallet.cycleNumber });
+    const capital = await tenantCapital(tx, tenantId);
+    const check = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents, occurredAt, availableCents: capital.summary.availableCents });
+    if (!check.ok) return check;
+    await tx.insert(capitalMovements).values({ id: id("cap"), tenantId, kind: "WITHDRAWAL", amountCents, occurredAt, notes, cycleNumber: wallet.cycleNumber, createdByUserId: session.user.id });
     return { ok: true, message: `Retirada de ${formatMoney(amountCents)} registrada.` };
   });
   if (result.ok) revalidatePath("/");
@@ -248,6 +272,10 @@ export async function reverseContributionAction(data: FormData): Promise<ActionR
     if (contribution.amountCents > availableCents) {
       return { ok: false, error: `Não é possível estornar ${formatMoney(contribution.amountCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };
     }
+    // O estorno sai com a data de hoje; operações com data futura também precisam continuar cobertas.
+    const capital = await tenantCapital(tx, tenantId);
+    const check = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents: contribution.amountCents, occurredAt: todayIso(), availableCents: capital.summary.availableCents });
+    if (!check.ok) return check;
     await tx.insert(capitalMovements).values({
       id: id("cap"), tenantId, kind: "CONTRIBUTION_REVERSAL", amountCents: contribution.amountCents, occurredAt: todayIso(), reversedMovementId: contribution.id, cycleNumber: wallet.cycleNumber,
       notes: `Estorno do aporte de ${formatDate(contribution.occurredAt)}${contribution.notes ? ` (${contribution.notes})` : ""}`,

@@ -655,8 +655,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_admin_only", { for: "insert", withCheck: adminScope }),
   // O usuário do tenant também registra o que faz no módulo Investidores, só no próprio tenant (e continua sem ler o log).
   pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document', 'investment_contract', 'investment_contractor')` }),
-  // E os lançamentos do módulo Financeiro (entradas e saídas manuais), também só no próprio tenant.
-  pgPolicy("admin_audit_log_insert_tenant_finance", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'capital_movement'` }),
+  // E os lançamentos do módulo Financeiro (entradas e saídas manuais) e a mudança do capital inicial, também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_finance", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('capital_movement', 'wallet')` }),
 ]).enableRLS();
 
 export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

@@ -23,7 +23,7 @@ test("AU3. IP do cliente: primeiro endereço do x-forwarded-for, senão x-real-i
 
 test("AU4. todas as ações administrativas pedidas têm evento de auditoria gravado no código", () => {
   const source = readFileSync("src/app/admin/actions.ts", "utf8") + readFileSync("src/app/admin/planos/actions.ts", "utf8") + readFileSync("scripts/create-super-admin.ts", "utf8")
-    + readFileSync("src/app/investidores/actions.ts", "utf8") + readFileSync("src/app/financeiro/actions.ts", "utf8");
+    + readFileSync("src/app/investidores/actions.ts", "utf8") + readFileSync("src/app/financeiro/actions.ts", "utf8") + readFileSync("src/app/actions.ts", "utf8");
   for (const action of Object.keys(AUDIT_ACTIONS)) assert.ok(source.includes(`"${action}"`), `${action} sem registro`);
   // Toda ação exportada que altera dados chama recordAdminAudit (nenhuma ação administrativa sem auditoria).
   const admin = readFileSync("src/app/admin/actions.ts", "utf8");
