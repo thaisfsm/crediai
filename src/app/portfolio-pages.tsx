@@ -278,7 +278,12 @@ async function lookupCep(cep: string): Promise<CepLookup | null> {
 
 // Endereço com preenchimento pelo CEP. Os campos preenchidos continuam editáveis para correção manual.
 function AddressFields({ kind, client }: { kind: AddressKind; client: ClientRow | null }) {
-  const initial = (part: AddressPart) => client?.[addressKey(kind, part)] ?? "";
+  return <AddressFieldset legend={addressKinds[kind]} nameOf={(part) => addressKey(kind, part)} initialOf={(part) => client?.[addressKey(kind, part)] ?? ""} />;
+}
+
+// Mesmos campos de endereço (com CEP) para outros cadastros: investidor e empresa contratante dos contratos de investimento.
+export function AddressFieldset({ legend, nameOf, initialOf }: { legend: string; nameOf: (part: AddressPart) => string; initialOf: (part: AddressPart) => string }) {
+  const initial = initialOf;
   const [values, setValues] = useState(() => Object.fromEntries(addressParts.map((part) => [part, part === "Cep" ? maskCep(initial(part)) : initial(part)])) as Record<AddressPart, string>);
   const [lookup, setLookup] = useState<{ tone: "ok" | "error" | "busy"; text: string } | null>(null);
   const set = (part: AddressPart, value: string) => setValues((current) => ({ ...current, [part]: value }));
@@ -297,20 +302,20 @@ function AddressFields({ kind, client }: { kind: AddressKind; client: ClientRow 
   };
   const field = (part: AddressPart, props: InputHTMLAttributes<HTMLInputElement> = {}) => (
     <label key={part} className={`field${part === "Street" ? " field-wide" : ""}`}><span>{addressPartLabels[part]}</span>
-      <input name={addressKey(kind, part)} value={values[part]} onChange={(event) => set(part, event.target.value)} maxLength={160} {...props} /></label>
+      <input name={nameOf(part)} value={values[part]} onChange={(event) => set(part, event.target.value)} maxLength={160} {...props} /></label>
   );
   return (
     <fieldset className="form-section field-wide">
-      <legend>{addressKinds[kind]}</legend>
+      <legend>{legend}</legend>
       <div className="form-grid">
-        <label className="field"><span>CEP</span><input name={addressKey(kind, "Cep")} inputMode="numeric" placeholder="00000-000" value={values.Cep}
+        <label className="field"><span>CEP</span><input name={nameOf("Cep")} inputMode="numeric" placeholder="00000-000" value={values.Cep}
           onChange={(event) => { const masked = maskCep(event.target.value); set("Cep", masked); if (onlyDigits(masked).length === 8) void searchCep(masked); }} /></label>
         {field("Street", { placeholder: "Rua, avenida…" })}
         {field("Number", { placeholder: "123" })}
         {field("Complement", { placeholder: "Apto, sala (opcional)" })}
         {field("District")}
         {field("City")}
-        <label className="field"><span>Estado</span><select name={addressKey(kind, "State")} value={values.State} onChange={(event) => set("State", event.target.value)}>
+        <label className="field"><span>Estado</span><select name={nameOf("State")} value={values.State} onChange={(event) => set("State", event.target.value)}>
           <option value="">UF</option>{brazilianStates.map((state) => <option key={state} value={state}>{state}</option>)}</select></label>
         {lookup && <p className={`form-feedback field-wide ${lookup.tone === "error" ? "form-feedback-warning" : ""}`} role="status">{lookup.text}</p>}
       </div>

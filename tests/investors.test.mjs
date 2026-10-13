@@ -11,7 +11,10 @@ test("IV1. investidor: só o nome é obrigatório; CPF/CNPJ, telefones e e-mail 
   assert.equal(investorFields(form({})).ok, false);
   const minimal = investorFields(form({ name: "Ana Investidora" }));
   assert.equal(minimal.ok, true);
-  assert.deepEqual(minimal.values, { name: "Ana Investidora", document: null, phone: null, whatsapp: null, email: null, instagram: null, facebook: null, notes: null, status: "ACTIVE" });
+  assert.deepEqual(minimal.values, {
+    name: "Ana Investidora", document: null, phone: null, whatsapp: null, email: null, instagram: null, facebook: null, notes: null, status: "ACTIVE",
+    addressCep: null, addressStreet: null, addressNumber: null, addressComplement: null, addressDistrict: null, addressCity: null, addressState: null,
+  });
   const full = investorFields(form({ name: "Empresa X Ltda", document: "12.345.678/0001-90", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321", email: " Contato@Empresa.COM ", instagram: "@empresax", facebook: "https://facebook.com/empresax", notes: "obs", status: "INACTIVE" }));
   assert.equal(full.ok, true);
   assert.equal(full.values.document, "12345678000190");

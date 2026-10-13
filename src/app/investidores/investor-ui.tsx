@@ -5,17 +5,23 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 import { centsToInput, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCpfCnpj, maskPhone, todayIso } from "@/lib/finance/format";
-import { DOCUMENT_KINDS, INVESTMENT_STATUS, INVESTOR_STATUS, RATE_PERIODS, rateLabel, type DocumentKind, type InvestmentStatus, type InvestorStatus } from "@/lib/investors/rules";
+import { addressLine } from "@/lib/investors/address";
+import { CONTRACT_STATES, contractState, formatDateTime, type ContractState } from "@/lib/investors/contract";
+import { DOCUMENT_KINDS, INVESTMENT_STATUS, INVESTOR_STATUS, RATE_PERIODS, investorAddress, rateLabel, type DocumentKind, type InvestmentStatus, type InvestorStatus } from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
 import { DateField } from "../date-field";
-import { EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
+import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
-import { createInvestmentAction, createInvestorAction, replaceInvestmentDocumentAction, updateInvestmentAction, updateInvestorAction, uploadInvestmentDocumentAction } from "./actions";
+import {
+  createInvestmentAction, createInvestorAction, generateContractAction, markContractSentAction, replaceInvestmentDocumentAction, saveContractorAction,
+  updateInvestmentAction, updateInvestorAction, uploadInvestmentDocumentAction,
+} from "./actions";
 
 type InvestorRow = InvestorsPage["investors"][number];
 type InvestorData = InvestorDetail["investor"];
 type InvestmentData = InvestmentDetail["investment"];
 type DocumentRow = InvestmentDetail["documents"][number];
+type ContractVersion = InvestmentDetail["contract"]["versions"][number];
 
 const investorTone: Record<InvestorStatus, string> = { ACTIVE: "status-active", INACTIVE: "status-muted" };
 const investmentTone: Record<InvestmentStatus, string> = { PENDING_SIGNATURE: "status-due", ACTIVE: "status-active", CLOSED: "status-paid", CANCELED: "status-muted" };
@@ -74,6 +80,7 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
             {(Object.keys(INVESTOR_STATUS) as InvestorStatus[]).map((status) => <option key={status} value={status}>{INVESTOR_STATUS[status]}</option>)}
           </select></label>
         )}
+        <AddressFieldset legend="Endereço (opcional; exigido para gerar o contrato)" nameOf={(part) => `address${part}`} initialOf={(part) => editing?.[`address${part}`] ?? ""} />
         <label className="field field-wide"><span>Observações</span><textarea name="notes" maxLength={1000} rows={3} defaultValue={editing?.notes ?? ""} placeholder="Opcional" /></label>
         <div className="form-actions">
           {onCancel && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
@@ -232,6 +239,7 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
           <div><dt>WhatsApp</dt><dd>{investor.whatsapp ? (whatsapp ? <a className="text-link inline-link" href={whatsapp} target="_blank" rel="noreferrer noopener">{formatPhone(investor.whatsapp)}</a> : formatPhone(investor.whatsapp)) : "—"}</dd></div>
           <div><dt>E-mail</dt><dd>{investor.email ? <a className="text-link inline-link" href={`mailto:${investor.email}`}>{investor.email}</a> : "—"}</dd></div>
           {(Object.keys(SOCIAL_NETWORKS) as SocialNetwork[]).map((network) => <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd><SocialLink network={network} value={investor[network]} /></dd></div>)}
+          <div><dt>Endereço</dt><dd>{addressLine(investorAddress(investor)) ?? "—"}</dd></div>
           {data.isMaster && <div><dt>Carteira</dt><dd>{investor.tenantName}</dd></div>}
           <div><dt>Status</dt><dd>{INVESTOR_STATUS[investor.status]}</dd></div>
           <div><dt>Observações</dt><dd className="preserve-lines">{investor.notes ?? "—"}</dd></div>
@@ -285,15 +293,28 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
   );
 }
 
+// Versão do contrato gerado a que o contrato assinado corresponde (ou "não gerado pelo sistema").
+function SignedVersionSelect({ versions, defaultValue }: { versions: ContractVersion[]; defaultValue: string }) {
+  return (
+    <label className="field"><span>Versão assinada</span><select name="contractId" defaultValue={defaultValue}>
+      {versions.map((version) => <option key={version.id} value={version.id}>{`Versão ${version.version} (gerada em ${dateOf(version.createdAt)})${version.supersededAt ? " · substituída" : ""}`}</option>)}
+      <option value="">Contrato não gerado pelo sistema</option>
+    </select></label>
+  );
+}
+
 // Envio de documento novo (o contrato assinado só uma vez; depois, "Substituir").
-function UploadDocumentForm({ investmentId, hasContract, onDone }: { investmentId: string; hasContract: boolean; onDone: () => void }) {
+function UploadDocumentForm({ investmentId, hasContract, versions, onDone }: { investmentId: string; hasContract: boolean; versions: ContractVersion[]; onDone: () => void }) {
   const { pending, feedback, onSubmit } = useFormAction(uploadInvestmentDocumentAction, onDone);
   const kinds = (Object.keys(DOCUMENT_KINDS) as DocumentKind[]).filter((kind) => !(hasContract && kind === "SIGNED_CONTRACT"));
+  const [kind, setKind] = useState<DocumentKind>(kinds[0]);
+  const current = versions.find((version) => !version.supersededAt);
   return (
     <>
       <form className="form-grid" onSubmit={onSubmit} aria-label="Enviar documento">
         <input type="hidden" name="investmentId" value={investmentId} />
-        <label className="field"><span>Tipo</span><select name="kind" defaultValue={kinds[0]} required>{kinds.map((kind) => <option key={kind} value={kind}>{DOCUMENT_KINDS[kind]}</option>)}</select></label>
+        <label className="field"><span>Tipo</span><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as DocumentKind)} required>{kinds.map((item) => <option key={item} value={item}>{DOCUMENT_KINDS[item]}</option>)}</select></label>
+        {kind === "SIGNED_CONTRACT" && versions.length > 0 && <SignedVersionSelect versions={versions} defaultValue={current?.id ?? ""} />}
         <label className="field"><span>Arquivo</span><input name="file" type="file" accept={ACCEPT} required /></label>
         <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Enviando…" : "Enviar documento"}</button></div>
       </form>
@@ -302,17 +323,130 @@ function UploadDocumentForm({ investmentId, hasContract, onDone }: { investmentI
   );
 }
 
-function ReplaceDocumentForm({ document, onDone, onCancel }: { document: DocumentRow; onDone: () => void; onCancel: () => void }) {
+function ReplaceDocumentForm({ document, versions, onDone, onCancel }: { document: DocumentRow; versions: ContractVersion[]; onDone: () => void; onCancel: () => void }) {
   const { pending, feedback, onSubmit } = useFormAction(replaceInvestmentDocumentAction, onDone);
   return (
     <div className="replace-document">
       <form className="form-grid form-grid-inline" onSubmit={onSubmit} aria-label={`Substituir ${document.fileName}`}>
         <input type="hidden" name="documentId" value={document.id} />
+        {document.kind === "SIGNED_CONTRACT" && versions.length > 0 && <SignedVersionSelect versions={versions} defaultValue={document.contractId ?? ""} />}
         <label className="field"><span>Nova versão de {DOCUMENT_KINDS[document.kind]}</span><input name="file" type="file" accept={ACCEPT} required /></label>
         <span className="row-actions"><button type="button" className="outline-button" onClick={onCancel}>Cancelar</button><button className="primary-button" disabled={pending}>{pending ? "Enviando…" : "Substituir"}</button></span>
       </form>
       <Feedback feedback={feedback} />
     </div>
+  );
+}
+
+const contractTone: Record<ContractState, string> = { GENERATED: "status-due", SENT: "status-active", SIGNED: "status-paid", SUPERSEDED: "status-muted" };
+const signedNote = (document: DocumentRow) => (document.kind === "SIGNED_CONTRACT" ? (document.contractVersion ? ` · assinatura da versão ${document.contractVersion} do contrato gerado` : " · contrato não gerado pelo sistema") : "");
+
+// Dados da empresa contratante: um cadastro por carteira, usado em todos os contratos. Só gera contrato depois de confirmado.
+function ContractorForm({ investmentId, contractor, onDone, onCancel }: { investmentId: string; contractor: InvestmentDetail["contract"]["contractor"]; onDone: () => void; onCancel: () => void }) {
+  const { pending, feedback, onSubmit } = useFormAction(saveContractorAction, onDone);
+  return (
+    <div className="contract-subpanel">
+      <form className="form-grid" onSubmit={onSubmit} aria-label="Dados da empresa contratante">
+        <input type="hidden" name="investmentId" value={investmentId} />
+        <label className="field field-wide"><span>Razão social</span><input name="legalName" maxLength={200} defaultValue={contractor?.legalName ?? ""} placeholder="Razão social completa, como no CNPJ" /></label>
+        <label className="field"><span>CNPJ (ou CPF)</span><MaskedInput name="document" mask={maskCpfCnpj} initial={formatCpfCnpj(contractor?.document ?? null) ?? ""} inputMode="numeric" placeholder="12.345.678/0001-90" maxLength={40} /></label>
+        <label className="field"><span>Representante legal (opcional)</span><input name="representativeName" maxLength={160} defaultValue={contractor?.representativeName ?? ""} placeholder="Quem assina pela empresa" /></label>
+        <label className="field"><span>CPF do representante (opcional)</span><MaskedInput name="representativeDocument" mask={maskCpfCnpj} initial={formatCpfCnpj(contractor?.representativeDocument ?? null) ?? ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={20} /></label>
+        <AddressFieldset legend="Endereço da empresa" nameOf={(part) => `address${part}`} initialOf={(part) => contractor?.address[part] ?? ""} />
+        <label className="check-field field-wide"><input type="checkbox" name="confirmed" value="1" defaultChecked={Boolean(contractor?.confirmedAt)} /><span>Confirmo que estes dados estão corretos e podem ser usados nos contratos de investimento desta carteira.</span></label>
+        <div className="form-actions">
+          <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>
+          <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar dados da empresa"}</button>
+        </div>
+      </form>
+      <Feedback feedback={feedback} />
+    </div>
+  );
+}
+
+function MarkSentButton({ contract, onDone }: { contract: ContractVersion; onDone: () => void }) {
+  const { pending, feedback, onSubmit } = useFormAction(markContractSentAction, onDone);
+  return (
+    <form onSubmit={onSubmit} className="inline-form">
+      <input type="hidden" name="contractId" value={contract.id} />
+      <button className="outline-button" disabled={pending}>{pending ? "Marcando…" : "Marcar como enviado"}</button>
+      <Feedback feedback={feedback} />
+    </form>
+  );
+}
+
+// Contrato para assinatura: gerar, visualizar, baixar e gerar nova versão. O PDF gerado não é assinado.
+function ContractSection({ data, hasSignedContract, onDone }: { data: InvestmentDetail; hasSignedContract: boolean; onDone: () => void }) {
+  const { contract, investment } = data;
+  const [editingContractor, setEditingContractor] = useState(false);
+  const [includeNotes, setIncludeNotes] = useState(contract.includeNotesDefault);
+  const { pending, feedback, onSubmit } = useFormAction(generateContractAction, onDone);
+  const current = contract.versions.find((version) => !version.supersededAt) ?? null;
+  const missing = includeNotes ? contract.missing.withNotes : contract.missing.withoutNotes;
+  const unchanged = Boolean(current && contract.dataChanged === false && includeNotes === current.includesNotes);
+  const contractor = contract.contractor;
+  return (
+    <section className="panel form-panel" aria-label="Contrato para assinatura">
+      <div className="panel-header"><div><div className="panel-title-row"><h2>Contrato para assinatura</h2><span className="today-count">{contract.versions.length}</span></div>
+        <p>Gere o contrato com os dados cadastrados, baixe o PDF e envie ao investidor. Depois anexe a versão assinada em Documentos, como &quot;Contrato assinado&quot;.</p></div></div>
+      <p className="capital-note">O PDF gerado aqui não tem assinaturas e não substitui o contrato assinado. O modelo ainda precisa de revisão jurídica antes do uso real.</p>
+
+      <div className="contract-subpanel">
+        <div className="contract-subpanel-head">
+          <div><strong>Empresa contratante</strong><small>{contractor?.legalName
+            ? `${contractor.legalName} · ${formatCpfCnpj(contractor.document) ?? "sem CNPJ"} · ${contractor.confirmedAt ? `confirmados em ${dateOf(contractor.confirmedAt)}` : "dados não confirmados"}`
+            : "Ainda não cadastrada. Vale para todos os contratos desta carteira."}</small></div>
+          <button type="button" className="outline-button" onClick={() => setEditingContractor(!editingContractor)}>{editingContractor ? "Fechar" : contractor ? "Editar dados da empresa" : "Cadastrar dados da empresa"}</button>
+        </div>
+        {editingContractor && <ContractorForm investmentId={investment.id} contractor={contractor} onDone={() => { setEditingContractor(false); onDone(); }} onCancel={() => setEditingContractor(false)} />}
+      </div>
+
+      {current && contract.dataChanged && <p className="form-feedback form-feedback-warning" role="status">Os dados do contrato mudaram desde a versão {current.version}. Gere uma nova versão para que o investidor assine o texto atualizado.</p>}
+      {missing.length > 0 && (
+        <div className="contract-missing" role="status">
+          <strong>Para gerar a versão final do contrato, falta:</strong>
+          <ul>{missing.map((item) => <li key={`${item.section}-${item.item}`}>{`${item.section}: ${item.item}`}</li>)}</ul>
+          <small>Edite o investidor, o investimento ou os dados da empresa contratante. Nada é preenchido com valores fictícios.</small>
+        </div>
+      )}
+
+      <form className="form-grid" onSubmit={onSubmit} aria-label="Gerar contrato">
+        <input type="hidden" name="investmentId" value={investment.id} />
+        {contract.hasNotes && (
+          <label className="check-field field-wide"><input type="checkbox" name="includeNotes" value="1" checked={includeNotes} onChange={(event) => setIncludeNotes(event.target.checked)} />
+            <span>Incluir as observações do investimento no contrato, como condições adicionais (o texto entra exatamente como está cadastrado).</span></label>
+        )}
+        {hasSignedContract && (
+          <label className="check-field field-wide"><input type="checkbox" name="confirmSignedKept" value="1" required />
+            <span>Entendo que este investimento já tem contrato assinado: ele continua em Documentos e a nova versão precisa ser assinada à parte.</span></label>
+        )}
+        <div className="form-actions">
+          <button className="primary-button" disabled={pending || missing.length > 0 || unchanged}><Icon name="file" size={16} /> {pending ? "Gerando…" : current ? "Gerar nova versão do contrato" : "Gerar contrato"}</button>
+        </div>
+        {unchanged && <p className="capital-note field-wide">Os dados não mudaram desde a versão {current?.version}: use a versão atual.</p>}
+      </form>
+      <Feedback feedback={feedback} />
+
+      {contract.versions.length > 0 && (
+        <ul className="document-list" aria-label="Versões do contrato gerado">{contract.versions.map((version) => {
+          const state = contractState(version);
+          return (
+            <li key={version.id}>
+              <div>
+                <strong>{`Contrato gerado · versão ${version.version}`}{!version.supersededAt && version.version > 1 ? " (nova versão)" : ""} <span className={`status-chip ${contractTone[state]}`}><i />{CONTRACT_STATES[state]}</span></strong>
+                <small>{`Gerado em ${formatDateTime(new Date(version.createdAt))}${version.generatedBy ? ` por ${version.generatedBy}` : ""} · ${formatBytes(version.sizeBytes)} · SHA-256 ${version.sha256.slice(0, 12)}…`}
+                  {version.sentAt ? ` · enviado em ${dateOf(version.sentAt)}` : ""}{version.supersededAt ? ` · substituído em ${dateOf(version.supersededAt)}` : ""}</small>
+              </div>
+              <span className="row-actions">
+                <a className="outline-button" href={`/investidores/contratos/${version.id}`} target="_blank" rel="noreferrer">Visualizar</a>
+                <a className="outline-button" href={`/investidores/contratos/${version.id}?baixar=1`} download={version.fileName}>Baixar PDF</a>
+                {!version.supersededAt && !version.sentAt && !version.signed && <MarkSentButton contract={version} onDone={onDone} />}
+              </span>
+            </li>
+          );
+        })}</ul>
+      )}
+    </section>
   );
 }
 
@@ -325,6 +459,7 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
   const current = data.documents.filter((document) => !document.replacedAt);
   const history = data.documents.filter((document) => document.replacedAt);
   const hasContract = current.some((document) => document.kind === "SIGNED_CONTRACT");
+  const versions = data.contract.versions;
   const refresh = () => router.refresh();
   return (
     <div className="workspace-page">
@@ -350,6 +485,8 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
         </dl>
       </section>
 
+      <ContractSection data={data} hasSignedContract={hasContract} onDone={refresh} />
+
       <section className="panel form-panel" aria-label="Cálculos do investimento">
         <div className="panel-header"><div><h2>Rendimento e devolução</h2><p>Estrutura preparada: os valores aparecem quando as regras financeiras dos investimentos forem definidas.</p></div></div>
         <dl className="payment-summary">
@@ -365,23 +502,23 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
         {current.length > 0 && (
           <ul className="document-list">{current.map((document) => (
             <li key={document.id}>
-              <div><strong>{DOCUMENT_KINDS[document.kind]}</strong><small>{document.fileName} · {formatBytes(document.sizeBytes)} · enviado em {dateOf(document.createdAt)}{document.uploadedBy ? ` por ${document.uploadedBy}` : ""}</small></div>
+              <div><strong>{DOCUMENT_KINDS[document.kind]}</strong><small>{document.fileName} · {formatBytes(document.sizeBytes)} · enviado em {dateOf(document.createdAt)}{document.uploadedBy ? ` por ${document.uploadedBy}` : ""}{signedNote(document)}</small></div>
               <span className="row-actions">
                 <a className="outline-button" href={`/investidores/documentos/${document.id}`} target="_blank" rel="noreferrer">Visualizar</a>
                 <a className="outline-button" href={`/investidores/documentos/${document.id}?baixar=1`} download={document.fileName}>Baixar</a>
                 <button type="button" className="outline-button" onClick={() => setReplacing(replacing === document.id ? null : document.id)}>Substituir</button>
               </span>
-              {replacing === document.id && <ReplaceDocumentForm document={document} onDone={() => { setReplacing(null); refresh(); }} onCancel={() => setReplacing(null)} />}
+              {replacing === document.id && <ReplaceDocumentForm document={document} versions={versions} onDone={() => { setReplacing(null); refresh(); }} onCancel={() => setReplacing(null)} />}
             </li>
           ))}</ul>
         )}
-        <UploadDocumentForm key={String(hasContract)} investmentId={investment.id} hasContract={hasContract} onDone={refresh} />
+        <UploadDocumentForm key={String(hasContract)} investmentId={investment.id} hasContract={hasContract} versions={versions} onDone={refresh} />
         {history.length > 0 && (
           <details className="document-history">
             <summary>{`Versões substituídas (${history.length})`}</summary>
             <ul className="document-list">{history.map((document) => (
               <li key={document.id}>
-                <div><strong>{DOCUMENT_KINDS[document.kind]}</strong><small>{document.fileName} · enviado em {dateOf(document.createdAt)} · substituído em {dateOf(document.replacedAt as string)}</small></div>
+                <div><strong>{DOCUMENT_KINDS[document.kind]}</strong><small>{document.fileName} · enviado em {dateOf(document.createdAt)} · substituído em {dateOf(document.replacedAt as string)}{signedNote(document)}</small></div>
                 <span className="row-actions"><a className="outline-button" href={`/investidores/documentos/${document.id}`} target="_blank" rel="noreferrer">Visualizar</a></span>
               </li>
             ))}</ul>

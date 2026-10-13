@@ -1056,3 +1056,16 @@ button { color:inherit; }
   .replace-document .form-grid-inline { grid-template-columns:1fr; }
 }
 @media (max-width:540px) { .investor-filters { grid-template-columns:1fr; } }
+/* Contrato de investimento gerado: empresa contratante, pendências e versões. */
+.check-field { display:flex; align-items:flex-start; gap:8px; color:#c9dbe4; font-size:12px; line-height:1.45; cursor:pointer; }
+.check-field input { margin-top:2px; accent-color:#2dccc9; flex:none; }
+.contract-subpanel { margin-top:14px; padding:10px 12px; border:1px solid rgba(112,145,170,.14); border-radius:8px; }
+.contract-subpanel-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.contract-subpanel-head > div { display:grid; gap:2px; min-width:0; color:#dff4f6; font-size:12px; }
+.contract-subpanel-head small { color:#7f95a4; font-size:10px; overflow-wrap:anywhere; }
+.contract-subpanel .form-grid { margin-top:12px; }
+.contract-missing { margin-top:14px; padding:10px 12px; border:1px solid rgba(231,180,85,.3); border-radius:8px; background:rgba(231,180,85,.06); color:#ecc16b; font-size:12px; }
+.contract-missing ul { margin:6px 0; padding-left:18px; }
+.contract-missing small { color:#a8b9c4; font-size:10px; }
+.inline-form { display:inline-flex; flex-direction:column; gap:4px; }
+.document-list li strong .status-chip { margin-left:6px; vertical-align:middle; }

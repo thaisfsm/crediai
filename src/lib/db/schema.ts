@@ -459,6 +459,14 @@ export const investors = pgTable("investor", {
   instagram: text("instagram"),
   facebook: text("facebook"),
   notes: text("notes"),
+  // Endereço (opcional no cadastro; obrigatório para gerar o contrato de investimento).
+  addressCep: text("address_cep"),
+  addressStreet: text("address_street"),
+  addressNumber: text("address_number"),
+  addressComplement: text("address_complement"),
+  addressDistrict: text("address_district"),
+  addressCity: text("address_city"),
+  addressState: text("address_state"),
   status: investorStatus("status").notNull().default("ACTIVE"),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -505,6 +513,70 @@ export const investments = pgTable("investment", {
   ...tenantPolicies("investment", table.tenantId),
 ]).enableRLS();
 
+// Empresa contratante dos contratos de investimento (uma por tenant). Os dados são digitados e confirmados pelo próprio
+// tenant (ou pelo MASTER): o contrato só é gerado com eles completos e confirmed_at preenchido. Nada vem do nome do tenant.
+export const investmentContractors = pgTable("investment_contractor", {
+  tenantId: text("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  // Razão social (ou nome, se a contratante for pessoa física) e CNPJ/CPF, só dígitos.
+  legalName: text("legal_name"),
+  document: text("document"),
+  addressCep: text("address_cep"),
+  addressStreet: text("address_street"),
+  addressNumber: text("address_number"),
+  addressComplement: text("address_complement"),
+  addressDistrict: text("address_district"),
+  addressCity: text("address_city"),
+  addressState: text("address_state"),
+  // Representante legal que assina pela empresa (opcional).
+  representativeName: text("representative_name"),
+  representativeDocument: text("representative_document"),
+  // Preenchido quando o usuário confirma os dados; qualquer gravação sem a confirmação volta a null.
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  confirmedByUserId: text("confirmed_by_user_id"),
+  updatedByUserId: text("updated_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  ...tenantPolicies("investment_contractor", table.tenantId),
+]).enableRLS();
+
+// Contratos GERADOS pelo sistema (PDF ainda não assinado), em versões numeradas por investimento. Não se confundem com o
+// contrato assinado, que continua em investment_document (kind SIGNED_CONTRACT) e aponta para a versão que foi assinada.
+// Gerar nova versão só marca a anterior como substituída: nenhuma versão e nenhum documento assinado é apagado.
+export const investmentContracts = pgTable("investment_contract", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  version: integer("version").notNull(),
+  // Modelo usado e o hash dos dados que entraram no contrato (para saber se os dados mudaram desde esta versão).
+  templateVersion: text("template_version").notNull(),
+  dataHash: text("data_hash").notNull(),
+  includesNotes: boolean("includes_notes").notNull(),
+  fileName: text("file_name").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  content: bytea("content").notNull(),
+  generatedByUserId: text("generated_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Marcado à mão quando o usuário envia o PDF para o investidor assinar (o envio é feito fora do sistema).
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  sentByUserId: text("sent_by_user_id"),
+  supersededAt: timestamp("superseded_at", { withTimezone: true }),
+  supersededByContractId: text("superseded_by_contract_id"),
+}, (table) => [
+  index("investment_contract_investment_id_idx").on(table.investmentId),
+  unique("investment_contract_tenant_id_id_unique").on(table.tenantId, table.id),
+  uniqueIndex("investment_contract_version_unique").on(table.investmentId, table.version),
+  // Uma única versão vigente por investimento.
+  uniqueIndex("investment_contract_current_unique").on(table.investmentId).where(sql`${table.supersededAt} is null`),
+  foreignKey({ name: "investment_contract_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  check("investment_contract_version_positive", sql`${table.version} > 0`),
+  check("investment_contract_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
+  check("investment_contract_superseded_link", sql`(${table.supersededAt} is null) = (${table.supersededByContractId} is null)`),
+  check("investment_contract_sent_link", sql`(${table.sentAt} is null) = (${table.sentByUserId} is null)`),
+  ...tenantPolicies("investment_contract", table.tenantId),
+]).enableRLS();
+
 // Documentos do INVESTIMENTO (não do investidor): contrato assinado, aditivos, comprovantes. O arquivo fica no banco,
 // como os documentos de clientes. Substituir não apaga: a versão anterior fica no histórico com replaced_at.
 export const investmentDocuments = pgTable("investment_document", {
@@ -520,9 +592,13 @@ export const investmentDocuments = pgTable("investment_document", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   replacedAt: timestamp("replaced_at", { withTimezone: true }),
   replacedByDocumentId: text("replaced_by_document_id"),
+  // Contrato assinado: a versão gerada pelo sistema que foi assinada (null = contrato não gerado pelo sistema).
+  contractId: text("contract_id"),
 }, (table) => [
   index("investment_document_investment_id_idx").on(table.investmentId),
   foreignKey({ name: "investment_document_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  foreignKey({ name: "investment_document_contract_same_tenant_fk", columns: [table.tenantId, table.contractId], foreignColumns: [investmentContracts.tenantId, investmentContracts.id] }).onDelete("restrict"),
+  check("investment_document_contract_only_signed", sql`${table.contractId} is null or ${table.kind} = 'SIGNED_CONTRACT'`),
   // Um único contrato assinado vigente por investimento; os anteriores ficam como substituídos.
   uniqueIndex("investment_document_current_contract_unique").on(table.investmentId).where(sql`${table.kind} = 'SIGNED_CONTRACT' and ${table.replacedAt} is null`),
   check("investment_document_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
@@ -560,7 +636,7 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_select_admin_only", { for: "select", using: adminScope }),
   pgPolicy("admin_audit_log_insert_admin_only", { for: "insert", withCheck: adminScope }),
   // O usuário do tenant também registra o que faz no módulo Investidores, só no próprio tenant (e continua sem ler o log).
-  pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document')` }),
+  pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document', 'investment_contract', 'investment_contractor')` }),
 ]).enableRLS();
 
-export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

@@ -26,12 +26,16 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_STATUS_CHANGED: "Status do investimento alterado",
   INVESTMENT_DOCUMENT_UPLOADED: "Documento do investimento enviado",
   INVESTMENT_DOCUMENT_REPLACED: "Documento do investimento substituído",
+  INVESTMENT_CONTRACTOR_UPDATED: "Dados da empresa contratante alterados",
+  INVESTMENT_CONTRACT_GENERATED: "Contrato de investimento gerado",
+  INVESTMENT_CONTRACT_SENT: "Contrato marcado como enviado para assinatura",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 
 export const AUDIT_ENTITIES: Record<string, string> = {
   tenant: "Cliente SaaS", subscription: "Assinatura", user: "Usuário", plan: "Plano", subscription_charge: "Mensalidade",
   investor: "Investidor", investment: "Investimento", investment_document: "Documento do investimento",
+  investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.
@@ -74,4 +78,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   investorId: "Investidor", investorName: "Investidor", agreedRateBps: "Taxa combinada (pontos-base)", ratePeriod: "Período da taxa",
   startDate: "Início", maturityDate: "Vencimento do contrato", dueDay: "Dia de vencimento", kind: "Tipo de documento", fileName: "Arquivo",
   contentType: "Formato", sizeBytes: "Tamanho (bytes)", replacedDocumentId: "Documento substituído",
+  address: "Endereço", legalName: "Razão social", representativeName: "Representante legal", representativeDocument: "CPF do representante",
+  confirmed: "Dados confirmados", version: "Versão do contrato", contractId: "Contrato gerado", sha256: "Hash do arquivo (SHA-256)",
+  templateVersion: "Modelo", includesNotes: "Observações no contrato", signedContractKept: "Contrato assinado mantido", sent: "Enviado para assinatura",
+  contractVersion: "Versão assinada",
 };
