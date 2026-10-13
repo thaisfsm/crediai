@@ -325,7 +325,7 @@ export const loanOperations = pgTable("loan_operation", {
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
-  // (total dividido em pagamentos diários). O parcelado é sempre MONTHLY. Regras em src/lib/finance/rules.ts.
+  // (total dividido em pagamentos diários). O parcelado é MONTHLY ou BIWEEKLY (parcelas quinzenais). Regras em src/lib/finance/rules.ts.
   frequency: text("frequency").notNull().default("MONTHLY"),
   // Parcelado e diário: quantidade de parcelas, valor de cada parcela (no diário a última leva o ajuste de centavos) e
   // primeiro vencimento. Pagamento único mensal/quinzenal: first_due_date guarda o primeiro vencimento combinado
@@ -348,7 +348,7 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_modality_valid", sql`(${table.modality} = 'SINGLE' and ${table.frequency} in ('MONTHLY', 'BIWEEKLY') and ${table.installmentCount} is null and ${table.installmentCents} is null)
     or (${table.modality} = 'SINGLE' and ${table.frequency} = 'DAILY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
       and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents} and ${table.totalCents} < ${table.installmentCount} * ${table.installmentCents} + ${table.installmentCount})
-    or (${table.modality} = 'INSTALLMENT' and ${table.frequency} = 'MONTHLY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
+    or (${table.modality} = 'INSTALLMENT' and ${table.frequency} in ('MONTHLY', 'BIWEEKLY') and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
       and ${table.totalCents} = ${table.installmentCount} * ${table.installmentCents})`),
   ...tenantPolicies("loan_operation", table.tenantId),
 ]).enableRLS();

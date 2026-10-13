@@ -30,7 +30,7 @@ const label = (status: string | null) => (status ? STATUS_LABEL[status] ?? statu
 const day = (value: Date | string) => formatDate(typeof value === "string" ? value.slice(0, 10) : todayIso(value));
 const dateTime = (iso: string) => new Intl.DateTimeFormat("pt-BR", { timeZone: TIME_ZONE, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(iso));
 const FREQUENCY_LABEL: Record<string, string> = { MONTHLY: "Mensal", BIWEEKLY: "Quinzenal", DAILY: "Diário" };
-const modalityLabel = (modality: string, frequency: string) => (modality === "INSTALLMENT" ? "Parcelado" : `Pagamento único · ${FREQUENCY_LABEL[frequency] ?? frequency}`);
+const modalityLabel = (modality: string, frequency: string) => (modality === "INSTALLMENT" ? `Parcelado${frequency === "BIWEEKLY" ? " quinzenal" : ""}` : `Pagamento único · ${FREQUENCY_LABEL[frequency] ?? frequency}`);
 type AuditFilters = { aba?: string; q?: string; acao?: string; tenant?: string; de?: string; ate?: string; ordem?: string; pagina?: string };
 
 export default async function AdminPage({ searchParams }: { searchParams: Promise<AuditFilters> }) {
