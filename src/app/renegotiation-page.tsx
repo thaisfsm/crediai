@@ -1,7 +1,8 @@
 "use client";
 
 // Renegociação (Etapa H, parte 1): escolher o cliente e as operações em aberto e simular novas condições.
-// SÓ SIMULA: esta tela não chama nenhuma ação do servidor; nada é gravado, encerrado ou lançado no capital.
+// SÓ SIMULA: esta tela não chama nenhuma ação do servidor; nada é gravado, encerrado ou lançado no capital. A gravação,
+// as situações "Renegociada" e os efeitos financeiros ficam desligados até a revisão e a autorização da Etapa H, parte 2.
 import { useState } from "react";
 import { addDays, formatDate, formatMoney, formatRate, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
 import type { TenantPortfolio } from "@/lib/finance/queries";
@@ -19,6 +20,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const [excluded, setExcluded] = useState<string[]>([]);
   const [adjustmentKind, setAdjustmentKind] = useState<"NONE" | "DISCOUNT" | "ADDITION">("NONE");
   const [adjustment, setAdjustment] = useState("");
+  const [adjustmentReason, setAdjustmentReason] = useState("");
   const [modality, setModality] = useState<RenegotiationModality>("INSTALLMENT");
   const [frequency, setFrequency] = useState<RenegotiationFrequency>("MONTHLY");
   const [rate, setRate] = useState("");
@@ -30,7 +32,9 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const rateBps = parseRateToBps(rate);
   const adjustmentCents = adjustmentKind === "NONE" ? 0 : parseMoneyToCents(adjustment);
   const periods = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(count) ? Number(count) : NaN) : 1;
-  const ready = chosen.length > 0 && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
+  // Desconto ou acréscimo só entra com motivo (D-H1).
+  const reasonMissing = adjustmentKind !== "NONE" && adjustmentReason.trim().length < 3;
+  const ready = chosen.length > 0 && !reasonMissing && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
   const result = ready ? simulateRenegotiation(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number) }) : null;
   const periodWord = frequency === "BIWEEKLY" ? "quinzena" : "mês";
   return (
@@ -48,7 +52,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             </div>
             {operations.length > 0 && (
               <div className="table-scroll"><table className="data-table">
-                <thead><tr><th>Incluir</th><th>Operação</th><th>Empréstimo</th><th>Principal em aberto</th><th>Juros em aberto</th><th>Saldo</th><th>Situação</th></tr></thead>
+                <thead><tr><th>Incluir</th><th>Operação</th><th>Empréstimo</th><th>Principal em aberto</th><th>Juros em aberto</th><th>Saldo para quitação</th><th>Situação</th></tr></thead>
                 <tbody>{operations.map((operation) => (
                   <tr key={operation.id}>
                     <td><input type="checkbox" aria-label={`Incluir #${operation.code}`} checked={!excluded.includes(operation.id)} onChange={(event) => setExcluded(event.target.checked ? excluded.filter((id) => id !== operation.id) : [...excluded, operation.id])} /></td>
@@ -78,10 +82,12 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
               <option value="NONE">Sem ajuste</option><option value="DISCOUNT">Desconto</option><option value="ADDITION">Acréscimo</option>
             </select></label>
             {adjustmentKind !== "NONE" && <label className="field"><span>{adjustmentKind === "DISCOUNT" ? "Valor do desconto (R$)" : "Valor do acréscimo (R$)"}</span><input inputMode="decimal" placeholder="0,00" value={adjustment} onChange={(event) => setAdjustment(event.target.value)} /></label>}
+            {adjustmentKind !== "NONE" && <label className="field field-wide"><span>{adjustmentKind === "DISCOUNT" ? "Motivo do desconto" : "Motivo do acréscimo"}</span><input maxLength={300} placeholder="Ex.: acordo para quitar em 3 meses" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} /></label>}
             <label className="field"><span>{`Taxa de juros por ${periodWord} (%)`}</span><input inputMode="decimal" placeholder="5" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
             {modality === "INSTALLMENT" && <label className="field"><span>{frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Quantidade de parcelas (meses)"}</span><input inputMode="numeric" maxLength={3} value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
             <DateField label={modality === "INSTALLMENT" ? "Primeiro vencimento" : "Vencimento"} name="simulationFirstDue" defaultValue={firstDueDate} onChange={setFirstDueDate} />
           </div>
+          {reasonMissing && <p className="form-feedback form-feedback-warning">{`Informe o motivo do ${adjustmentKind === "DISCOUNT" ? "desconto" : "acréscimo"} para ver a simulação.`}</p>}
         </section>
       )}
 
@@ -102,7 +108,19 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <p><strong>{modality === "INSTALLMENT" ? "Parcelas simuladas" : "Pagamento simulado"}</strong>{modality === "SINGLE" ? ` · pagando só os juros (${formatMoney(result.periodInterestCents)}), o período renovaria, como nas operações de hoje` : ""}</p>
             <ol>{result.payments.map((payment) => <li key={payment.number}><span>{modality === "INSTALLMENT" ? `Parcela ${payment.number}` : "Quitação"}</span><strong>{formatDate(payment.dueDate)}</strong><span>{formatMoney(payment.amountCents)}</span></li>)}</ol>
           </div>
-          <p className="capital-note">Efeito no capital, pela proposta D-H2 (ainda não decidida): nenhum dinheiro sai nem entra na renegociação; o principal em aberto continua emprestado e os juros em aberto incorporados só contam como lucro quando forem pagos.</p>
+          {adjustmentKind !== "NONE" && <p className="muted-cell">{`Motivo do ${adjustmentKind === "DISCOUNT" ? "desconto" : "acréscimo"}: ${adjustmentReason.trim()}`}</p>}
+          <div className="table-scroll"><table className="data-table renegotiation-compare" aria-label="Atual e proposta">
+            <thead><tr><th>Comparação</th><th>Hoje</th><th>Proposta</th></tr></thead>
+            <tbody>
+              <tr><td>Principal em aberto</td><td>{formatMoney(result.comparison.principal.current)}</td><td>{formatMoney(result.comparison.principal.proposal)}</td></tr>
+              <tr><td>Juros a receber</td><td>{formatMoney(result.comparison.interest.current)}</td><td>{formatMoney(result.comparison.interest.proposal)}</td></tr>
+              <tr><td>Total a receber</td><td><strong>{formatMoney(result.comparison.total.current)}</strong></td><td><strong>{formatMoney(result.comparison.total.proposal)}</strong></td></tr>
+              <tr><td>Último vencimento</td><td>{formatDate(chosen.reduce((last, operation) => operation.dueDate > last ? operation.dueDate : last, chosen[0].dueDate))}</td><td>{formatDate(result.payments[result.payments.length - 1].dueDate)}</td></tr>
+              <tr><td>Lucro realizado (juros recebidos)</td><td>{formatMoney(result.comparison.realizedProfit.current)}</td><td>{formatMoney(result.comparison.realizedProfit.proposal)}</td></tr>
+              <tr><td>Saída de caixa na renegociação</td><td>—</td><td>{formatMoney(result.comparison.capitalOutflowCents)}</td></tr>
+            </tbody>
+          </table></div>
+          <p className="capital-note">Efeito esperado (propostas D-H2 e D-H3, ainda não decididas): nenhum dinheiro sai do capital, porque o principal da proposta é o mesmo já emprestado. Os juros recebidos continuam registrados nas operações antigas. Os juros a receber da proposta só viram lucro quando forem pagos. As antigas ficariam como “Renegociada”, ligadas à nova, sem apagar pagamentos.</p>
         </section>
       )}
     </div>

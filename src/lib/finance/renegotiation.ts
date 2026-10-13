@@ -27,6 +27,8 @@ export function renegotiationPosition(operations: OperationView[]) {
     balanceCents: sum((operation) => operation.balanceCents),
     overdueCount: open.filter((operation) => operation.state === "OVERDUE").length,
     receivedCents: sum((operation) => operation.paidCents),
+    // Juros já recebidos nas operações escolhidas: lucro realizado que continua registrado nelas.
+    interestReceivedCents: sum((operation) => operation.interestPaidCents),
   };
 }
 export type RenegotiationPosition = ReturnType<typeof renegotiationPosition>;
@@ -45,7 +47,19 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
   const warnings: string[] = [];
   if (renegotiatedCents < baseCents) warnings.push("O desconto passa dos juros em aberto: parte do principal emprestado deixaria de voltar.");
   if (position.balanceCents !== baseCents + carriedInterestCents) warnings.push("O saldo das operações não bate com principal + juros em aberto; confira as operações escolhidas.");
+  // Cenário atual × proposta. O ajuste age primeiro sobre os juros em aberto; um desconto maior que eles reduz o principal
+  // (o aviso acima). O principal da proposta é o mesmo dinheiro já emprestado: nenhuma saída nova de caixa.
+  const interestAfterAdjustment = carriedInterestCents + terms.adjustmentCents;
+  const comparison = {
+    principal: { current: baseCents, proposal: baseCents + Math.min(0, interestAfterAdjustment) },
+    interest: { current: carriedInterestCents, proposal: Math.max(0, interestAfterAdjustment) + newInterestCents },
+    total: { current: position.balanceCents, proposal: totalCents },
+    // Lucro realizado não muda na renegociação: os juros recebidos continuam nas antigas e os novos só contam quando pagos.
+    realizedProfit: { current: position.interestReceivedCents, proposal: position.interestReceivedCents },
+    capitalOutflowCents: 0,
+  };
   return {
+    comparison,
     baseCents, carriedInterestCents, adjustmentCents: terms.adjustmentCents, renegotiatedCents, newInterestCents, totalCents, payments,
     // Na renovação do pagamento único, cada novo período cobraria de novo a taxa sobre o principal em aberto.
     periodInterestCents: simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps }),

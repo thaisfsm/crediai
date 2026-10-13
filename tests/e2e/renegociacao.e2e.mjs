@@ -51,7 +51,7 @@ test("preparação: duas operações em aberto do mesmo cliente", async () => {
   before = await dataHash();
 });
 
-test("RN1. tela: posição, desconto de R$ 100, 3 parcelas mensais a 10% e o aviso de desconto acima dos juros (desktop e celular); nada é gravado", async () => {
+test("RN1. tela: posição, desconto de R$ 100 com motivo, 3 parcelas mensais a 10%, comparação hoje × proposta e o aviso de desconto acima dos juros (desktop e celular); nada é gravado", async () => {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   for (const [label, viewport] of [["desktop", { width: 1440, height: 900 }], ["celular", { width: 390, height: 844 }]]) {
@@ -71,11 +71,25 @@ test("RN1. tela: posição, desconto de R$ 100, 3 parcelas mensais a 10% e o avi
     await terms.getByLabel("Quantidade de parcelas (meses)").fill("3");
     await terms.getByLabel("Primeiro vencimento").fill("15/11/2026");
     await terms.getByLabel("Primeiro vencimento").press("Tab");
+    // Sem motivo, o desconto não é simulado.
+    await terms.getByText("Informe o motivo do desconto para ver a simulação.").waitFor();
+    assert.equal(await page.getByRole("region", { name: "Resultado da simulação" }).count(), 0);
+    await terms.getByLabel("Motivo do desconto").fill("acordo para quitar em 3 meses");
     const result = page.getByRole("region", { name: "Resultado da simulação" });
     await result.waitFor();
     const summary = await result.locator(".payment-summary").innerText();
     // Valor renegociado = 1.900 − 100 = 1.800; juros novos = 1.500 × 10% × 3 = 450 (nunca sobre os juros); total 2.250.
     for (const expected of [/Valor renegociado\s+R\$\s1\.800,00/, /Juros novos[^\n]*\s+R\$\s450,00/, /Total a receber \(depois\)\s+R\$\s2\.250,00/]) assert.match(summary, expected);
+    // Comparação hoje × proposta: principal igual (sem dinheiro novo), juros 400 − 100 + 450 = 750, lucro realizado igual.
+    const compare = result.getByRole("table", { name: "Atual e proposta" });
+    const line = async (label) => (await compare.locator("tr", { hasText: label }).innerText()).replace(/\s+/g, " ");
+    assert.match(await line("Principal em aberto"), /R\$ 1\.500,00 R\$ 1\.500,00/);
+    assert.match(await line("Juros a receber"), /R\$ 400,00 R\$ 750,00/);
+    assert.match(await line("Total a receber"), /R\$ 1\.900,00 R\$ 2\.250,00/);
+    assert.match(await line("Último vencimento"), /05\/11\/2026 15\/01\/2027/);
+    assert.match(await line("Lucro realizado"), /R\$ 0,00 R\$ 0,00/);
+    assert.match(await line("Saída de caixa"), /R\$ 0,00/);
+    await result.getByText("Motivo do desconto: acordo para quitar em 3 meses").waitFor();
     const payments = result.getByLabel("Pagamentos simulados");
     assert.deepEqual(await payments.locator("li strong").allInnerTexts(), ["15/11/2026", "15/12/2026", "15/01/2027"]);
     assert.equal((await payments.locator("li").allInnerTexts()).filter((text) => /R\$\s750,00/.test(text)).length, 3);
