@@ -262,6 +262,24 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
           </table></div>
         )}
       </section>
+      <section className="panel form-panel" aria-label="Documentos dos investimentos">
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Documentos dos investimentos</h2><span className="today-count">{data.documents.length}</span></div><p>Versões vigentes. Cada documento pertence a um investimento: envie ou substitua na página do investimento.</p></div></div>
+        {data.documents.length === 0 ? <EmptyPanel icon="file" text="Nenhum documento enviado nos investimentos deste investidor." /> : (
+          <ul className="document-list">{data.documents.map((document) => {
+            const contract = investments.find((item) => item.id === document.investmentId);
+            return (
+              <li key={document.id}>
+                <div><strong>{DOCUMENT_KINDS[document.kind]}{contract ? ` · investimento de ${formatMoney(contract.amountCents)} (${formatDate(contract.startDate)})` : ""}</strong><small>{document.fileName} · {formatBytes(document.sizeBytes)} · enviado em {dateOf(document.createdAt)}</small></div>
+                <span className="row-actions">
+                  <a className="outline-button" href={`/investidores/documentos/${document.id}`} target="_blank" rel="noreferrer">Visualizar</a>
+                  <a className="outline-button" href={`/investidores/documentos/${document.id}?baixar=1`} download={document.fileName}>Baixar</a>
+                  <Link prefetch={false} className="outline-button" href={`/investidores/investimentos/${document.investmentId}`}>Abrir investimento</Link>
+                </span>
+              </li>
+            );
+          })}</ul>
+        )}
+      </section>
       {creating && <InvestmentForm investorId={investor.id} today={today} onDone={() => { setCreating(false); router.refresh(); }} onCancel={() => setCreating(false)} />}
     </div>
   );

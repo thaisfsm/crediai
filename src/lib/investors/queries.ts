@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, gte, ilike, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { investmentDocuments, investments, investors, tenants, users } from "@/lib/db/schema";
 import { onlyDigits, todayIso } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext, type InvestorScope } from "./access";
@@ -97,7 +97,15 @@ export async function loadInvestorDetail(investorId: string) {
       hasSignedContract: sql<boolean>`exists (select 1 from investment_document d where d.investment_id = investment.id and d.tenant_id = investment.tenant_id and d.kind = 'SIGNED_CONTRACT' and d.replaced_at is null)`,
     }).from(investments).where(and(eq(investments.investorId, row.investor.id), eq(investments.tenantId, row.investor.tenantId)))
       .orderBy(desc(investments.startDate), desc(investments.createdAt));
+    // Documentos vigentes de todos os contratos do investidor (cada um continua ligado ao seu investimento).
+    const documentRows = await tx.select({
+      id: investmentDocuments.id, investmentId: investmentDocuments.investmentId, kind: investmentDocuments.kind, fileName: investmentDocuments.fileName,
+      sizeBytes: investmentDocuments.sizeBytes, createdAt: investmentDocuments.createdAt,
+    }).from(investmentDocuments).innerJoin(investments, and(eq(investments.id, investmentDocuments.investmentId), eq(investments.tenantId, investmentDocuments.tenantId)))
+      .where(and(eq(investments.investorId, row.investor.id), eq(investmentDocuments.tenantId, row.investor.tenantId), isNull(investmentDocuments.replacedAt)))
+      .orderBy(desc(investmentDocuments.createdAt), asc(investmentDocuments.id));
     return {
+      documents: documentRows.map((document) => ({ ...document, kind: document.kind as DocumentKind, createdAt: document.createdAt.toISOString() })),
       isMaster: scope.isMaster,
       investor: { ...toInvestorView(row.investor), tenantName: row.tenantName },
       investments: contractRows.map(({ investment, documentCount, hasSignedContract }) => ({ ...toInvestmentView(investment), documentCount: Number(documentCount), hasSignedContract: Boolean(hasSignedContract) })),

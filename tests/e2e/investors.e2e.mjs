@@ -156,6 +156,9 @@ test("V5. vincular documento ao investimento: enviar, visualizar, baixar e subst
   assert.equal((await action(robério, "replaceInvestmentDocumentAction", { documentId: ids.documentA }, { file: [PDF2, "application/pdf", "x.pdf"] }))?.ok, false, "versão antiga não é substituída de novo");
   const contract = await page(robério, `/investidores/investimentos/${ids.investmentA}`);
   assert.ok(contract.html.includes("contrato-assinado.pdf") && contract.html.includes("Versões substituídas (1)") && !contract.html.includes("Contrato assinado ainda não enviado"));
+  // A ficha do investidor lista os documentos vigentes de todos os investimentos dele.
+  const investorPage = await page(robério, `/investidores/${ids.investorA}`);
+  assert.ok(investorPage.html.includes("Documentos dos investimentos") && investorPage.html.includes("contrato-assinado.pdf") && !investorPage.html.includes("contrato.pdf ·"));
   const bDoc = await action(fernando, "uploadInvestmentDocumentAction", { investmentId: ids.investmentB, kind: "SIGNED_CONTRACT" }, { file: [PDF, "application/pdf", "b.pdf"] });
   assert.equal(bDoc?.ok, true);
   ids.documentB = bDoc.id;
