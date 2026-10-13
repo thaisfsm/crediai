@@ -69,3 +69,27 @@ test("Q4. parcelado mensal e operações antigas continuam iguais (sem efeito co
   assert.equal(single.nextDueDate, "2026-11-21");
   assert.equal(single.renewalCount, 1);
 });
+
+test("Q5. ordem de Operações e Cobranças: o quinzenal entra pela próxima parcela em aberto (21/11 depois de paga a de 06/11)", async () => {
+  const { buildPortfolio } = await import("../src/lib/finance/portfolio.ts");
+  const base = (id, extra) => ({ id, clientId: id, clientName: `Cliente ${id}`, interestRateBps: 0, loanDate: "2026-10-13", status: "OPEN", settledAt: null, createdAt: "2026-10-13T10:00:00Z", ...extra });
+  const quinzenal = base("q", { modality: "INSTALLMENT", frequency: "BIWEEKLY", principalCents: 60000, interestCents: 30000, totalCents: 90000, installmentCount: 3, installmentCents: 30000, firstDueDate: "2026-11-06", dueDate: "2026-12-06", calculationRule: BIWEEKLY_INSTALLMENT_RULE });
+  const single = (id, due) => base(id, { modality: "SINGLE", frequency: "MONTHLY", principalCents: 100000, interestRateBps: 1000, interestCents: 10000, totalCents: 110000, firstDueDate: due, dueDate: due, calculationRule: "RATE_PER_OPERATION_SINGLE_PAYMENT_V1" });
+  const ops = [single("a", "2026-11-10"), quinzenal, single("b", "2026-11-25")];
+  const build = (payments, today) => buildPortfolio({ initialCapitalCents: 10_000_000, hasWallet: true, operations: ops, payments, today });
+  // Antes de pagar: 06/11 (quinzenal) vem antes de 10/11 e de 25/11.
+  let portfolio = build([], "2026-11-01");
+  assert.deepEqual(portfolio.operationOrder, ["q", "a", "b"]);
+  assert.deepEqual(portfolio.chargeOrder, ["q", "a", "b"]);
+  // Paga a 1ª parcela: a próxima obrigação passa a 21/11, entre 10/11 e 25/11.
+  const paid = [{ id: "p1", operationId: "q", clientName: "x", amountCents: 30000, paidAt: "2026-11-06", notes: null, createdAt: "2026-11-06T12:00:00Z" }];
+  portfolio = build(paid, "2026-11-07");
+  assert.equal(portfolio.operations.find((operation) => operation.id === "q").nextOpenDueDate, "2026-11-21");
+  assert.deepEqual(portfolio.operationOrder, ["a", "q", "b"]);
+  assert.deepEqual(portfolio.chargeOrder, ["a", "q", "b"]);
+  // 22/11 sem pagar a 2ª: em atraso, saldo de R$ 600 e primeira das duas listas.
+  portfolio = build(paid, "2026-11-22");
+  const late = portfolio.operations.find((operation) => operation.id === "q");
+  assert.deepEqual([late.state, late.balanceCents], ["OVERDUE", 60000]);
+  assert.equal(portfolio.chargeOrder[0], "a");
+});
