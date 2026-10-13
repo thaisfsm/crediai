@@ -163,7 +163,7 @@ test("EO7. isolamento: o tenant B não corrige operação do A nem usa cliente d
   assert.equal(await one(`select client_id from loan_operation where id = '${own}'`), "c_e2e_edf");
 });
 
-test("EO8. tela: Corrigir, revisar antes e depois, confirmar e ver a correção no histórico (desktop e celular)", async () => {
+test("EO8. tela: Corrigir, revisar antes e depois, confirmar, ver a correção no histórico e o aviso de bloqueio com pagamento (desktop e celular)", async () => {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   let term = 5;
@@ -186,6 +186,14 @@ test("EO8. tela: Corrigir, revisar antes e depois, confirmar e ver a correção 
     await dialog.getByRole("button", { name: "Confirmar correção" }).click();
     await dialog.waitFor({ state: "detached" });
     assert.equal(await one(`select installment_count from loan_operation where id = '${ids.installment}'`), term);
+    // Com pagamento (EO6): o botão explica o bloqueio e não abre o formulário.
+    const code = `#OP-${ids.single.replace(/^op_/, "").slice(0, 6).toUpperCase()}`;
+    await page.locator("tr", { hasText: code }).getByRole("button", { name: "Corrigir" }).click();
+    const locked = page.getByRole("alertdialog", { name: /Corrigir operação/ });
+    await locked.getByText("Correção bloqueada para preservar o histórico financeiro.").waitFor();
+    assert.equal(await locked.getByLabel("Motivo da correção").count(), 0);
+    if (SHOTS) await locked.screenshot({ path: `${SHOTS}/correcao-bloqueada-${label}.png` });
+    await locked.getByRole("button", { name: "Entendi" }).click();
     await page.locator("tr", { hasText: "Parcelado quinzenal" }).filter({ hasText: "Cliente Edição" }).first().getByRole("button", { name: "Registrar pagamento" }).click();
     const history = page.getByText(`ajuste na tela ${label}`);
     await history.waitFor();

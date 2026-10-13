@@ -310,7 +310,7 @@ async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: 
   if (operation.status !== "OPEN") return { ok: false as const, error: "Só operações em aberto podem ser corrigidas." };
   const [paid] = await tx.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
   const [renewed] = await tx.select({ count: sql<number>`count(*)::int` }).from(loanRenewals).where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId)));
-  if (paid.count > 0 || renewed.count > 0) return { ok: false as const, error: "Esta operação já tem pagamento registrado. Para não mudar o que já foi recebido, a correção fica bloqueada." };
+  if (paid.count > 0 || renewed.count > 0) return { ok: false as const, error: "Correção bloqueada para preservar o histórico financeiro: esta operação já tem pagamento ou renovação registrados." };
   const terms = operationTermsFromForm(data);
   if (!terms.ok) return terms;
   if (terms.values.modality !== operation.modality || terms.values.frequency !== operation.frequency) {

@@ -1217,11 +1217,17 @@ function EditOperationPanel({ operation, clients, onClose, onChanged }: { operat
 
 function EditOperationButton({ operation, clients, onChanged }: { operation: OperationView; clients: ClientOption[]; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
-  if (operation.status !== "OPEN" || operation.payments.length > 0 || operation.renewalCount > 0) return null;
+  if (operation.status !== "OPEN") return null;
+  // Com pagamento ou renovação, o botão só explica o bloqueio (o servidor também recusa a correção).
+  const locked = operation.payments.length > 0 || operation.renewalCount > 0;
   return (
     <>
       <button className="outline-button" onClick={() => setOpen(true)}>Corrigir</button>
-      {open && <EditOperationPanel operation={operation} clients={clients} onClose={() => setOpen(false)} onChanged={onChanged} />}
+      {open && (locked ? (
+        <ConfirmDialog title={`Corrigir operação #${operation.code}`} confirmLabel="Corrigir" fields={{ operationId: operation.id }} onClose={() => setOpen(false)} onDone={onChanged}>
+          <p><strong>Correção bloqueada para preservar o histórico financeiro.</strong> Esta operação já tem {[operation.payments.length > 0 && `${operation.payments.length} pagamento${operation.payments.length === 1 ? "" : "s"}`, operation.renewalCount > 0 && `${operation.renewalCount} renova${operation.renewalCount === 1 ? "ção" : "ções"}`].filter(Boolean).join(" e ")} registrado{operation.payments.length + operation.renewalCount === 1 ? "" : "s"}. Mudar valor, taxa ou datas agora mudaria o que já foi recebido.</p>
+        </ConfirmDialog>
+      ) : <EditOperationPanel operation={operation} clients={clients} onClose={() => setOpen(false)} onChanged={onChanged} />)}
     </>
   );
 }
