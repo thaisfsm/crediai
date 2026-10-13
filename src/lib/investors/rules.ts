@@ -4,7 +4,9 @@
 import { normalizeEmail, normalizeSocial } from "../contacts";
 import { addressFields, type Address } from "./address";
 import { addressParts, type AddressPart } from "../finance/client-profile";
-import { addDays, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
+import { bankFields, type BankValues } from "../bank-account";
+import { addDays, formatDate, formatMoney, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
+import { dueDates } from "../finance/rules";
 
 export const INVESTOR_STATUS = { ACTIVE: "Ativo", INACTIVE: "Inativo" } as const;
 export type InvestorStatus = keyof typeof INVESTOR_STATUS;
@@ -19,6 +21,15 @@ export type RatePeriod = keyof typeof RATE_PERIODS;
 export const DOCUMENT_KINDS = { SIGNED_CONTRACT: "Contrato assinado", ADDENDUM: "Aditivo", TRANSFER_RECEIPT: "Comprovante de transferência", OTHER: "Outro documento" } as const;
 export type DocumentKind = keyof typeof DOCUMENT_KINDS;
 
+// Periodicidade combinada dos pagamentos ao investidor (informativa; o cronograma usa as datas para sugerir a agenda).
+export const PAYMENT_FREQUENCIES = {
+  MONTHLY: "Mensal", QUARTERLY: "Trimestral", SEMIANNUAL: "Semestral", YEARLY: "Anual",
+  AT_MATURITY: "Pagamento único no vencimento", OTHER: "Outra (datas informadas uma a uma)",
+} as const;
+export type PaymentFrequency = keyof typeof PAYMENT_FREQUENCIES;
+// Meses entre uma data e a seguinte no cronograma sugerido (só para as periodicidades regulares).
+export const FREQUENCY_MONTHS: Partial<Record<PaymentFrequency, number>> = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, YEARLY: 12 };
+
 export const INVESTORS_PAGE_SIZE = 25;
 const MAX_CENTS = 100_000_000_000; // R$ 1 bilhão: limite técnico contra valores digitados por engano.
 
@@ -27,6 +38,7 @@ export const parseInvestorStatus = (value: string) => pick(INVESTOR_STATUS, valu
 export const parseInvestmentStatus = (value: string) => pick(INVESTMENT_STATUS, value);
 export const parseRatePeriod = (value: string) => pick(RATE_PERIODS, value);
 export const parseDocumentKind = (value: string) => pick(DOCUMENT_KINDS, value);
+export const parsePaymentFrequency = (value: string) => pick(PAYMENT_FREQUENCIES, value);
 
 type Failure = { ok: false; error: string };
 type Read = (key: string, max: number) => string;
@@ -40,7 +52,7 @@ export type InvestorAddress = Record<InvestorAddressKey, string | null>;
 export type InvestorValues = {
   name: string; document: string | null; phone: string | null; whatsapp: string | null; email: string | null;
   instagram: string | null; facebook: string | null; notes: string | null; status: InvestorStatus;
-} & InvestorAddress;
+} & InvestorAddress & BankValues;
 
 // Endereço como objeto { Cep, Street, … } a partir das colunas do investidor.
 export const investorAddress = (row: InvestorAddress): Address => Object.fromEntries(addressParts.map((part) => [part, row[`address${part}`] ?? null])) as Address;
@@ -66,11 +78,14 @@ export function investorFields(read: Read): { ok: true; values: InvestorValues }
   if (!status) return { ok: false, error: "Escolha o status do investidor." };
   const address = addressFields(read, "address");
   if (!address.ok) return { ok: false, error: `Endereço: ${address.error}` };
+  const bank = bankFields(read);
+  if (!bank.ok) return bank;
   return {
     ok: true,
     values: {
       name, document: document.value, phone: phone.value, whatsapp: whatsapp.value, email: email.value, instagram: instagram.value, facebook: facebook.value, notes: optional(read("notes", 1000)), status,
       ...(Object.fromEntries(addressParts.map((part) => [`address${part}`, address.value[part]])) as InvestorAddress),
+      ...bank.values,
     },
   };
 }
@@ -78,7 +93,13 @@ export function investorFields(read: Read): { ok: true; values: InvestorValues }
 export type InvestmentValues = {
   amountCents: number; agreedRateBps: number; ratePeriod: RatePeriod; startDate: string; maturityDate: string | null;
   dueDay: number | null; notes: string | null; status: InvestmentStatus;
+  contractNumber: string | null; investedOn: string | null; termMonths: number | null; paymentFrequency: PaymentFrequency | null; installmentCount: number | null;
 };
+
+// Número inteiro opcional entre min e max ("" = null; NaN = inválido).
+const optionalInteger = (value: string, min: number, max: number) => (value ? (/^\d{1,4}$/.test(value) && Number(value) >= min && Number(value) <= max ? Number(value) : NaN) : null);
+// Identificação do contrato: letras, números, espaço, ponto, barra, hífen e sublinhado (ex.: INV-2026/001).
+const CONTRACT_NUMBER = /^[0-9A-Za-z][0-9A-Za-z ./_-]{0,39}$/;
 
 // Campos do contrato de investimento: só o que foi combinado. Nada aqui calcula rendimento ou saldo.
 export function investmentFields(read: Read): { ok: true; values: InvestmentValues } | Failure {
@@ -99,7 +120,24 @@ export function investmentFields(read: Read): { ok: true; values: InvestmentValu
   if (dueDay !== null && (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)) return { ok: false, error: "O dia de vencimento vai de 1 a 31." };
   const status = parseInvestmentStatus(read("status", 20) || "ACTIVE");
   if (!status) return { ok: false, error: "Escolha o status do investimento." };
-  return { ok: true, values: { amountCents, agreedRateBps, ratePeriod, startDate, maturityDate: optional(maturityInput), dueDay, notes: optional(read("notes", 1000)), status } };
+  const contractNumber = read("contractNumber", 60).replace(/\s+/g, " ");
+  if (contractNumber && !CONTRACT_NUMBER.test(contractNumber)) return { ok: false, error: "Identificação do contrato: até 40 letras, números, espaço, ponto, barra ou hífen, por exemplo INV-2026/001." };
+  const investedOn = read("investedOn", 10);
+  if (investedOn && !isIsoDate(investedOn)) return { ok: false, error: "Data do investimento inválida." };
+  const termMonths = optionalInteger(read("termMonths", 6), 1, 600);
+  if (Number.isNaN(termMonths)) return { ok: false, error: "O prazo vai de 1 a 600 meses." };
+  const frequencyInput = read("paymentFrequency", 20);
+  const paymentFrequency = frequencyInput ? parsePaymentFrequency(frequencyInput) : null;
+  if (frequencyInput && !paymentFrequency) return { ok: false, error: "Escolha a periodicidade dos pagamentos na lista." };
+  const installmentCount = optionalInteger(read("installmentCount", 6), 1, 600);
+  if (Number.isNaN(installmentCount)) return { ok: false, error: "A quantidade de parcelas vai de 1 a 600." };
+  return {
+    ok: true,
+    values: {
+      amountCents, agreedRateBps, ratePeriod, startDate, maturityDate: optional(maturityInput), dueDay, notes: optional(read("notes", 1000)), status,
+      contractNumber: optional(contractNumber), investedOn: optional(investedOn), termMonths, paymentFrequency, installmentCount,
+    },
+  };
 }
 
 export type InvestmentSummaryRow = { status: InvestmentStatus; amountCents: number; maturityDate: string | null };
@@ -136,4 +174,97 @@ export function investorFilters(search: { q?: string; status?: string; carteira?
     carteira: (search.carteira ?? "").trim().slice(0, 80),
     page: Number.isInteger(page) && page > 0 ? page : 1,
   };
+}
+
+// ── Cronograma de pagamentos ao investidor ──────────────────────────────────────────────────────────────────────────
+// Agenda com as datas e os valores que o usuário DIGITA (rendimento e devolução de principal). O sistema não calcula
+// rendimento: só sugere as datas pela periodicidade e repete os valores informados. Não mexe no capital.
+export const MAX_SCHEDULE_ITEMS = 600;
+export type ScheduleItemValues = { dueDate: string; yieldCents: number; principalCents: number; description: string | null };
+
+// Datas sugeridas: a primeira informada e as seguintes de N em N meses, mantendo o dia (fim de mês curto volta ao dia
+// combinado, pela mesma função de vencimentos das operações). Pagamento único: uma data só.
+export function scheduleDates(firstDueDate: string, count: number, frequency: PaymentFrequency) {
+  if (frequency === "AT_MATURITY") return [firstDueDate];
+  const step = FREQUENCY_MONTHS[frequency];
+  if (!step) return [];
+  return dueDates("MONTHLY", firstDueDate, (count - 1) * step + 1).filter((_, index) => index % step === 0);
+}
+
+const amount = (value: string) => (value ? parseMoneyToCents(value) : 0);
+
+// Uma linha do cronograma (inclusão ou edição).
+export function scheduleItemFields(read: Read): { ok: true; values: ScheduleItemValues } | Failure {
+  const dueDate = read("dueDate", 10);
+  if (!isIsoDate(dueDate)) return { ok: false, error: "Informe a data do pagamento." };
+  const yieldCents = amount(read("yieldAmount", 40));
+  const principalCents = amount(read("principalAmount", 40));
+  if (yieldCents === null || yieldCents < 0 || yieldCents > MAX_CENTS) return { ok: false, error: "Rendimento: informe o valor em reais, por exemplo 1.000,00 (ou deixe em branco)." };
+  if (principalCents === null || principalCents < 0 || principalCents > MAX_CENTS) return { ok: false, error: "Devolução do principal: informe o valor em reais, por exemplo 50.000,00 (ou deixe em branco)." };
+  if (yieldCents + principalCents <= 0) return { ok: false, error: "Informe o rendimento, a devolução do principal ou os dois." };
+  return { ok: true, values: { dueDate, yieldCents, principalCents, description: optional(read("description", 200)) } };
+}
+
+// Montagem do cronograma inteiro: primeira data, quantidade, periodicidade, rendimento de cada data e devolução do
+// principal na última data (os dois digitados). Depois de gravado, cada linha pode ser editada.
+export function scheduleBuildFields(read: Read): { ok: true; frequency: PaymentFrequency; items: ScheduleItemValues[] } | Failure {
+  const frequency = parsePaymentFrequency(read("frequency", 20));
+  if (!frequency || frequency === "OTHER") return { ok: false, error: "Escolha uma periodicidade (mensal, trimestral, semestral, anual ou pagamento único). Para datas irregulares, inclua as linhas uma a uma." };
+  const firstDueDate = read("firstDueDate", 10);
+  if (!isIsoDate(firstDueDate)) return { ok: false, error: "Informe a data do primeiro pagamento." };
+  const count = frequency === "AT_MATURITY" ? 1 : optionalInteger(read("count", 6), 1, MAX_SCHEDULE_ITEMS);
+  if (count === null || Number.isNaN(count)) return { ok: false, error: `Informe a quantidade de pagamentos (1 a ${MAX_SCHEDULE_ITEMS}).` };
+  const yieldCents = amount(read("yieldAmount", 40));
+  const principalCents = amount(read("principalAmount", 40));
+  if (yieldCents === null || yieldCents < 0 || yieldCents > MAX_CENTS) return { ok: false, error: "Rendimento de cada pagamento: informe o valor em reais (ou deixe em branco)." };
+  if (principalCents === null || principalCents < 0 || principalCents > MAX_CENTS) return { ok: false, error: "Devolução do principal: informe o valor em reais (ou deixe em branco)." };
+  if (yieldCents <= 0 && (count > 1 || principalCents <= 0)) return { ok: false, error: count > 1 ? "Informe o rendimento de cada pagamento (só a última data pode ter apenas a devolução do principal)." : "Informe o rendimento, a devolução do principal ou os dois." };
+  const description = optional(read("description", 200));
+  const dates = scheduleDates(firstDueDate, count, frequency);
+  return {
+    ok: true, frequency,
+    items: dates.map((dueDate, index) => ({ dueDate, yieldCents, principalCents: index === dates.length - 1 ? principalCents : 0, description })),
+  };
+}
+
+// Totais do cronograma (só soma o que foi digitado).
+export function scheduleTotals(items: { yieldCents: number; principalCents: number }[]) {
+  const yieldCents = items.reduce((total, item) => total + item.yieldCents, 0);
+  const principalCents = items.reduce((total, item) => total + item.principalCents, 0);
+  return { yieldCents, principalCents, totalCents: yieldCents + principalCents, count: items.length };
+}
+
+// Histórico visível do contrato: lista dos campos alterados com o valor antes e depois, já escritos para leitura.
+const investmentFieldLabels: [keyof InvestmentValues, string, (value: InvestmentValues) => string | null][] = [
+  ["contractNumber", "Identificação do contrato", (v) => v.contractNumber],
+  ["amountCents", "Valor investido", (v) => formatMoney(v.amountCents)],
+  ["agreedRateBps", "Taxa combinada", (v) => rateLabel(v.agreedRateBps, v.ratePeriod)],
+  ["ratePeriod", "Período da taxa", (v) => RATE_PERIODS[v.ratePeriod]],
+  ["investedOn", "Data do investimento", (v) => v.investedOn && formatDate(v.investedOn)],
+  ["startDate", "Data de início", (v) => formatDate(v.startDate)],
+  ["termMonths", "Prazo", (v) => (v.termMonths ? `${v.termMonths} ${v.termMonths === 1 ? "mês" : "meses"}` : null)],
+  ["maturityDate", "Vencimento do contrato", (v) => v.maturityDate && formatDate(v.maturityDate)],
+  ["dueDay", "Dia de vencimento", (v) => (v.dueDay ? `Dia ${v.dueDay}` : null)],
+  ["paymentFrequency", "Periodicidade dos pagamentos", (v) => v.paymentFrequency && PAYMENT_FREQUENCIES[v.paymentFrequency]],
+  ["installmentCount", "Quantidade de parcelas", (v) => (v.installmentCount ? String(v.installmentCount) : null)],
+  ["status", "Status", (v) => INVESTMENT_STATUS[v.status]],
+  ["notes", "Observações", (v) => v.notes],
+];
+export function investmentChanges(before: InvestmentValues, after: InvestmentValues) {
+  const changes: { field: string; before: string | null; after: string | null }[] = [];
+  for (const [key, label, show] of investmentFieldLabels) {
+    // A taxa aparece uma vez só ("2% ao mês"), mesmo quando só o período muda.
+    if (key === "ratePeriod") continue;
+    const changed = key === "agreedRateBps" ? before.agreedRateBps !== after.agreedRateBps || before.ratePeriod !== after.ratePeriod : before[key] !== after[key];
+    if (changed) changes.push({ field: label, before: show(before) || null, after: show(after) || null });
+  }
+  return changes;
+}
+
+// Resumo do cronograma para o histórico (antes e depois de uma alteração).
+export function scheduleSummary(items: { dueDate: string; yieldCents: number; principalCents: number }[]) {
+  if (items.length === 0) return null;
+  const totals = scheduleTotals(items);
+  const dates = items.map((item) => item.dueDate).sort();
+  return `${items.length} ${items.length === 1 ? "pagamento" : "pagamentos"} de ${formatDate(dates[0])} a ${formatDate(dates[dates.length - 1])}: rendimento ${formatMoney(totals.yieldCents)}, principal ${formatMoney(totals.principalCents)}`;
 }

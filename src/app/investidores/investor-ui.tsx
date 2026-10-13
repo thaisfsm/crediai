@@ -4,17 +4,21 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
-import { centsToInput, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCpfCnpj, maskPhone, todayIso } from "@/lib/finance/format";
+import { centsToInput, cpfCnpjProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCpfCnpj, maskPhone, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
 import { CONTRACT_STATES, contractState, formatDateTime, type ContractState } from "@/lib/investors/contract";
-import { DOCUMENT_KINDS, INVESTMENT_STATUS, INVESTOR_STATUS, RATE_PERIODS, investorAddress, rateLabel, type DocumentKind, type InvestmentStatus, type InvestorStatus } from "@/lib/investors/rules";
+import {
+  DOCUMENT_KINDS, INVESTMENT_STATUS, INVESTOR_STATUS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, RATE_PERIODS, investorAddress, rateLabel, scheduleDates,
+  type DocumentKind, type InvestmentStatus, type InvestorStatus, type PaymentFrequency,
+} from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
 import { DateField } from "../date-field";
-import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
+import { AddressFieldset, BankFieldset, BankSummaryRows, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
 import {
-  createInvestmentAction, createInvestorAction, generateContractAction, markContractSentAction, replaceInvestmentDocumentAction, saveContractorAction,
-  updateInvestmentAction, updateInvestorAction, uploadInvestmentDocumentAction,
+  addInvestmentScheduleItemAction, buildInvestmentScheduleAction, createInvestmentAction, createInvestorAction, deleteInvestmentScheduleItemAction, generateContractAction,
+  markContractSentAction, replaceInvestmentDocumentAction, saveContractorAction, updateInvestmentAction, updateInvestmentScheduleItemAction, updateInvestorAction,
+  uploadInvestmentDocumentAction,
 } from "./actions";
 
 type InvestorRow = InvestorsPage["investors"][number];
@@ -69,7 +73,7 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
           </select></label>
         )}
         <label className="field field-wide"><span>Nome ou razão social</span><input name="name" maxLength={160} defaultValue={editing?.name ?? ""} placeholder="Nome completo ou razão social" required /></label>
-        <label className="field"><span>CPF ou CNPJ</span><MaskedInput name="document" mask={maskCpfCnpj} initial={formatCpfCnpj(editing?.document ?? null) ?? ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
+        <label className="field"><span>CPF ou CNPJ</span><MaskedInput name="document" mask={maskCpfCnpj} validate={cpfCnpjProblem} initial={formatCpfCnpj(editing?.document ?? null) ?? ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
         <label className="field"><span>Telefone</span><MaskedInput name="phone" mask={maskPhone} initial={formatPhone(editing?.phone ?? null) ?? ""} inputMode="tel" placeholder="(11) 3456-7890" maxLength={40} /></label>
         <label className="field"><span>WhatsApp</span><MaskedInput name="whatsapp" mask={maskPhone} initial={formatPhone(editing?.whatsapp ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
         <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
@@ -81,6 +85,7 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
           </select></label>
         )}
         <AddressFieldset legend="Endereço (opcional; exigido para gerar o contrato)" nameOf={(part) => `address${part}`} initialOf={(part) => editing?.[`address${part}`] ?? ""} />
+        <BankFieldset initial={editing} legend="Dados bancários e Pix para os pagamentos (opcionais)" />
         <label className="field field-wide"><span>Observações</span><textarea name="notes" maxLength={1000} rows={3} defaultValue={editing?.notes ?? ""} placeholder="Opcional" /></label>
         <div className="form-actions">
           {onCancel && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
@@ -107,14 +112,22 @@ function InvestmentForm({ investorId, editing, today, onDone, onCancel }: { inve
           <option value="" disabled>Escolha o período da taxa</option>
           {(Object.keys(RATE_PERIODS) as (keyof typeof RATE_PERIODS)[]).map((period) => <option key={period} value={period}>{RATE_PERIODS[period]}</option>)}
         </select></label>
+        <label className="field"><span>Identificação do contrato (opcional)</span><input name="contractNumber" maxLength={40} placeholder="INV-2026/001" defaultValue={editing?.contractNumber ?? ""} /></label>
+        <DateField label="Data do investimento (opcional)" name="investedOn" defaultValue={editing?.investedOn ?? ""} />
         <DateField label="Data de início" name="startDate" defaultValue={editing?.startDate ?? today} required />
+        <label className="field"><span>Prazo em meses (opcional)</span><input name="termMonths" inputMode="numeric" placeholder="12" maxLength={3} defaultValue={editing?.termMonths ?? ""} /></label>
         <DateField label="Vencimento do contrato (opcional)" name="maturityDate" defaultValue={editing?.maturityDate ?? ""} />
         <label className="field"><span>Dia de vencimento (opcional)</span><input name="dueDay" inputMode="numeric" placeholder="1 a 31" maxLength={2} defaultValue={editing?.dueDay ?? ""} /></label>
+        <label className="field"><span>Periodicidade dos pagamentos (opcional)</span><select name="paymentFrequency" defaultValue={editing?.paymentFrequency ?? ""}>
+          <option value="">Não informada</option>
+          {(Object.keys(PAYMENT_FREQUENCIES) as PaymentFrequency[]).map((frequency) => <option key={frequency} value={frequency}>{PAYMENT_FREQUENCIES[frequency]}</option>)}
+        </select></label>
+        <label className="field"><span>Quantidade de parcelas (opcional)</span><input name="installmentCount" inputMode="numeric" placeholder="12" maxLength={3} defaultValue={editing?.installmentCount ?? ""} /></label>
         <label className="field"><span>Status</span><select name="status" defaultValue={editing?.status ?? "ACTIVE"}>
           {(Object.keys(INVESTMENT_STATUS) as InvestmentStatus[]).map((status) => <option key={status} value={status}>{INVESTMENT_STATUS[status]}</option>)}
         </select></label>
         <label className="field field-wide"><span>Observações</span><textarea name="notes" maxLength={1000} rows={3} defaultValue={editing?.notes ?? ""} placeholder="Condições combinadas, forma de pagamento, detalhes do período da taxa…" /></label>
-        <p className="capital-note field-wide">A taxa e as datas ficam só registradas: nenhum rendimento, vencimento de rendimento, saldo ou total a devolver é calculado até as regras do investimento serem definidas.</p>
+        <p className="capital-note field-wide">A taxa, o prazo e as datas ficam só registrados: nenhum rendimento, saldo ou total a devolver é calculado. As datas e os valores de cada pagamento ao investidor são informados no cronograma, na página do investimento.</p>
         <div className="form-actions">
           {onCancel && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
           <button className="primary-button" disabled={pending}><Icon name={editing ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : editing ? "Salvar alterações" : "Cadastrar investimento"}</button>
@@ -240,6 +253,7 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
           <div><dt>E-mail</dt><dd>{investor.email ? <a className="text-link inline-link" href={`mailto:${investor.email}`}>{investor.email}</a> : "—"}</dd></div>
           {(Object.keys(SOCIAL_NETWORKS) as SocialNetwork[]).map((network) => <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd><SocialLink network={network} value={investor[network]} /></dd></div>)}
           <div><dt>Endereço</dt><dd>{addressLine(investorAddress(investor)) ?? "—"}</dd></div>
+          <BankSummaryRows values={investor} />
           {data.isMaster && <div><dt>Carteira</dt><dd>{investor.tenantName}</dd></div>}
           <div><dt>Status</dt><dd>{INVESTOR_STATUS[investor.status]}</dd></div>
           <div><dt>Observações</dt><dd className="preserve-lines">{investor.notes ?? "—"}</dd></div>
@@ -254,9 +268,10 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
         {investor.status !== "ACTIVE" && <p className="capital-note">Investidor inativo: reative-o em &quot;Editar&quot; para cadastrar novos investimentos.</p>}
         {investments.length === 0 ? <EmptyPanel icon="wallet" text="Nenhum investimento cadastrado para este investidor." /> : (
           <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Início</th><th>Valor</th><th>Taxa combinada</th><th>Vencimento</th><th>Status</th><th>Contrato assinado</th><th>Documentos</th><th /></tr></thead>
+            <thead><tr><th>Contrato</th><th>Início</th><th>Valor</th><th>Taxa combinada</th><th>Vencimento</th><th>Status</th><th>Contrato assinado</th><th>Documentos</th><th /></tr></thead>
             <tbody>{investments.map((item) => (
               <tr key={item.id}>
+                <td>{item.contractNumber ?? "—"}</td>
                 <td>{formatDate(item.startDate)}</td>
                 <td><strong>{formatMoney(item.amountCents)}</strong></td>
                 <td>{rateLabel(item.agreedRateBps, item.ratePeriod)}</td>
@@ -474,11 +489,16 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
         <div className="panel-header"><div><h2>Contrato</h2><p>O que foi combinado com {investor.name}.</p></div></div>
         <dl className="payment-summary profile-summary">
           <div><dt>Investidor</dt><dd><Link prefetch={false} className="text-link inline-link" href={`/investidores/${investor.id}`}>{investor.name}</Link></dd></div>
+          <div><dt>Identificação do contrato</dt><dd>{investment.contractNumber ?? "—"}</dd></div>
           <div><dt>Valor investido</dt><dd>{formatMoney(investment.amountCents)}</dd></div>
+          <div><dt>Data do investimento</dt><dd>{investment.investedOn ? formatDate(investment.investedOn) : "—"}</dd></div>
           <div><dt>Taxa combinada</dt><dd>{rateLabel(investment.agreedRateBps, investment.ratePeriod)}</dd></div>
           <div><dt>Data de início</dt><dd>{formatDate(investment.startDate)}</dd></div>
+          <div><dt>Prazo</dt><dd>{investment.termMonths ? `${investment.termMonths} ${investment.termMonths === 1 ? "mês" : "meses"}` : "—"}</dd></div>
           <div><dt>Vencimento do contrato</dt><dd>{investment.maturityDate ? formatDate(investment.maturityDate) : "—"}</dd></div>
           <div><dt>Dia de vencimento</dt><dd>{investment.dueDay ? `Dia ${investment.dueDay}` : "—"}</dd></div>
+          <div><dt>Periodicidade dos pagamentos</dt><dd>{investment.paymentFrequency ? PAYMENT_FREQUENCIES[investment.paymentFrequency] : "—"}</dd></div>
+          <div><dt>Quantidade de parcelas</dt><dd>{investment.installmentCount ?? "—"}</dd></div>
           <div><dt>Status</dt><dd>{INVESTMENT_STATUS[investment.status]}</dd></div>
           <div><dt>Cadastrado em</dt><dd>{dateOf(investment.createdAt)}</dd></div>
           <div><dt>Observações</dt><dd className="preserve-lines">{investment.notes ?? "—"}</dd></div>
@@ -486,6 +506,8 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
       </section>
 
       <ContractSection data={data} hasSignedContract={hasContract} onDone={refresh} />
+
+      <ScheduleSection data={data} onDone={refresh} />
 
       <section className="panel form-panel" aria-label="Cálculos do investimento">
         <div className="panel-header"><div><h2>Rendimento e devolução</h2><p>Estrutura preparada: os valores aparecem quando as regras financeiras dos investimentos forem definidas.</p></div></div>
@@ -525,6 +547,172 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
           </details>
         )}
       </section>
+
+      <RevisionsSection revisions={data.revisions} />
     </div>
+  );
+}
+
+type ScheduleItem = InvestmentDetail["schedule"]["items"][number];
+const moneyInput = (cents: number) => (cents ? centsToInput(cents) : "");
+
+// Cronograma de pagamentos ao investidor: datas e valores digitados pelo usuário. Nada é calculado e nada mexe no capital.
+function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDone: () => void }) {
+  const { investment, schedule } = data;
+  const editable = investment.status !== "CANCELED" && investment.status !== "CLOSED";
+  const [building, setBuilding] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const done = () => { setBuilding(false); setAdding(false); setEditingId(null); onDone(); };
+  const { totals, items } = schedule;
+  return (
+    <section className="panel form-panel" aria-label="Cronograma de pagamentos ao investidor">
+      <div className="panel-header">
+        <div><div className="panel-title-row"><h2>Cronograma de pagamentos</h2><span className="today-count">{totals.count}</span></div>
+          <p>Datas e valores combinados com {data.investor.name}, digitados por você. O sistema não calcula rendimento e o cronograma não mexe no capital: o registro dos pagamentos vem na etapa de contas a pagar.</p></div>
+        {editable && (
+          <span className="row-actions">
+            <button type="button" className="outline-button" onClick={() => { setAdding(!adding); setBuilding(false); }}>{adding ? "Fechar" : "Incluir pagamento"}</button>
+            <button type="button" className="primary-button" onClick={() => { setBuilding(!building); setAdding(false); }}>{building ? "Fechar" : items.length ? "Substituir cronograma" : "Montar cronograma"}</button>
+          </span>
+        )}
+      </div>
+      {!editable && <p className="capital-note">Investimento encerrado ou cancelado: o cronograma fica só para consulta.</p>}
+      {building && <ScheduleBuildForm data={data} onDone={done} onCancel={() => setBuilding(false)} />}
+      {adding && <ScheduleItemForm investmentId={investment.id} onDone={done} onCancel={() => setAdding(false)} />}
+      {items.length === 0 ? <EmptyPanel icon="calendar" text="Nenhum pagamento no cronograma ainda." /> : (
+        <>
+          <dl className="payment-summary">
+            <div><dt>Rendimentos informados</dt><dd>{formatMoney(totals.yieldCents)}</dd></div>
+            <div><dt>Devolução de principal informada</dt><dd>{formatMoney(totals.principalCents)}</dd></div>
+            <div><dt>Total do cronograma</dt><dd>{formatMoney(totals.totalCents)}</dd></div>
+          </dl>
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>#</th><th>Data</th><th>Rendimento</th><th>Devolução do principal</th><th>Total</th><th>Descrição</th>{editable && <th />}</tr></thead>
+            <tbody>{items.map((item, index) => (
+              <ScheduleRow key={item.id} item={item} position={index + 1} investmentId={investment.id} editable={editable} editing={editingId === item.id}
+                onEdit={() => setEditingId(editingId === item.id ? null : item.id)} onDone={done} />
+            ))}</tbody>
+          </table></div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function ScheduleRow({ item, position, investmentId, editable, editing, onEdit, onDone }: { item: ScheduleItem; position: number; investmentId: string; editable: boolean; editing: boolean; onEdit: () => void; onDone: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const remove = useFormAction(deleteInvestmentScheduleItemAction, onDone);
+  return (
+    <>
+      <tr>
+        <td>{position}</td>
+        <td>{formatDate(item.dueDate)}</td>
+        <td>{item.yieldCents ? formatMoney(item.yieldCents) : "—"}</td>
+        <td>{item.principalCents ? formatMoney(item.principalCents) : "—"}</td>
+        <td><strong>{formatMoney(item.yieldCents + item.principalCents)}</strong></td>
+        <td>{item.description ?? "—"}</td>
+        {editable && (
+          <td className="actions-cell">
+            <form className="row-actions" onSubmit={remove.onSubmit}>
+              <input type="hidden" name="investmentId" value={investmentId} /><input type="hidden" name="itemId" value={item.id} />
+              <button type="button" className="outline-button" onClick={onEdit}>{editing ? "Fechar" : "Editar"}</button>
+              {confirming
+                ? <><button className="primary-button danger-button" disabled={remove.pending}>{remove.pending ? "Retirando…" : "Confirmar retirada"}</button><button type="button" className="text-link" onClick={() => setConfirming(false)}>Manter</button></>
+                : <button type="button" className="outline-button" onClick={() => setConfirming(true)}>Retirar</button>}
+            </form>
+            <Feedback feedback={remove.feedback} />
+          </td>
+        )}
+      </tr>
+      {editing && <tr><td colSpan={7}><ScheduleItemForm investmentId={investmentId} item={item} onDone={onDone} onCancel={onEdit} /></td></tr>}
+    </>
+  );
+}
+
+// Inclusão ou edição de uma linha do cronograma.
+function ScheduleItemForm({ investmentId, item, onDone, onCancel }: { investmentId: string; item?: ScheduleItem; onDone: () => void; onCancel: () => void }) {
+  const { pending, feedback, onSubmit } = useFormAction(item ? updateInvestmentScheduleItemAction : addInvestmentScheduleItemAction, onDone);
+  return (
+    <div className="schedule-form">
+      <form className="form-grid" onSubmit={onSubmit}>
+        <input type="hidden" name="investmentId" value={investmentId} />
+        {item && <input type="hidden" name="itemId" value={item.id} />}
+        <DateField label="Data do pagamento" name="dueDate" defaultValue={item?.dueDate ?? ""} required />
+        <label className="field"><span>Rendimento (R$)</span><input name="yieldAmount" inputMode="decimal" placeholder="1.000,00" defaultValue={item ? moneyInput(item.yieldCents) : ""} /></label>
+        <label className="field"><span>Devolução do principal (R$)</span><input name="principalAmount" inputMode="decimal" placeholder="0,00" defaultValue={item ? moneyInput(item.principalCents) : ""} /></label>
+        <label className="field"><span>Descrição (opcional)</span><input name="description" maxLength={200} placeholder="Ex.: rendimento de março" defaultValue={item?.description ?? ""} /></label>
+        <div className="form-actions">
+          <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>
+          <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : item ? "Salvar pagamento" : "Incluir pagamento"}</button>
+        </div>
+      </form>
+      <Feedback feedback={feedback} />
+    </div>
+  );
+}
+
+// Montagem do cronograma pelas datas da periodicidade, com prévia antes de gravar. Os valores são os digitados.
+function ScheduleBuildForm({ data, onDone, onCancel }: { data: InvestmentDetail; onDone: () => void; onCancel: () => void }) {
+  const { investment, schedule } = data;
+  const initialFrequency = investment.paymentFrequency && investment.paymentFrequency !== "OTHER" ? investment.paymentFrequency : "MONTHLY";
+  const [frequency, setFrequency] = useState<PaymentFrequency>(initialFrequency);
+  const [firstDueDate, setFirstDueDate] = useState("");
+  const [count, setCount] = useState(String(investment.installmentCount ?? ""));
+  const { pending, feedback, onSubmit } = useFormAction(buildInvestmentScheduleAction, onDone);
+  const total = frequency === "AT_MATURITY" ? 1 : Number(count);
+  const dates = firstDueDate && Number.isInteger(total) && total >= 1 && total <= MAX_SCHEDULE_ITEMS ? scheduleDates(firstDueDate, total, frequency) : [];
+  const options = (Object.keys(PAYMENT_FREQUENCIES) as PaymentFrequency[]).filter((key) => key !== "OTHER");
+  return (
+    <div className="schedule-form">
+      <form className="form-grid" onSubmit={onSubmit}>
+        <input type="hidden" name="investmentId" value={investment.id} />
+        <label className="field"><span>Periodicidade</span><select name="frequency" value={frequency} onChange={(event) => setFrequency(event.target.value as PaymentFrequency)}>
+          {options.map((key) => <option key={key} value={key}>{PAYMENT_FREQUENCIES[key]}</option>)}
+        </select></label>
+        <DateField label={frequency === "AT_MATURITY" ? "Data do pagamento" : "Data do primeiro pagamento"} name="firstDueDate" defaultValue={firstDueDate} onChange={setFirstDueDate} required />
+        {frequency !== "AT_MATURITY" && <label className="field"><span>Quantidade de pagamentos</span><input name="count" inputMode="numeric" maxLength={3} placeholder="12" value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} required /></label>}
+        <label className="field"><span>{frequency === "AT_MATURITY" ? "Rendimento (R$)" : "Rendimento de cada pagamento (R$)"}</span><input name="yieldAmount" inputMode="decimal" placeholder="1.000,00" /></label>
+        <label className="field"><span>{frequency === "AT_MATURITY" ? "Devolução do principal (R$)" : "Devolução do principal na última data (R$)"}</span><input name="principalAmount" inputMode="decimal" placeholder={centsToInput(investment.amountCents)} /></label>
+        <label className="field"><span>Descrição (opcional)</span><input name="description" maxLength={200} placeholder="Ex.: rendimento mensal" /></label>
+        <p className="capital-note field-wide">Os valores são exatamente os que você digitar: o sistema não calcula rendimento. Depois de gravado, cada pagamento pode ser editado ou retirado, e datas irregulares podem ser incluídas uma a uma.</p>
+        {dates.length > 0 && (
+          <div className="schedule-preview field-wide" aria-label="Prévia das datas">
+            <p>Prévia das datas</p>
+            <ol>{dates.map((date, index) => <li key={date}><span>{`${index + 1}º pagamento${index === dates.length - 1 && dates.length > 1 ? " (último)" : ""}`}</span><strong>{formatDate(date)}</strong></li>)}</ol>
+          </div>
+        )}
+        {schedule.items.length > 0 && (
+          <label className="check-field field-wide"><input type="checkbox" name="replace" value="1" required /><span>{`Substituir o cronograma atual (${schedule.items.length} ${schedule.items.length === 1 ? "pagamento" : "pagamentos"}). Fica registrado no histórico.`}</span></label>
+        )}
+        <div className="form-actions">
+          <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>
+          <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Gravando…" : "Gravar cronograma"}</button>
+        </div>
+      </form>
+      <Feedback feedback={feedback} />
+    </div>
+  );
+}
+
+// Histórico de alterações do contrato e do cronograma, visível para o próprio tenant.
+function RevisionsSection({ revisions }: { revisions: InvestmentDetail["revisions"] }) {
+  return (
+    <section className="panel form-panel" aria-label="Histórico de alterações do investimento">
+      <div className="panel-header"><div><div className="panel-title-row"><h2>Histórico de alterações</h2><span className="today-count">{revisions.length}</span></div><p>O que mudou no contrato e no cronograma, quando e por quem.</p></div></div>
+      {revisions.length === 0 ? <EmptyPanel icon="clock" text="Nenhuma alteração depois do cadastro." /> : (
+        <ul className="document-list">{revisions.map((revision) => (
+          <li key={revision.id}>
+            <div>
+              <strong>{revision.description}</strong>
+              <small>{formatDateTime(new Date(revision.createdAt))}{revision.changedBy ? ` · ${revision.changedBy}` : ""}</small>
+              <ul className="revision-changes">{revision.changes.map((change) => (
+                <li key={change.field}>{`${change.field}: de ${change.before ?? "vazio"} para ${change.after ?? "vazio"}`}</li>
+              ))}</ul>
+            </div>
+          </li>
+        ))}</ul>
+      )}
+    </section>
   );
 }

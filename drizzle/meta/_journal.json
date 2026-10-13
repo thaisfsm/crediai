@@ -134,6 +134,13 @@
       "when": 1791929553447,
       "tag": "0019_installment_biweekly",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791930027364,
+      "tag": "0020_investor_bank_schedule",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,12 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, ilike, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { investmentContracts, investmentDocuments, investments, investors, tenants, users } from "@/lib/db/schema";
+import { investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, tenants, users } from "@/lib/db/schema";
 import { onlyDigits, todayIso } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext, type InvestorScope } from "./access";
 import { missingContractData } from "./contract";
 import { contractDataHash, contractSource, contractorData, loadContractor } from "./contract-source";
-import { INVESTORS_PAGE_SIZE, investorFilters, summarizeInvestments, type DocumentKind, type InvestmentStatus, type InvestorStatus, type RatePeriod } from "./rules";
+import { INVESTORS_PAGE_SIZE, investorFilters, scheduleTotals, summarizeInvestments, type DocumentKind, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type RatePeriod } from "./rules";
 
 type Search = { q?: string; status?: string; carteira?: string; pagina?: string };
 
@@ -77,6 +77,8 @@ function toInvestorView(investor: typeof investors.$inferSelect) {
     email: investor.email, instagram: investor.instagram, facebook: investor.facebook, notes: investor.notes, status: investor.status as InvestorStatus,
     addressCep: investor.addressCep, addressStreet: investor.addressStreet, addressNumber: investor.addressNumber, addressComplement: investor.addressComplement,
     addressDistrict: investor.addressDistrict, addressCity: investor.addressCity, addressState: investor.addressState,
+    bankHolderName: investor.bankHolderName, bankHolderDocument: investor.bankHolderDocument, bankName: investor.bankName, bankBranch: investor.bankBranch,
+    bankAccount: investor.bankAccount, bankAccountType: investor.bankAccountType, pixKeyType: investor.pixKeyType, pixKey: investor.pixKey,
     createdAt: investor.createdAt.toISOString(), updatedAt: investor.updatedAt.toISOString(),
   };
 }
@@ -86,6 +88,8 @@ function toInvestmentView(investment: typeof investments.$inferSelect) {
     id: investment.id, tenantId: investment.tenantId, investorId: investment.investorId, amountCents: investment.amountCents,
     agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod as RatePeriod, startDate: investment.startDate,
     maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status as InvestmentStatus,
+    contractNumber: investment.contractNumber, investedOn: investment.investedOn, termMonths: investment.termMonths,
+    paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, installmentCount: investment.installmentCount,
     createdAt: investment.createdAt.toISOString(), updatedAt: investment.updatedAt.toISOString(),
   };
 }
@@ -148,6 +152,22 @@ export async function loadInvestmentDetail(investmentId: string) {
       .where(and(eq(investmentContracts.investmentId, row.investment.id), scopeOfInvestment(investmentContracts.tenantId)))
       .orderBy(desc(investmentContracts.version));
 
+    // Cronograma digitado pelo usuário, em ordem de data, e o histórico de alterações do contrato (mais recente primeiro).
+    const scheduleRows = await tx.select({
+      id: investmentScheduleItems.id, number: investmentScheduleItems.number, dueDate: investmentScheduleItems.dueDate, yieldCents: investmentScheduleItems.yieldCents,
+      principalCents: investmentScheduleItems.principalCents, description: investmentScheduleItems.description,
+    }).from(investmentScheduleItems)
+      .where(and(eq(investmentScheduleItems.investmentId, row.investment.id), eq(investmentScheduleItems.tenantId, row.investment.tenantId)))
+      .orderBy(asc(investmentScheduleItems.dueDate), asc(investmentScheduleItems.number));
+    const reviser = alias(users, "reviser");
+    const revisionRows = await tx.select({
+      id: investmentRevisions.id, kind: investmentRevisions.kind, description: investmentRevisions.description, changes: investmentRevisions.changes,
+      createdAt: investmentRevisions.createdAt, changedBy: reviser.name,
+    }).from(investmentRevisions)
+      .leftJoin(reviser, and(eq(reviser.id, investmentRevisions.changedByUserId), or(eq(reviser.tenantId, investmentRevisions.tenantId), eq(reviser.role, "SUPER_ADMIN"))))
+      .where(and(eq(investmentRevisions.investmentId, row.investment.id), eq(investmentRevisions.tenantId, row.investment.tenantId)))
+      .orderBy(desc(investmentRevisions.createdAt), desc(investmentRevisions.id));
+
     const contractorRow = await loadContractor(tx, row.investment.tenantId);
     const source = contractSource(row.investment, row.investor, contractorRow);
     const current = contracts.find((contract) => !contract.supersededAt) ?? null;
@@ -160,6 +180,8 @@ export async function loadInvestmentDetail(investmentId: string) {
       tenantName: row.tenantName,
       investment: toInvestmentView(row.investment),
       investor: { id: row.investor.id, name: row.investor.name, status: row.investor.status as InvestorStatus },
+      schedule: { items: scheduleRows, totals: scheduleTotals(scheduleRows) },
+      revisions: revisionRows.map((revision) => ({ ...revision, kind: revision.kind as "CONTRACT" | "SCHEDULE", createdAt: revision.createdAt.toISOString(), changedBy: revision.changedBy ?? null })),
       documents: documents.map(({ contractId, ...document }) => ({
         ...document, kind: document.kind as DocumentKind, createdAt: document.createdAt.toISOString(), replacedAt: document.replacedAt?.toISOString() ?? null, uploadedBy: document.uploadedBy ?? null,
         contractId, contractVersion: contractId ? versionOf.get(contractId) ?? null : null,

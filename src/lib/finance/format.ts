@@ -195,10 +195,22 @@ export function formatCpfCnpj(stored: string | null) {
 export function normalizeCpfCnpj(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
   const digits = onlyDigits(value);
   if (!digits) return { ok: true, value: null };
-  if ((digits.length !== 11 && digits.length !== 14) || /^(\d)\1+$/.test(digits)) {
-    return { ok: false, error: "Informe o CPF (11 dígitos, 411.797.058-58) ou o CNPJ (14 dígitos, 12.345.678/0001-90)." };
+  if (digits.length !== 11 && digits.length !== 14) {
+    return { ok: false, error: "Informe o CPF (11 dígitos, 411.797.058-58) ou o CNPJ (14 dígitos, 11.222.333/0001-81)." };
   }
+  // Dígitos verificadores conferidos, como no cadastro de clientes.
+  const problem = digits.length === 11 ? cpfProblem(digits) : cnpjProblem(digits);
+  if (problem) return { ok: false, error: problem };
   return { ok: true, value: digits };
+}
+
+// Mensagem de CPF ou CNPJ inválido para a tela (null = válido, vazio ou ainda incompleto).
+export function cpfCnpjProblem(value: string) {
+  const digits = onlyDigits(value);
+  if (!digits) return null;
+  if (digits.length === 11) return cpfProblem(digits);
+  if (digits.length === 14) return cnpjProblem(digits);
+  return "Informe o CPF (11 dígitos) ou o CNPJ (14 dígitos).";
 }
 
 // Máscara progressiva do CNPJ: 11.222.333/0001-81.

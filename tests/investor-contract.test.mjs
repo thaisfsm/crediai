@@ -17,7 +17,7 @@ const font = (style) => readFileSync(`src/lib/investors/fonts/LiberationSans-${s
 const fonts = { regular: font("Regular"), bold: font("Bold"), italic: font("Italic") };
 const address = (overrides = {}) => ({ Cep: "01310100", Street: "Avenida Paulista", Number: "1000", Complement: "Sala 12", District: "Bela Vista", City: "São Paulo", State: "SP", ...overrides });
 const source = (overrides = {}) => ({
-  contractor: { legalName: "Gestão de Crédito Ação Ltda.", document: "12345678000190", address: address(), representativeName: "Thaís Fernanda", representativeDocument: "41179705858", confirmedAt: "2026-10-13T12:00:00.000Z", ...overrides.contractor },
+  contractor: { legalName: "Gestão de Crédito Ação Ltda.", document: "11222333000181", address: address(), representativeName: "Thaís Fernanda", representativeDocument: "41179705858", confirmedAt: "2026-10-13T12:00:00.000Z", ...overrides.contractor },
   investor: { name: "João Conceição Araújo", document: "41179705858", address: address({ Street: "Rua São João", Number: "45", Complement: null, District: "Centro", City: "Ribeirão Preto" }), ...overrides.investor },
   investment: { id: "ivt_teste", amountCents: 5_000_050, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: 10, notes: null, status: "ACTIVE", ...overrides.investment },
 });
@@ -30,7 +30,7 @@ test("CT1. PDF com os dados corretos: partes, valor, taxa e período, datas, loc
   const text = pdfText(bytes);
   for (const expected of [
     "INSTRUMENTO PARTICULAR DE CONTRATO DE INVESTIMENTO", "Versão 2 · Referência do investimento ivt_teste",
-    "CONTRATANTE: Gestão de Crédito Ação Ltda., CNPJ nº 12.345.678/0001-90", "Avenida Paulista, 1000, Sala 12, Bela Vista, São Paulo/SP, CEP 01310-100",
+    "CONTRATANTE: Gestão de Crédito Ação Ltda., CNPJ nº 11.222.333/0001-81", "Avenida Paulista, 1000, Sala 12, Bela Vista, São Paulo/SP, CEP 01310-100",
     "representante legal:", "Thaís Fernanda, CPF nº 411.797.058-58",
     "INVESTIDOR: João Conceição Araújo, CPF nº 411.797.058-58", "Rua São João,", "45, Centro, Ribeirão Preto/SP, CEP 01310-100",
     "R$ 50.000,50 (cinquenta mil reais e cinquenta centavos)", "1,5% ao mês", "Data de início: 13/10/2026", "Vencimento do contrato: 13/10/2027",
@@ -108,7 +108,7 @@ test("CT5. o contrato não inventa regras nem reaproveita o modelo de empréstim
 });
 
 test("CT6. dados da empresa contratante: rascunho permitido, confirmação só com tudo preenchido", () => {
-  const complete = { legalName: "Empresa Ltda", document: "12.345.678/0001-90", addressCep: "01310-100", addressStreet: "Av. Paulista", addressNumber: "1000", addressDistrict: "Bela Vista", addressCity: "São Paulo", addressState: "SP" };
+  const complete = { legalName: "Empresa Ltda", document: "11.222.333/0001-81", addressCep: "01310-100", addressStreet: "Av. Paulista", addressNumber: "1000", addressDistrict: "Bela Vista", addressCity: "São Paulo", addressState: "SP" };
   const draft = contractorFields(form({ legalName: "Empresa Ltda" }));
   assert.equal(draft.ok, true);
   assert.equal(draft.values.confirmed, false);
@@ -117,7 +117,7 @@ test("CT6. dados da empresa contratante: rascunho permitido, confirmação só c
   assert.match(refused.error, /CNPJ ou CPF/);
   const confirmed = contractorFields(form({ ...complete, confirmed: "1", representativeName: "Ana", representativeDocument: "411.797.058-58" }));
   assert.equal(confirmed.ok, true);
-  assert.equal(confirmed.values.document, "12345678000190");
+  assert.equal(confirmed.values.document, "11222333000181");
   assert.equal(confirmed.values.address.Cep, "01310100");
   assert.equal(confirmed.values.representativeDocument, "41179705858");
   assert.equal(contractorFields(form({ ...complete, addressState: "XX" })).ok, false);

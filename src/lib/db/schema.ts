@@ -501,6 +501,15 @@ export const investors = pgTable("investor", {
   addressDistrict: text("address_district"),
   addressCity: text("address_city"),
   addressState: text("address_state"),
+  // Dados bancários e chave Pix para os pagamentos ao investidor (opcionais). Regras em src/lib/bank-account.ts.
+  bankHolderName: text("bank_holder_name"),
+  bankHolderDocument: text("bank_holder_document"),
+  bankName: text("bank_name"),
+  bankBranch: text("bank_branch"),
+  bankAccount: text("bank_account"),
+  bankAccountType: text("bank_account_type"),
+  pixKeyType: text("pix_key_type"),
+  pixKey: text("pix_key"),
   status: investorStatus("status").notNull().default("ACTIVE"),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -511,6 +520,8 @@ export const investors = pgTable("investor", {
   // O mesmo CPF/CNPJ não aparece duas vezes na mesma carteira.
   uniqueIndex("investor_tenant_document_unique").on(table.tenantId, table.document).where(sql`${table.document} is not null`),
   check("investor_name_not_blank", sql`length(trim(${table.name})) > 0`),
+  check("investor_bank_account_type_valid", sql`${table.bankAccountType} is null or ${table.bankAccountType} in ('CHECKING', 'SAVINGS', 'PAYMENT', 'SALARY')`),
+  check("investor_pix_key_pair", sql`(${table.pixKey} is null) = (${table.pixKeyType} is null) and (${table.pixKeyType} is null or ${table.pixKeyType} in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM'))`),
   ...tenantPolicies("investor", table.tenantId),
 ]).enableRLS();
 
@@ -529,6 +540,13 @@ export const investments = pgTable("investment", {
   // Vencimento do contrato e, se combinado, o dia do mês de vencimento. Informativos: não geram cobranças nem rendimentos.
   maturityDate: date("maturity_date", { mode: "string" }),
   dueDay: integer("due_day"),
+  // Identificação do contrato (opcional, única na carteira), data em que o dinheiro foi investido, prazo em meses,
+  // periodicidade combinada dos pagamentos e quantidade de parcelas. Todos informados pelo usuário; nada é calculado.
+  contractNumber: text("contract_number"),
+  investedOn: date("invested_on", { mode: "string" }),
+  termMonths: integer("term_months"),
+  paymentFrequency: text("payment_frequency"),
+  installmentCount: integer("installment_count"),
   notes: text("notes"),
   status: investmentStatus("status").notNull().default("ACTIVE"),
   calculationRule: text("calculation_rule"),
@@ -544,7 +562,60 @@ export const investments = pgTable("investment", {
   check("investment_rate_not_negative", sql`${table.agreedRateBps} >= 0`),
   check("investment_maturity_after_start", sql`${table.maturityDate} is null or ${table.maturityDate} >= ${table.startDate}`),
   check("investment_due_day_valid", sql`${table.dueDay} is null or ${table.dueDay} between 1 and 31`),
+  uniqueIndex("investment_tenant_contract_number_unique").on(table.tenantId, table.contractNumber).where(sql`${table.contractNumber} is not null`),
+  check("investment_term_months_valid", sql`${table.termMonths} is null or ${table.termMonths} between 1 and 600`),
+  check("investment_installment_count_valid", sql`${table.installmentCount} is null or ${table.installmentCount} between 1 and 600`),
+  check("investment_payment_frequency_valid", sql`${table.paymentFrequency} is null or ${table.paymentFrequency} in ('MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'YEARLY', 'AT_MATURITY', 'OTHER')`),
   ...tenantPolicies("investment", table.tenantId),
+]).enableRLS();
+
+// Cronograma de pagamentos ao investidor: cada linha é uma data com os valores de rendimento e de devolução de principal
+// DIGITADOS pelo usuário (o sistema não calcula rendimento). É só a agenda: não mexe no capital nem marca nada como pago.
+// Os pagamentos (Etapa C, contas a pagar) vão se ligar a estas linhas por (tenant_id, id).
+export const investmentScheduleItems = pgTable("investment_schedule_item", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  number: integer("number").notNull(),
+  dueDate: date("due_date", { mode: "string" }).notNull(),
+  yieldCents: bigint("yield_cents", { mode: "number" }).notNull().default(0),
+  principalCents: bigint("principal_cents", { mode: "number" }).notNull().default(0),
+  description: text("description"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investment_schedule_item_tenant_due_idx").on(table.tenantId, table.dueDate),
+  unique("investment_schedule_item_tenant_id_id_unique").on(table.tenantId, table.id),
+  // Sem parcela repetida: gerar o cronograma duas vezes não duplica nada.
+  uniqueIndex("investment_schedule_item_number_unique").on(table.investmentId, table.number),
+  foreignKey({ name: "investment_schedule_item_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  check("investment_schedule_item_number_positive", sql`${table.number} > 0`),
+  check("investment_schedule_item_amounts_valid", sql`${table.yieldCents} >= 0 and ${table.principalCents} >= 0 and ${table.yieldCents} + ${table.principalCents} > 0`),
+  ...tenantPolicies("investment_schedule_item", table.tenantId, { tenantDelete: true }),
+]).enableRLS();
+
+// Histórico de alterações do contrato de investimento, visível para o próprio tenant (a auditoria completa continua em
+// admin_audit_log, só para o MASTER). Cada linha guarda os campos alterados com o valor antes e depois. Não se edita nem
+// se apaga pelo tenant.
+export const investmentRevisions = pgTable("investment_revision", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  // CONTRACT = dados do contrato; SCHEDULE = cronograma.
+  kind: text("kind").notNull(),
+  description: text("description").notNull(),
+  changes: jsonb("changes").$type<{ field: string; before: string | null; after: string | null }[]>().notNull(),
+  changedByUserId: text("changed_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investment_revision_investment_idx").on(table.investmentId, table.createdAt),
+  foreignKey({ name: "investment_revision_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  check("investment_revision_kind_valid", sql`${table.kind} in ('CONTRACT', 'SCHEDULE')`),
+  pgPolicy("investment_revision_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("investment_revision_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
+  pgPolicy("investment_revision_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("investment_revision_delete_admin_only", { for: "delete", using: adminScope }),
 ]).enableRLS();
 
 // Empresa contratante dos contratos de investimento (uma por tenant). Os dados são digitados e confirmados pelo próprio
