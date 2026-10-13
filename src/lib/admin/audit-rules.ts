@@ -29,6 +29,8 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_CONTRACTOR_UPDATED: "Dados da empresa contratante alterados",
   INVESTMENT_CONTRACT_GENERATED: "Contrato de investimento gerado",
   INVESTMENT_CONTRACT_SENT: "Contrato marcado como enviado para assinatura",
+  FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
+  WALLET_INITIAL_CAPITAL_CHANGED: "Capital inicial da carteira definido ou alterado",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 
@@ -36,6 +38,7 @@ export const AUDIT_ENTITIES: Record<string, string> = {
   tenant: "Cliente SaaS", subscription: "Assinatura", user: "Usuário", plan: "Plano", subscription_charge: "Mensalidade",
   investor: "Investidor", investment: "Investimento", investment_document: "Documento do investimento",
   investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
+  capital_movement: "Movimentação financeira", wallet: "Carteira",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.
@@ -82,4 +85,6 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   confirmed: "Dados confirmados", version: "Versão do contrato", contractId: "Contrato gerado", sha256: "Hash do arquivo (SHA-256)",
   templateVersion: "Modelo", includesNotes: "Observações no contrato", signedContractKept: "Contrato assinado mantido", sent: "Enviado para assinatura",
   contractVersion: "Versão assinada",
+  direction: "Entrada ou saída", category: "Categoria", occurredAt: "Data da movimentação", cycleNumber: "Ciclo da carteira",
+  initialCapitalCents: "Capital inicial (centavos)",
 };

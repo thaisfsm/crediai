@@ -6,9 +6,11 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
-// Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores).
+// Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro).
 export type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
-export type NavLabel = NavKey | "Investidores";
+export type NavLabel = NavKey | "Investidores" | "Financeiro";
+// Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
+const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro" };
 
 // Cada tela do menu tem um endereço (/?tela=…). Os itens do menu são links de verdade: um clique dado antes de o
 // JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
@@ -21,11 +23,10 @@ export function navKeyFromSlug(slug: string | undefined): NavKey {
   return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
 }
 export const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?tela=${NAV_SLUGS[label]}`);
-// Investidores é uma página própria (com endereço e dados do servidor), não uma tela do dashboard.
-const itemHref = (label: NavLabel) => (label === "Investidores" ? "/investidores" : navHref(label));
+const itemHref = (label: NavLabel) => PAGE_ROUTES[label] ?? navHref(label as NavKey);
 
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
-  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Investidores", icon: "briefcase" }] },
+  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Investidores", icon: "briefcase" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
 ];
@@ -59,9 +60,9 @@ export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNa
   active: NavLabel; initials: string; mobileOpen: boolean; pendingCharges?: number; onNavigate?: (label: NavKey) => void;
 }) {
   const intercept = (label: NavLabel) => (event: MouseEvent) => {
-    if (!onNavigate || label === "Investidores" || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+    if (!onNavigate || PAGE_ROUTES[label] || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
-    onNavigate(label);
+    onNavigate(label as NavKey);
   };
   return (
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`} aria-label="Navegação principal">

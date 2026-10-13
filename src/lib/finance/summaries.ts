@@ -15,6 +15,7 @@ type RenewalRow = typeof loanRenewals.$inferSelect;
 export function toMovementRecord(movement: MovementRow): CapitalMovementRecord {
   return {
     id: movement.id, kind: movement.kind, amountCents: movement.amountCents, occurredAt: movement.occurredAt, notes: movement.notes, reversedMovementId: movement.reversedMovementId, createdAt: movement.createdAt.toISOString(),
+    category: movement.category, description: movement.description, source: movement.source, createdByUserId: movement.createdByUserId,
   };
 }
 
@@ -48,7 +49,8 @@ export function toPaymentRecord(payment: PaymentRow, clientName: string, revisio
 const currentCycle = (tenantColumn: string) => sql.raw(`coalesce((select w.cycle_number from wallet w where w.tenant_id = ${tenantColumn}), 1)`);
 
 // Carteira (ciclo atual) de vários tenants de uma vez, calculada por buildPortfolio, como no dashboard de cada um.
-// Só para a administração da plataforma: precisa rodar em withPlatformContext.
+// Na administração da plataforma roda em withPlatformContext; o módulo Financeiro usa com um único tenant, o da sessão,
+// em withTenantContext (o filtro explícito por tenant_id vale mesmo com um papel de banco que ignora o RLS).
 export async function loadTenantPortfolios(tx: TenantTransaction, tenantIds: string[]) {
   const result = new Map<string, ReturnType<typeof buildPortfolio> & { payments: PaymentRecord[] }>();
   if (tenantIds.length === 0) return result;
