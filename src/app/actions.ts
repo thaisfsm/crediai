@@ -1,13 +1,15 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
+import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
-import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
+import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
@@ -114,17 +116,47 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
   const guarantorDocument = keepLegacy(normalizeCpf(profile.guarantorDocument ?? ""), profile.guarantorDocument ?? "", previous?.guarantorDocument);
   if (!guarantorDocument.ok) return { ok: false as const, error: `CPF do avalista: ${guarantorDocument.error}` };
   profile.guarantorDocument = guarantorDocument.value;
+  // Empresa do endereço comercial: CNPJ com dígitos verificadores (vários clientes podem trabalhar na mesma empresa).
+  const businessCnpj = normalizeCnpj(profile.businessCnpj ?? "");
+  if (!businessCnpj.ok) return { ok: false as const, error: `CNPJ da empresa: ${businessCnpj.error}` };
+  profile.businessCnpj = businessCnpj.value;
+  // Dados bancários e chave Pix (src/lib/bank-account.ts).
+  const bank = bankFields((key, max) => text(data, key, max));
+  if (!bank.ok) return bank;
+  for (const key of bankKeys) profile[key] = bank.values[key];
   return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 500)), ...profile } };
 }
+
+// O mesmo CPF uma só vez por carteira (clientes arquivados contam). A consulta dá a mensagem com o nome; o índice único
+// client_tenant_document_unique garante a regra mesmo com dois cadastros simultâneos.
+async function duplicateCpfError(tx: TenantTransaction, tenantId: string, document: string | null, exceptClientId?: string) {
+  if (!document) return null;
+  const [other] = await tx.select({ name: clients.name, archivedAt: clients.archivedAt }).from(clients)
+    .where(and(eq(clients.tenantId, tenantId), eq(clients.document, document), exceptClientId ? ne(clients.id, exceptClientId) : undefined)).limit(1);
+  if (!other) return null;
+  return `Já existe um cliente com o CPF ${formatCpf(document)} nesta carteira: ${other.name}${other.archivedAt ? " (arquivado)" : ""}.`;
+}
+const isDuplicateCpf = (error: unknown) => {
+  const cause = (error as { cause?: { code?: string; constraint_name?: string } })?.cause ?? (error as { code?: string; constraint_name?: string });
+  return cause?.code === "23505" && cause?.constraint_name === "client_tenant_document_unique";
+};
 
 export async function createClientAction(data: FormData): Promise<ActionResult> {
   const fields = clientFields(data);
   if (!fields.ok) return fields;
-  await withTenantContext(async (tx, { tenantId }) => {
-    await tx.insert(clients).values({ id: id("cli"), tenantId, ...fields.values });
-  });
-  revalidatePath("/");
-  return { ok: true, message: `Cliente ${fields.values.name} cadastrado.` };
+  try {
+    const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+      const duplicate = await duplicateCpfError(tx, tenantId, fields.values.document);
+      if (duplicate) return { ok: false, error: duplicate };
+      await tx.insert(clients).values({ id: id("cli"), tenantId, ...fields.values });
+      return { ok: true, message: `Cliente ${fields.values.name} cadastrado.` };
+    });
+    if (result.ok) revalidatePath("/");
+    return result;
+  } catch (error) {
+    if (isDuplicateCpf(error)) return { ok: false, error: `Já existe um cliente com o CPF ${formatCpf(fields.values.document)} nesta carteira.` };
+    throw error;
+  }
 }
 
 export async function updateClientAction(data: FormData): Promise<ActionResult> {
@@ -135,11 +167,34 @@ export async function updateClientAction(data: FormData): Promise<ActionResult> 
     if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
     const fields = clientFields(data, client);
     if (!fields.ok) return fields;
+    const duplicate = await duplicateCpfError(tx, tenantId, fields.values.document, client.id);
+    if (duplicate) return { ok: false, error: duplicate };
     await tx.update(clients).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(clients.id, client.id), eq(clients.tenantId, tenantId)));
     return { ok: true, message: `Cliente ${fields.values.name} atualizado.` };
+  }).catch((error: unknown): ActionResult => {
+    if (isDuplicateCpf(error)) return { ok: false, error: "Já existe um cliente com este CPF nesta carteira." };
+    throw error;
   });
   if (result.ok) revalidatePath("/");
   return result;
+}
+
+// Busca rápida de clientes por nome (sem acentos, partes do nome), CPF ou telefone, formatados ou não. Roda no servidor e
+// só na carteira da sessão (tenant_id explícito além do RLS); arquivados aparecem marcados. Não grava nada.
+export async function searchClientsAction(query: string): Promise<{ ok: true; results: ClientSearchResult[] } | { ok: false; error: string }> {
+  const terms = clientSearchTerms(String(query ?? ""));
+  if (terms.kind === "none") return { ok: true, results: [] };
+  return withTenantContext(async (tx, { tenantId }) => {
+    const plainName = sql`lower(translate(regexp_replace(${clients.name}, '\\s+', ' ', 'g'), ${ACCENTED}, ${PLAIN}))`;
+    const escape = (value: string) => value.replace(/[\\%_]/g, (match) => `\\${match}`);
+    const match = terms.kind === "name"
+      ? and(...terms.words.map((word) => sql`${plainName} like ${`%${escape(word)}%`}`))
+      : or(sql`${clients.document} like ${`%${terms.digits}%`}`, sql`${clients.phone} like ${`%${terms.digits}%`}`, sql`${clients.whatsapp} like ${`%${terms.digits}%`}`);
+    const rows = await tx.select({ id: clients.id, name: clients.name, document: clients.document, phone: clients.phone, whatsapp: clients.whatsapp, archivedAt: clients.archivedAt })
+      .from(clients).where(and(eq(clients.tenantId, tenantId), match))
+      .orderBy(sql`${clients.archivedAt} is not null`, asc(clients.name), asc(clients.id)).limit(CLIENT_SEARCH_LIMIT);
+    return { ok: true as const, results: rows.map(({ archivedAt, ...row }) => ({ ...row, archived: archivedAt !== null })) };
+  });
 }
 
 // Modalidades (regras em src/lib/finance/rules.ts):

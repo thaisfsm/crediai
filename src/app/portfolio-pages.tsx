@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult } from "./actions";
+import { cancelOperationAction, searchClientsAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult } from "./actions";
 import { Icon, type IconName } from "./ui-icon";
-import { addDays, centsToInput, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
+import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
+import type { ClientSearchResult } from "@/lib/finance/client-search";
+import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
@@ -252,10 +254,55 @@ function ResetWalletPanel({ portfolio, onChanged }: { portfolio: TenantPortfolio
 
 type ClientRow = TenantPortfolio["clients"][number];
 
-// Campo com máscara (CPF, telefone, CEP) que guarda o valor digitado já formatado.
-export function MaskedInput({ name, mask, initial, ...props }: { name: string; mask: (value: string) => string; initial: string } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue">) {
+// Campo com máscara (CPF, telefone, CEP) que guarda o valor digitado já formatado. Com "validate", a mensagem aparece
+// enquanto o usuário digita e o navegador não envia o formulário com o valor inválido (o servidor confere de novo).
+// Um valor antigo, reenviado sem alteração, não é bloqueado na tela (o servidor mantém o cadastro antigo como está).
+export function MaskedInput({ name, mask, initial, validate, ...props }: { name: string; mask: (value: string) => string; initial: string; validate?: (value: string) => string | null } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "defaultValue">) {
   const [value, setValue] = useState(initial);
-  return <input name={name} value={value} onChange={(event) => setValue(mask(event.target.value))} {...props} />;
+  const problem = validate && value !== initial ? validate(value) : null;
+  return (
+    <>
+      <input name={name} value={value} aria-invalid={problem ? true : undefined}
+        ref={(input) => { input?.setCustomValidity(problem ?? ""); }}
+        onChange={(event) => setValue(mask(event.target.value))} {...props} />
+      {problem && <small className="field-error" role="alert">{problem}</small>}
+    </>
+  );
+}
+
+// Dados bancários e chave Pix (opcionais), iguais para clientes e investidores. Regras em src/lib/bank-account.ts.
+export function BankFieldset({ initial, legend = "Dados bancários e Pix" }: { initial?: Partial<BankValues> | null; legend?: string }) {
+  const [pixType, setPixType] = useState<PixKeyType | "">((initial?.pixKeyType as PixKeyType | null) ?? "");
+  const holderMask = (value: string) => (onlyDigits(value).length > 11 ? maskCnpj(value) : maskCpf(value));
+  const pixInitial = formatPixKey(initial?.pixKeyType ?? null, initial?.pixKey ?? null) ?? "";
+  const pixPlaceholder = { CPF: "000.000.000-00", CNPJ: "00.000.000/0000-00", EMAIL: "nome@exemplo.com", PHONE: "(11) 98765-4321", RANDOM: "123e4567-e89b-12d3-a456-426614174000", "": "Escolha o tipo primeiro" }[pixType];
+  return (
+    <fieldset className="form-section field-wide">
+      <legend>{legend}</legend>
+      <div className="form-grid">
+        <label className="field field-wide"><span>Titular da conta</span><input name="bankHolderName" maxLength={160} defaultValue={initial?.bankHolderName ?? ""} placeholder="Nome como está no banco" /></label>
+        <label className="field"><span>CPF/CNPJ do titular</span><MaskedInput name="bankHolderDocument" mask={holderMask} initial={initial?.bankHolderDocument ? holderMask(initial.bankHolderDocument) : ""} validate={(value) => (onlyDigits(value).length > 11 ? cnpjProblem(value) : cpfProblem(value))} inputMode="numeric" placeholder="CPF ou CNPJ" maxLength={20} /></label>
+        <label className="field"><span>Banco</span><input name="bankName" maxLength={120} defaultValue={initial?.bankName ?? ""} placeholder="Nome ou código, ex.: 341 Itaú" /></label>
+        <label className="field"><span>Agência</span><input name="bankBranch" maxLength={20} defaultValue={initial?.bankBranch ?? ""} inputMode="numeric" placeholder="1234" /></label>
+        <label className="field"><span>Conta</span><input name="bankAccount" maxLength={30} defaultValue={initial?.bankAccount ?? ""} inputMode="numeric" placeholder="12345-6" /></label>
+        <label className="field"><span>Tipo de conta</span><select name="bankAccountType" defaultValue={initial?.bankAccountType ?? ""}><option value="">Não informado</option>{Object.entries(BANK_ACCOUNT_TYPES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label className="field"><span>Tipo da chave Pix</span><select name="pixKeyType" value={pixType} onChange={(event) => setPixType(event.target.value as PixKeyType | "")}><option value="">Sem chave Pix</option>{Object.entries(PIX_KEY_TYPES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label className="field"><span>Chave Pix</span><input name="pixKey" maxLength={160} defaultValue={pixInitial} placeholder={pixPlaceholder} disabled={!pixType} required={Boolean(pixType)} /></label>
+      </div>
+    </fieldset>
+  );
+}
+
+// Dados bancários na ficha (cliente ou investidor).
+export function BankSummaryRows({ values }: { values: BankValues }) {
+  const summary = bankSummary(values);
+  return (
+    <>
+      <div><dt>Conta bancária</dt><dd>{summary.account ?? "Não informada"}</dd></div>
+      <div><dt>Titular da conta</dt><dd>{summary.holder ?? "—"}</dd></div>
+      <div><dt>Chave Pix</dt><dd>{summary.pix ?? "Não informada"}</dd></div>
+    </>
+  );
 }
 
 type CepLookup = { street: string; district: string; city: string; state: string };
@@ -338,7 +385,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
       <form className="form-grid" onSubmit={onSubmit} key={resetKey}>
         {editing && <input type="hidden" name="clientId" value={editing.id} />}
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
-        <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
+        <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
         <label className="field"><span>Telefone</span><MaskedInput name="phone" mask={maskPhone} initial={editing ? formatPhone(editing.phone) ?? "" : ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
         <label className="field"><span>WhatsApp</span><MaskedInput name="whatsapp" mask={maskPhone} initial={formatPhone(editing?.whatsapp ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
         <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
@@ -347,6 +394,14 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
         <label className="field field-wide"><span>Observações</span><input name="notes" placeholder="Opcional" maxLength={500} defaultValue={editing?.notes ?? ""} /></label>
         <AddressFields kind="residential" client={editing} />
         <AddressFields kind="business" client={editing} />
+        <fieldset className="form-section field-wide">
+          <legend>Empresa (endereço comercial)</legend>
+          <div className="form-grid">
+            <label className="field field-wide"><span>Nome da empresa</span><input name="businessCompanyName" maxLength={160} defaultValue={editing?.businessCompanyName ?? ""} placeholder="Onde o cliente trabalha" /></label>
+            <label className="field"><span>CNPJ da empresa</span><MaskedInput name="businessCnpj" mask={maskCnpj} initial={formatCnpj(editing?.businessCnpj ?? null) ?? ""} validate={cnpjProblem} inputMode="numeric" placeholder="00.000.000/0000-00" maxLength={20} /></label>
+          </div>
+        </fieldset>
+        <BankFieldset initial={editing} />
         <fieldset className="form-section field-wide">
           <legend>Referências pessoais</legend>
           <div className="form-grid">
@@ -363,7 +418,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
           <legend>Avalista</legend>
           <div className="form-grid">
             <label className="field field-wide"><span>{guarantorPartLabels.Name}</span><input name="guarantorName" maxLength={160} defaultValue={editing?.guarantorName ?? ""} /></label>
-            <label className="field"><span>{guarantorPartLabels.Document}</span><MaskedInput name="guarantorDocument" mask={maskCpf} initial={formatCpf(editing?.guarantorDocument ?? null) ?? ""} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
+            <label className="field"><span>{guarantorPartLabels.Document}</span><MaskedInput name="guarantorDocument" mask={maskCpf} initial={formatCpf(editing?.guarantorDocument ?? null) ?? ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
             <label className="field"><span>{guarantorPartLabels.Phone}</span><MaskedInput name="guarantorPhone" mask={maskPhone} initial={formatPhone(editing?.guarantorPhone ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
             <label className="field field-wide"><span>{guarantorPartLabels.Notes}</span><input name="guarantorNotes" placeholder="Opcional" maxLength={500} defaultValue={editing?.guarantorNotes ?? ""} /></label>
             <p className="capital-note field-wide">O avalista fica no cadastro do cliente e aparece em todas as operações dele.</p>
@@ -515,6 +570,8 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
           return <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd>{!client[network] ? "—" : href ? <a className="text-link inline-link" href={href} target="_blank" rel="noreferrer noopener">{socialLabel(client[network])}</a> : client[network]}</dd></div>;
         })}
         {(Object.keys(addressKinds) as AddressKind[]).map((kind) => <div key={kind}><dt>{addressKinds[kind]}</dt><dd>{formatAddress(client, kind) ?? "Não informado"}</dd></div>)}
+        <div><dt>Empresa</dt><dd>{[client.businessCompanyName, client.businessCnpj && `CNPJ ${formatCnpj(client.businessCnpj)}`].filter(Boolean).join(" · ") || "Não informada"}</dd></div>
+        <BankSummaryRows values={client} />
         {references.map((reference) => (
           <div key={reference.slot}><dt>Referência {reference.slot}</dt><dd>{reference.name ? [reference.name, reference.relationship, reference.phone].filter(Boolean).join(" · ") : "Não informada"}</dd></div>
         ))}
@@ -602,6 +659,54 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
   );
 }
 
+// Busca rápida: o servidor procura na carteira da sessão por nome (sem acentos, partes do nome), CPF ou telefone,
+// formatados ou não. Fica no topo da tela Clientes; "Abrir" leva direto à ficha do cliente.
+function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState<{ query: string; results: ClientSearchResult[]; error?: string } | null>(null);
+  const [pending, startTransition] = useTransition();
+  const trimmed = query.trim();
+  useEffect(() => {
+    if (!trimmed) return;
+    const timer = setTimeout(() => startTransition(async () => {
+      try {
+        const result = await searchClientsAction(trimmed);
+        setState(result.ok ? { query: trimmed, results: result.results } : { query: trimmed, results: [], error: result.error });
+      } catch {
+        setState({ query: trimmed, results: [], error: "Não foi possível buscar agora. Tente novamente." });
+      }
+    }), 250);
+    return () => clearTimeout(timer);
+  }, [trimmed]);
+  const shown = trimmed && state?.query === trimmed ? state : null;
+  const tooShort = trimmed !== "" && !/\p{L}/u.test(trimmed) && onlyDigits(trimmed).length < 3;
+  return (
+    <section className="panel table-panel" aria-label="Buscar cliente">
+      <div className="client-search" role="search">
+        <label className="client-search-box">
+          <span className="search-icon"><Icon name="search" size={16} /></span>
+          <input type="search" aria-label="Buscar cliente por nome, CPF ou telefone" placeholder="Buscar por nome, CPF ou telefone" value={query} maxLength={120} onChange={(event) => setQuery(event.target.value)} />
+          {query && <button type="button" className="search-clear" aria-label="Limpar busca" onClick={() => setQuery("")}>×</button>}
+        </label>
+        {trimmed && <p className="client-search-status" role="status">{tooShort ? "Digite ao menos 3 números do CPF ou do telefone." : !shown || pending ? "Buscando…" : shown.error ?? `${shown.results.length === 0 ? "Nenhum cliente encontrado" : plural(shown.results.length, "cliente encontrado", "clientes encontrados")} para "${trimmed}".`}</p>}
+      </div>
+      {trimmed && shown && shown.results.length > 0 && (
+        <div className="table-scroll"><table className="data-table" aria-label="Resultado da busca">
+          <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Situação</th><th /></tr></thead>
+          <tbody>{shown.results.map((client) => (
+            <tr key={client.id}>
+              <td><strong>{client.name}</strong></td><td>{formatCpf(client.document) ?? "—"}</td>
+              <td>{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td>
+              <td>{client.archived ? <span className="status-chip status-muted"><i />Arquivado</span> : <span className="status-chip status-active"><i />Ativo</span>}</td>
+              <td className="actions-cell">{client.archived ? <small>Histórico em Operações</small> : <button className="outline-button" onClick={() => onOpen(client.id)}>Abrir</button>}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      )}
+    </section>
+  );
+}
+
 export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void }) {
   const [editing, setEditing] = useState<ClientRow | null>(null);
   const [deleting, setDeleting] = useState<ClientRow | null>(null);
@@ -614,6 +719,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfoli
       <PageHeading eyebrow="CREDIAI · CLIENTES" title="Clientes" description="Cadastre os clientes da sua carteira para vincular operações.">
         <button className="primary-button" onClick={onNewOperation}><Icon name="plus" size={17} /> Nova operação</button>
       </PageHeading>
+      <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }} />
       <ClientForm key={editing?.id ?? "new"} editing={editing} onChanged={onChanged} onCancel={() => setEditing(null)} />
       <section className="panel table-panel" aria-label="Lista de clientes">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{portfolio.clients.length}</span></div></div></div>
