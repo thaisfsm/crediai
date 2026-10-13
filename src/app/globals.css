@@ -1113,3 +1113,11 @@ button { color:inherit; }
 .revision-changes { margin:6px 0 0; padding-left:16px; color:#8296a7; font-size:12px; display:grid; gap:2px; }
 .edit-review { grid-column:1 / -1; display:grid; gap:10px; min-width:0; overflow-x:auto; }
 .edit-review .data-table td, .edit-review .data-table th { padding:8px 10px; }
+.report-filters { display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px; padding:0 18px 14px; }
+.report-filters .field { min-width:170px; flex:0 1 200px; }
+.report-operation-row td { background:rgba(7,17,31,.35); font-size:12px; }
+.report-operation-row td:first-child { padding-left:24px; }
+.report-operation-row small { display:block; margin-top:4px; color:#8296a7; }
+@media (max-width: 640px) { .report-filters { padding:0 12px 12px; } .report-filters .field { flex:1 1 100%; } }
+/* No celular, a linha da operação não é um cliente: a 1ª célula (Abrir #código) fica sem título e a 2ª mostra a situação */
+@media (max-width: 740px) { .report-operation-row td:first-child { padding-left:0; } .report-operation-row td:first-child::before { content:none; } .report-operation-row td:nth-child(2)::before { content:"Situação"; } }

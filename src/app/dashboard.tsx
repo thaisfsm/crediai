@@ -291,7 +291,7 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
           ) : active === "Cobranças" ? (
             <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} />
           ) : active === "Relatórios" ? (
-            <ReportsPage portfolio={portfolio} />
+            <ReportsPage portfolio={portfolio} onChanged={refresh} />
           ) : (
             // Todas as áreas do menu já têm tela própria; Configurações é a última.
             <SettingsPage portfolio={portfolio} onChanged={refresh} />
