@@ -8,6 +8,7 @@ import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewal
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { INFLOW_KINDS } from "@/lib/finance/cashflow";
 import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
@@ -305,13 +306,15 @@ export async function deleteClientAction(data: FormData): Promise<ActionResult> 
   return result;
 }
 
-// Mesmo cálculo do card "Capital disponível" (src/lib/finance/portfolio.ts): capital inicial + aportes − retiradas −
-// estornos de aporte − principal das operações + pagamentos recebidos.
+// Mesmo cálculo do card "Capital disponível" (src/lib/finance/portfolio.ts): capital inicial + aportes + outras entradas
+// − retiradas e saídas − estornos de aporte − principal das operações + pagamentos recebidos.
 // Só o ciclo atual da carteira conta.
 async function availableCapitalCents(tx: TenantTransaction, tenantId: string, { initialCapitalCents, cycleNumber }: { initialCapitalCents: number; cycleNumber: number }) {
-  // Aporte soma; retirada e estorno de aporte subtraem.
+  // Aporte e outras entradas somam; retiradas (inclusive as saídas do Financeiro) e estorno de aporte subtraem.
+  // O sinal de cada tipo vem de INFLOW_KINDS (src/lib/finance/cashflow.ts), o mesmo usado na tela.
+  const inflow = sql.join(INFLOW_KINDS.map((kind) => sql`${kind}`), sql`, `);
   const [{ movements }] = await tx.select({
-    movements: sql<string>`coalesce(sum(case when ${capitalMovements.kind} = 'CONTRIBUTION' then ${capitalMovements.amountCents} else -${capitalMovements.amountCents} end), 0)`,
+    movements: sql<string>`coalesce(sum(case when ${capitalMovements.kind} in (${inflow}) then ${capitalMovements.amountCents} else -${capitalMovements.amountCents} end), 0)`,
   }).from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber)));
   const [{ lent }] = await tx.select({ lent: sql<string>`coalesce(sum(${loanOperations.principalCents}), 0)` }).from(loanOperations)
     .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber), ne(loanOperations.status, "CANCELED")));

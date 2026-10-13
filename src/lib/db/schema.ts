@@ -30,8 +30,10 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () =>
 export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
 export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED"]);
-// Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada e estorno de aporte.
-export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION", "WITHDRAWAL", "CONTRIBUTION_REVERSAL"]);
+// Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada (toda saída manual de dinheiro,
+// com a categoria do módulo Financeiro), estorno de aporte e outras entradas manuais. O sinal de cada tipo no capital
+// disponível fica em src/lib/finance/cashflow.ts (INFLOW_KINDS); o valor gravado é sempre positivo.
+export const capitalMovementKind = pgEnum("capital_movement_kind", ["CONTRIBUTION", "WITHDRAWAL", "CONTRIBUTION_REVERSAL", "OTHER_INCOME"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["TRIALING", "ACTIVE", "PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELED"]);
 // Condição comercial de uma assinatura: preço padrão do plano, preço personalizado ou cortesia (sem cobrança).
 export const commercialCondition = pgEnum("commercial_condition", ["STANDARD", "CUSTOM", "COURTESY"]);
@@ -433,6 +435,13 @@ export const capitalMovements = pgTable("capital_movement", {
   reversedMovementId: text("reversed_movement_id"),
   cycleNumber: integer("cycle_number").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Módulo Financeiro: categoria (coerente com o tipo), descrição obrigatória, quem lançou, de que tela veio e a chave
+  // que impede gravar o mesmo envio duas vezes. Linhas antigas (tela Capital) ficam sem categoria e com origem CAPITAL.
+  category: text("category"),
+  description: text("description"),
+  createdByUserId: text("created_by_user_id"),
+  source: text("source").notNull().default("CAPITAL"),
+  idempotencyKey: text("idempotency_key"),
 }, (table) => [
   index("capital_movement_tenant_id_idx").on(table.tenantId),
   index("capital_movement_tenant_cycle_idx").on(table.tenantId, table.cycleNumber),
@@ -441,6 +450,15 @@ export const capitalMovements = pgTable("capital_movement", {
   foreignKey({ name: "capital_movement_reversal_same_tenant_fk", columns: [table.tenantId, table.reversedMovementId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
   check("capital_movement_amount_positive", sql`${table.amountCents} > 0`),
   check("capital_movement_reversal_link", sql`(${table.kind}::text = 'CONTRIBUTION_REVERSAL') = (${table.reversedMovementId} is not null)`),
+  uniqueIndex("capital_movement_tenant_idempotency_unique").on(table.tenantId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
+  check("capital_movement_source_valid", sql`${table.source} in ('CAPITAL', 'FINANCE')`),
+  // Categoria só com o tipo certo: entradas (aporte e outras entradas) e saídas (retiradas). Outras entradas sempre têm categoria.
+  check("capital_movement_category_matches_kind", sql`(${table.category} is null and ${table.kind}::text <> 'OTHER_INCOME')
+    or (${table.kind}::text = 'CONTRIBUTION' and ${table.category} = 'CAPITAL_CONTRIBUTION')
+    or (${table.kind}::text = 'OTHER_INCOME' and ${table.category} = 'OTHER_INCOME')
+    or (${table.kind}::text = 'WITHDRAWAL' and ${table.category} in ('SALARY_WITHDRAWAL', 'PARTNER_WITHDRAWAL', 'OPERATING_EXPENSE', 'TAXES_AND_FEES', 'OTHER_OUTFLOW'))`),
+  // Lançamento do Financeiro: sempre com categoria, descrição e a chave contra envio duplicado.
+  check("capital_movement_finance_fields", sql`${table.source} <> 'FINANCE' or (${table.category} is not null and length(trim(coalesce(${table.description}, ''))) > 0 and ${table.idempotencyKey} is not null)`),
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
@@ -637,6 +655,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_admin_only", { for: "insert", withCheck: adminScope }),
   // O usuário do tenant também registra o que faz no módulo Investidores, só no próprio tenant (e continua sem ler o log).
   pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document', 'investment_contract', 'investment_contractor')` }),
+  // E os lançamentos do módulo Financeiro (entradas e saídas manuais), também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_finance", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'capital_movement'` }),
 ]).enableRLS();
 
 export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

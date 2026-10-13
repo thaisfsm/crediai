@@ -113,6 +113,13 @@
       "when": 1791896809443,
       "tag": "0016_investment_contracts",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791903721288,
+      "tag": "0017_financial_movements",
+      "breakpoints": true
     }
   ]
 }

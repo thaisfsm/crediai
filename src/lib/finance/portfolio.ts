@@ -26,15 +26,23 @@ export type PaymentRevisionRecord = { id: string; previousAmountCents: number; p
 export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[] };
 // renewedPeriod: o período que este pagamento renovou (pagamento somente de juros), com o novo vencimento.
 export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind; renewedPeriod: LedgerPeriod | null };
-export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_REVERSAL";
-export type CapitalMovementRecord = { id: string; kind: CapitalMovementKind; amountCents: number; occurredAt: string; notes: string | null; reversedMovementId: string | null; createdAt: string };
+export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_REVERSAL" | "OTHER_INCOME";
+// category/description/source/createdByUserId: lançamentos do módulo Financeiro (os antigos, da tela Capital, não têm).
+export type CapitalMovementRecord = {
+  id: string; kind: CapitalMovementKind; amountCents: number; occurredAt: string; notes: string | null; reversedMovementId: string | null; createdAt: string;
+  category?: string | null; description?: string | null; source?: string; createdByUserId?: string | null;
+};
 
 // Extrato do capital: cada linha soma (+) ou tira (−) do capital disponível; o saldo final é o capital disponível atual.
-export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVERSAL" | "WITHDRAWAL" | "LOAN" | "LOAN_CANCELED" | "PAYMENT";
-// reversible/reversed: só para aportes (botão "Estornar aporte" e marca de estornado).
-export type CapitalLedgerEntry = { key: string; kind: CapitalLedgerKind; date: string; description: string; amountCents: number; balanceCents: number; movementId?: string; reversed?: boolean };
+export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVERSAL" | "WITHDRAWAL" | "OTHER_INCOME" | "LOAN" | "LOAN_CANCELED" | "PAYMENT";
+// reversible/reversed: só para aportes (botão "Estornar aporte" e marca de estornado). Os demais campos opcionais são
+// a origem de cada linha, usada pelo extrato do módulo Financeiro (cashflow.ts).
+export type CapitalLedgerEntry = {
+  key: string; kind: CapitalLedgerKind; date: string; description: string; amountCents: number; balanceCents: number; movementId?: string; reversed?: boolean;
+  category?: string | null; notes?: string | null; source?: string; createdByUserId?: string | null; operationCode?: string; principalCents?: number; interestCents?: number;
+};
 export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = {
-  INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", CONTRIBUTION_REVERSAL: "Estorno de aporte", WITHDRAWAL: "Retirada",
+  INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", CONTRIBUTION_REVERSAL: "Estorno de aporte", WITHDRAWAL: "Retirada", OTHER_INCOME: "Outra entrada",
   LOAN: "Capital utilizado em operação", LOAN_CANCELED: "Operação excluída", PAYMENT: "Valor recebido de operação",
 };
 
@@ -182,11 +190,13 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const open = views.filter((operation) => operation.status === "OPEN");
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
-  // Caixa: entra com o capital inicial e os aportes, sai com retiradas, estornos de aporte e o principal das operações,
-  // e volta com cada pagamento recebido (principal e juros). Juros ainda não recebidos nunca entram no capital disponível.
+  // Caixa: entra com o capital inicial, os aportes e as outras entradas manuais, sai com retiradas (salário, sócio,
+  // despesas, impostos e outras saídas do Financeiro), estornos de aporte e o principal das operações, e volta com cada
+  // pagamento recebido (principal e juros). Juros ainda não recebidos nunca entram no capital disponível.
   const movementTotal = (kind: CapitalMovementKind) => sum(capitalMovements.filter((movement) => movement.kind === kind).map((movement) => movement.amountCents));
   const contributionsCents = movementTotal("CONTRIBUTION") - movementTotal("CONTRIBUTION_REVERSAL");
   const withdrawalsCents = movementTotal("WITHDRAWAL");
+  const otherIncomeCents = movementTotal("OTHER_INCOME");
   const usedCapitalCents = sum(live.map((operation) => operation.principalCents));
   const receivedCents = sum(payments.map((payment) => payment.amountCents));
   const summary = {
@@ -200,9 +210,10 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     grossContributionsCents: movementTotal("CONTRIBUTION"),
     reversalsCents: movementTotal("CONTRIBUTION_REVERSAL"),
     withdrawalsCents,
+    otherIncomeCents,
     investedCents: initialCapitalCents + contributionsCents,
     usedCapitalCents,
-    availableCents: initialCapitalCents + contributionsCents - withdrawalsCents - usedCapitalCents + receivedCents,
+    availableCents: initialCapitalCents + contributionsCents + otherIncomeCents - withdrawalsCents - usedCapitalCents + receivedCents,
     // Principal que ainda não voltou: disponível + emprestado = capital aportado + juros recebidos.
     lentCents: sum(open.map((operation) => operation.principalRemainingCents)),
     receivableCents: sum(open.map((operation) => operation.balanceCents)),
@@ -264,24 +275,33 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const chart: Record<ChartPeriod, { labels: string[]; values: number[] }> = { "7D": series(6, 7), "30D": series(30, 7), "90D": series(90, 7) };
 
   const reversedIds = new Set(capitalMovements.map((movement) => movement.reversedMovementId).filter(Boolean));
-  const movementDescription = (movement: CapitalMovementRecord) => movement.notes ?? (movement.kind === "WITHDRAWAL" ? "Retirada de capital" : movement.kind === "CONTRIBUTION" ? "Aporte de capital" : "Estorno de aporte");
+  const movementDescription = (movement: CapitalMovementRecord) => movement.description ?? movement.notes
+    ?? (movement.kind === "WITHDRAWAL" ? "Retirada de capital" : movement.kind === "CONTRIBUTION" ? "Aporte de capital" : movement.kind === "OTHER_INCOME" ? "Outra entrada" : "Estorno de aporte");
   const canceled = views.filter((operation) => operation.status === "CANCELED");
-  const movements: Omit<CapitalLedgerEntry, "balanceCents">[] = [
+  // Divisão de cada pagamento entre principal e juros (a mesma do extrato da operação), para o Financeiro.
+  const allocationById = new Map(views.flatMap((operation) => operation.payments).map((payment) => [payment.id, payment]));
+  const movements: Omit<CapitalLedgerEntry, "balanceCents">[] = ([
     ...capitalMovements.map((movement) => ({
       key: movement.id, kind: movement.kind, date: movement.occurredAt, description: movementDescription(movement), order: movement.createdAt,
-      amountCents: movement.kind === "CONTRIBUTION" ? movement.amountCents : -movement.amountCents,
+      // O valor gravado é sempre positivo; o sinal vem do tipo (só aporte e outras entradas somam).
+      amountCents: movement.kind === "CONTRIBUTION" || movement.kind === "OTHER_INCOME" ? movement.amountCents : -movement.amountCents,
+      category: movement.category ?? null, notes: movement.description ? movement.notes : null, source: movement.source ?? "CAPITAL", createdByUserId: movement.createdByUserId ?? null,
       ...(movement.kind === "CONTRIBUTION" ? { movementId: movement.id, reversed: reversedIds.has(movement.id) } : {}),
     })),
     // Operações excluídas continuam no extrato: a saída do capital e a devolução na exclusão se anulam.
-    ...[...live, ...canceled].map((operation) => ({ key: operation.id, kind: "LOAN" as const, date: operation.loanDate, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: -operation.principalCents, order: operation.createdAt })),
+    ...[...live, ...canceled].map((operation) => ({ key: operation.id, kind: "LOAN" as const, date: operation.loanDate, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: -operation.principalCents, order: operation.createdAt, operationCode: operation.code })),
     ...canceled.map((operation) => {
       const canceledAt = operation.updatedAt ?? operation.createdAt;
       const canceledOn = todayIso(new Date(canceledAt));
-      return { key: `${operation.id}-canceled`, kind: "LOAN_CANCELED" as const, date: canceledOn < operation.loanDate ? operation.loanDate : canceledOn, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: operation.principalCents, order: canceledAt };
+      return { key: `${operation.id}-canceled`, kind: "LOAN_CANCELED" as const, date: canceledOn < operation.loanDate ? operation.loanDate : canceledOn, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: operation.principalCents, order: canceledAt, operationCode: operation.code };
     }),
-    ...payments.map((payment) => ({ key: payment.id, kind: "PAYMENT" as const, date: payment.paidAt, description: `${payment.clientName} · Op. #${operationCode(payment.operationId)}`, amountCents: payment.amountCents, order: payment.createdAt })),
-  ].sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order))
-    .map(({ key, kind, date, description, amountCents, movementId, reversed }: Omit<CapitalLedgerEntry, "balanceCents"> & { order: string }) => ({ key, kind, date, description, amountCents, movementId, reversed }));
+    ...payments.map((payment) => ({
+      key: payment.id, kind: "PAYMENT" as const, date: payment.paidAt, description: `${payment.clientName} · Op. #${operationCode(payment.operationId)}`, amountCents: payment.amountCents, order: payment.createdAt,
+      operationCode: operationCode(payment.operationId), principalCents: allocationById.get(payment.id)?.principalCents ?? 0, interestCents: allocationById.get(payment.id)?.interestCents ?? 0,
+    })),
+  ] as (Omit<CapitalLedgerEntry, "balanceCents"> & { order: string })[]).sort((a, b) => a.date.localeCompare(b.date) || a.order.localeCompare(b.order))
+    // "order" (criação) só desempata a ordenação; não vai para o extrato.
+    .map((entry): Omit<CapitalLedgerEntry, "balanceCents"> => Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "order")) as Omit<CapitalLedgerEntry, "balanceCents">);
   // O capital inicial abre o extrato, mesmo que a carteira tenha sido configurada depois de operações retroativas.
   const initialEntry = hasWallet ? [{ key: "initial", kind: "INITIAL" as const, date: walletCreatedOn ?? today, description: cycleNumber > 1 ? `Capital inicial do ciclo ${cycleNumber}` : "Capital inicial da carteira", amountCents: initialCapitalCents }] : [];
   let running = 0;

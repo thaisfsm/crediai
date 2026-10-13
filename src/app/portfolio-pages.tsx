@@ -184,7 +184,7 @@ function ResetWalletDialog({ portfolio, onClose, onChanged }: { portfolio: Tenan
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const { summary, profitability } = portfolio;
-  const movementCount = portfolio.capitalLedger.filter((entry) => entry.kind === "CONTRIBUTION" || entry.kind === "WITHDRAWAL" || entry.kind === "CONTRIBUTION_REVERSAL").length;
+  const movementCount = portfolio.capitalLedger.filter((entry) => entry.kind === "CONTRIBUTION" || entry.kind === "WITHDRAWAL" || entry.kind === "CONTRIBUTION_REVERSAL" || entry.kind === "OTHER_INCOME").length;
   return (
     <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="panel form-panel payment-panel confirm-panel" role="alertdialog" aria-modal="true" aria-label="Zerar carteira?">
@@ -196,7 +196,7 @@ function ResetWalletDialog({ portfolio, onClose, onChanged }: { portfolio: Tenan
               <dl className="payment-summary">
                 <div><dt>Operações</dt><dd>{profitability.operationCount}</dd></div>
                 <div><dt>Pagamentos</dt><dd>{profitability.paymentCount}</dd></div>
-                <div><dt>Aportes, retiradas e estornos</dt><dd>{movementCount}</dd></div>
+                <div><dt>Aportes, retiradas, saídas e estornos</dt><dd>{movementCount}</dd></div>
                 <div><dt>Capital inicial</dt><dd>{formatMoney(summary.initialCapitalCents)}</dd></div>
                 <div><dt>Capital disponível</dt><dd>{formatMoney(summary.availableCents)}</dd></div>
                 <div><dt>Clientes (mantidos)</dt><dd>{portfolio.clients.length}</dd></div>
@@ -1059,12 +1059,13 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · CAPITAL" title="Capital da carteira" description={`De onde vem o seu capital disponível: capital inicial, aportes, retiradas, empréstimos feitos e valores recebidos.${summary.cycleNumber > 1 ? ` Ciclo ${summary.cycleNumber} da carteira; ciclos anteriores ficam em Configurações.` : ""}`} />
       <section className="panel form-panel" aria-label="Resumo do capital">
-        <div className="panel-header"><div><div className="panel-title-row"><h2>Capital disponível: {formatMoney(summary.availableCents)}</h2><span className="status-chip status-active"><i />Ciclo atual: {summary.cycleNumber}</span></div><p>Capital inicial + aportes − estornos − retiradas − capital usado em operações + valores recebidos. Juros ainda não recebidos não contam.</p></div></div>
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Capital disponível: {formatMoney(summary.availableCents)}</h2><span className="status-chip status-active"><i />Ciclo atual: {summary.cycleNumber}</span></div><p>Capital inicial + aportes + outras entradas − estornos − retiradas e saídas − capital usado em operações + valores recebidos. Juros ainda não recebidos não contam.</p></div></div>
         <dl className="payment-summary">
           <div><dt>Capital inicial</dt><dd>{formatMoney(summary.initialCapitalCents)}</dd></div>
           <div><dt>Aportes</dt><dd>+ {formatMoney(summary.grossContributionsCents)}</dd></div>
           {summary.reversalsCents > 0 && <div><dt>Estornos de aporte</dt><dd>− {formatMoney(summary.reversalsCents)}</dd></div>}
-          <div><dt>Retiradas</dt><dd>− {formatMoney(summary.withdrawalsCents)}</dd></div>
+          {summary.otherIncomeCents > 0 && <div><dt>Outras entradas (Financeiro)</dt><dd>+ {formatMoney(summary.otherIncomeCents)}</dd></div>}
+          <div><dt>Retiradas e saídas</dt><dd>− {formatMoney(summary.withdrawalsCents)}</dd></div>
           <div><dt>Capital usado em operações</dt><dd>− {formatMoney(summary.usedCapitalCents)}</dd></div>
           <div><dt>Valores recebidos</dt><dd>+ {formatMoney(summary.receivedCents)}</dd></div>
           <div className="payment-balance"><dt>Capital disponível</dt><dd>{formatMoney(summary.availableCents)}</dd></div>
@@ -1094,7 +1095,7 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
       )}
       {summary.hasWallet && (
         <section className="panel form-panel" aria-label="Registrar retirada">
-          <div className="panel-header"><div><h2>Registrar retirada</h2><p>Dinheiro tirado da carteira. Limitado ao capital disponível de {formatMoney(Math.max(summary.availableCents, 0))}.</p></div></div>
+          <div className="panel-header"><div><h2>Registrar retirada</h2><p>Dinheiro tirado da carteira. Limitado ao capital disponível de {formatMoney(Math.max(summary.availableCents, 0))}. Para registrar com categoria (salário, retirada de sócio, despesas, impostos), use <a className="text-link inline-link" href="/financeiro">Financeiro</a>.</p></div></div>
           <form className="form-grid" onSubmit={withdrawal.onSubmit}>
             <label className="field"><span>Valor da retirada (R$)</span><input name="amount" inputMode="decimal" placeholder="2.000,00" required /></label>
             <label className="field"><span>Data da retirada</span><input name="occurredAt" type="date" defaultValue={portfolio.today} max={portfolio.today} required /></label>
