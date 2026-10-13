@@ -7,6 +7,7 @@ import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, typ
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
 
 export type ClientRecord = ClientProfile & { id: string; name: string; document: string | null; phone: string | null; notes: string | null; archivedAt: string | null; createdAt: string };
+export type OperationCorrection = { id: string; reason: string; changes: { field: string; before: string | null; after: string | null }[]; editedAt: string; editedBy: string | null };
 export type OperationRecord = {
   id: string; clientId: string; clientName: string; principalCents: number; interestRateBps: number; interestCents: number; totalCents: number;
   loanDate: string; dueDate: string; status: OperationStatus; settledAt: string | null; calculationRule: string; createdAt: string;
@@ -18,6 +19,8 @@ export type OperationRecord = {
   modality?: OperationModality; installmentCount?: number | null; installmentCents?: number | null; firstDueDate?: string | null;
   // Periodicidade do pagamento único (mensal, quinzenal ou diário). Operações antigas: mensal.
   frequency?: Frequency;
+  // Correções feitas antes de qualquer pagamento (Etapa G), mais antiga primeiro.
+  corrections?: OperationCorrection[];
 };
 export type OperationModality = "SINGLE" | "INSTALLMENT";
 // Renovação de período: o pagamento que a gerou, o vencimento antes e depois e os juros do novo período.

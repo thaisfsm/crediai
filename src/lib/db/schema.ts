@@ -390,6 +390,29 @@ export const paymentRevisions = pgTable("payment_revision", {
   ...tenantPolicies("payment_revision", table.tenantId),
 ]).enableRLS();
 
+// Correções de operação (Etapa G, parte 1): só operações em aberto, sem pagamentos e sem renovações. Cada correção guarda o
+// motivo, os campos alterados (antes e depois, como texto para leitura) e as colunas completas antes e depois. Não se edita
+// nem se apaga pelo tenant.
+export const loanOperationRevisions = pgTable("loan_operation_revision", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  operationId: text("operation_id").notNull(),
+  reason: text("reason").notNull(),
+  changes: jsonb("changes").$type<{ field: string; before: string | null; after: string | null }[]>().notNull(),
+  before: jsonb("before").$type<Record<string, unknown>>().notNull(),
+  after: jsonb("after").$type<Record<string, unknown>>().notNull(),
+  editedByUserId: text("edited_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("loan_operation_revision_operation_idx").on(table.operationId, table.createdAt),
+  foreignKey({ name: "loan_operation_revision_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
+  check("loan_operation_revision_reason_not_blank", sql`length(trim(${table.reason})) >= 3`),
+  pgPolicy("loan_operation_revision_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("loan_operation_revision_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
+  pgPolicy("loan_operation_revision_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("loan_operation_revision_delete_admin_only", { for: "delete", using: adminScope }),
+]).enableRLS();
+
 // Renovação de período: o cliente pagou só os juros do período e a operação ganhou novo vencimento e novo período de juros.
 // O pagamento dos juros fica em payment (entra no capital como qualquer pagamento); aqui fica o que a renovação mudou.
 export const loanRenewals = pgTable("loan_renewal", {
@@ -744,6 +767,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document', 'investment_contract', 'investment_contractor')` }),
   // E os lançamentos do módulo Financeiro (entradas e saídas manuais) e a mudança do capital inicial, também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_finance", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('capital_movement', 'wallet')` }),
+  // E as correções de operação (Etapa G), também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
 ]).enableRLS();
 
-export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investments, investors, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

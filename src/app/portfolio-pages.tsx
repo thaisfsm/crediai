@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, searchClientsAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult } from "./actions";
+import { cancelOperationAction, previewOperationEditAction, searchClientsAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
 import type { ClientSearchResult } from "@/lib/finance/client-search";
@@ -1060,6 +1060,17 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
             ))}</ul>
           )}
         </div>
+        {(operation.corrections ?? []).length > 0 && (
+          <div className="payment-history">
+            <h3>Correções da operação</h3>
+            <ul>{(operation.corrections ?? []).map((correction) => (
+              <li key={correction.id}>
+                <span>{formatDateTime(correction.editedAt)}</span><strong>{correction.reason}</strong>
+                <small>{`${correction.editedBy ? `Por ${correction.editedBy}. ` : ""}${correction.changes.map((change) => `${change.field}: de ${change.before ?? "vazio"} para ${change.after ?? "vazio"}`).join("; ")}.`}</small>
+              </li>
+            ))}</ul>
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1106,7 +1117,116 @@ function DeleteOperationButton({ operation, onChanged }: { operation: OperationV
   );
 }
 
-function OperationsTable({ operations, today, onChanged }: { operations: OperationView[]; today: string; onChanged: () => void }) {
+type ClientOption = TenantPortfolio["clients"][number];
+
+// Correção de operação sem pagamentos (Etapa G, parte 1): mesmos campos do cadastro, na mesma modalidade e periodicidade.
+// Primeiro "Revisar alterações" (o servidor mostra antes e depois, sem gravar); depois "Confirmar correção", com motivo.
+function EditOperationPanel({ operation, clients, onClose, onChanged }: { operation: OperationView; clients: ClientOption[]; onClose: () => void; onChanged: () => void }) {
+  const installment = operation.modality === "INSTALLMENT";
+  const daily = !installment && operation.frequency === "DAILY";
+  const biweekly = !installment && operation.frequency === "BIWEEKLY";
+  const [interestMode, setInterestMode] = useState<"RATE" | "FIXED">(operation.ledgerTerms.interestMode === "FIXED" ? "FIXED" : "RATE");
+  const [review, setReview] = useState<Extract<OperationEditPreview, { ok: true }> | null>(null);
+  const [checking, startChecking] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const { pending, feedback, onSubmit } = useFormAction(updateOperationAction, () => { onChanged(); onClose(); });
+  const rateInput = String(operation.interestRateBps / 100).replace(".", ",");
+  const firstDue = operation.firstDueDate ?? operation.dueDate;
+  const options = clients.filter((client) => !client.archivedAt || client.id === operation.clientId);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const check = (form: HTMLFormElement) => {
+    setError(null);
+    startChecking(async () => {
+      try {
+        const result = await previewOperationEditAction(new FormData(form));
+        if (result.ok) setReview(result); else { setReview(null); setError(result.error); }
+      } catch { setError("Não foi possível revisar. Tente novamente."); }
+    });
+  };
+  return (
+    <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Corrigir operação #${operation.code}`}>
+        <div className="panel-header"><div><h2>{`Corrigir operação #${operation.code}`}</h2><p>{`${modalityLabel(operation)}. Sem pagamentos registrados: dá para corrigir valores, datas e cliente. Modalidade e periodicidade não mudam.`}</p></div>
+          <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button></div>
+        {biweekly && (
+          <div className="modality-switch frequency-switch" role="radiogroup" aria-label="Como informar os juros da quinzena">
+            <button type="button" role="radio" aria-checked={interestMode === "RATE"} className={interestMode === "RATE" ? "is-active" : ""} onClick={() => { setInterestMode("RATE"); setReview(null); }}>Taxa da quinzena (%)</button>
+            <button type="button" role="radio" aria-checked={interestMode === "FIXED"} className={interestMode === "FIXED" ? "is-active" : ""} onClick={() => { setInterestMode("FIXED"); setReview(null); }}>Valor fixo de juros (R$)</button>
+          </div>
+        )}
+        <form className="form-grid" key={interestMode} onSubmit={onSubmit} onChange={() => setReview(null)}>
+          <input type="hidden" name="operationId" value={operation.id} />
+          <input type="hidden" name="modality" value={operation.modality} />
+          {installment ? <input type="hidden" name="installmentFrequency" value={operation.frequency} /> : <input type="hidden" name="frequency" value={operation.frequency} />}
+          {biweekly && interestMode === "FIXED" && <input type="hidden" name="interestMode" value="FIXED" />}
+          <label className="field field-wide"><span>Cliente</span><select name="clientId" defaultValue={operation.clientId}>{options.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+          {installment ? (
+            <>
+              <label className="field"><span>Valor emprestado (R$)</span><input name="loanAmount" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
+              <label className="field"><span>Valor de cada parcela (R$)</span><input name="installment" inputMode="decimal" defaultValue={centsToInput(operation.installmentCents ?? 0)} required /></label>
+              <label className="field"><span>{operation.frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Prazo total (meses)"}</span><input name="term" inputMode="numeric" maxLength={3} defaultValue={String(operation.installments.length)} required /></label>
+              <DateField label="Data do empréstimo" name="loanDate" defaultValue={operation.loanDate} onChange={() => setReview(null)} required />
+              <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={() => setReview(null)} required />
+            </>
+          ) : (
+            <>
+              <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
+              {biweekly && interestMode === "FIXED"
+                ? <label className="field"><span>Juros por quinzena (R$)</span><input name="interestAmount" inputMode="decimal" defaultValue={operation.ledgerTerms.interestMode === "FIXED" ? centsToInput(operation.periodInterestCents) : ""} required /></label>
+                : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : biweekly ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" defaultValue={operation.ledgerTerms.interestMode === "FIXED" ? "" : rateInput} required /></label>}
+              <DateField label="Data do empréstimo" name="loanDate" defaultValue={operation.loanDate} onChange={() => setReview(null)} required />
+              {daily ? (
+                <>
+                  <label className="field"><span>Quantidade de dias (pagamentos)</span><input name="days" inputMode="numeric" maxLength={3} defaultValue={String(operation.installments.length)} required /></label>
+                  <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={() => setReview(null)} required />
+                </>
+              ) : <DateField label={biweekly ? "Primeiro vencimento" : "Vencimento"} name="dueDate" defaultValue={operation.dueDate} onChange={() => setReview(null)} required />}
+            </>
+          )}
+          <label className="field field-wide"><span>Motivo da correção</span><input name="reason" maxLength={300} placeholder="Ex.: valor digitado errado" required /></label>
+          {review && <input type="hidden" name="confirmed" value="1" />}
+          {review && <input type="hidden" name="version" value={review.version} />}
+          {review && (
+            <div className="field-wide edit-review" aria-label="Antes e depois">
+              {review.changes.length === 0 ? <p>Nada foi alterado.</p> : (
+                <table className="data-table compact-table">
+                  <thead><tr><th>Campo</th><th>Antes</th><th>Depois</th></tr></thead>
+                  <tbody>{review.changes.map((change) => <tr key={change.field}><td>{change.field}</td><td>{change.before ?? "—"}</td><td><strong>{change.after ?? "—"}</strong></td></tr>)}</tbody>
+                </table>
+              )}
+              <p className="capital-note">{`Capital disponível depois da correção: ${formatMoney(Math.max(review.availableAfterCents, 0))}. A correção fica no histórico da operação com o motivo.`}</p>
+            </div>
+          )}
+          {error && <p className="form-feedback form-feedback-error field-wide">{error}</p>}
+          <div className="form-actions">
+            <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
+            {review && review.changes.length > 0
+              ? <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Confirmar correção"}</button>
+              : <button type="button" className="primary-button" disabled={checking} onClick={(event) => { const form = event.currentTarget.form; if (form?.reportValidity()) check(form); }}>{checking ? "Revisando…" : "Revisar alterações"}</button>}
+          </div>
+        </form>
+        <Feedback feedback={feedback} />
+      </section>
+    </div>
+  );
+}
+
+function EditOperationButton({ operation, clients, onChanged }: { operation: OperationView; clients: ClientOption[]; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (operation.status !== "OPEN" || operation.payments.length > 0 || operation.renewalCount > 0) return null;
+  return (
+    <>
+      <button className="outline-button" onClick={() => setOpen(true)}>Corrigir</button>
+      {open && <EditOperationPanel operation={operation} clients={clients} onClose={() => setOpen(false)} onChanged={onChanged} />}
+    </>
+  );
+}
+
+function OperationsTable({ operations, clients, today, onChanged }: { operations: OperationView[]; clients: ClientOption[]; today: string; onChanged: () => void }) {
   return (
     <div className="table-scroll"><table className="data-table">
       <thead><tr><th>Operação</th><th>Cliente</th><th>Principal</th><th>Taxa</th><th>Juros</th><th>Total</th><th>Recebido</th><th>Saldo</th><th>Empréstimo</th><th>Vencimento</th><th>Situação</th><th /></tr></thead>
@@ -1115,7 +1235,7 @@ function OperationsTable({ operations, today, onChanged }: { operations: Operati
           <td><strong>#{operation.code}</strong></td><td>{operation.clientName}</td><td>{formatMoney(operation.principalCents)}</td><td>{rateLabel(operation)}<small>{operation.modality === "INSTALLMENT" ? `Parcelado ${operation.frequency === "BIWEEKLY" ? "quinzenal" : "mensal"}` : frequencyLabels[operation.frequency]}</small></td>
           <td>{formatMoney(operation.interestCents)}</td><td>{formatMoney(operation.totalCents)}</td><td>{formatMoney(operation.paidCents)}</td><td><strong>{formatMoney(operation.balanceCents)}</strong></td>
           <td>{formatDate(operation.loanDate)}<small>{operationAge(operation)}</small></td><td>{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installments.length}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}</td>
-          <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>
+          <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>
         </tr>
       ))}</tbody>
     </table></div>
@@ -1167,7 +1287,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
       {focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
-        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} today={portfolio.today} onChanged={onChanged} />}
+        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
       </section>
     </div>
   );
@@ -1329,7 +1449,7 @@ export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto" 
       <section className="panel table-panel">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{filter === "Em aberto" ? `Total a receber: ${formatMoney(portfolio.summary.receivableCents)}` : `${filter}: ${formatMoney(balance)}`}</h2></div><p>{filter === "Em aberto" ? "Principal + juros ainda não recebidos de todas as operações em aberto." : "Saldo em aberto das operações deste filtro."}</p></div></div>
         <div className="charge-tabs" role="tablist" aria-label="Filtro de cobranças">{filters.map((item) => <button key={item} role="tab" aria-selected={filter === item} className={filter === item ? "charge-tab-active" : ""} onClick={() => setFilter(item)}>{item} ({countOf(item)})</button>)}</div>
-        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} today={portfolio.today} onChanged={onChanged} />}
+        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
       </section>
     </div>
   );

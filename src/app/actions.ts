@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -12,6 +12,7 @@ import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSea
 import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
+import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
@@ -281,6 +282,98 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
       id: id("op"), tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
     });
     return { ok: true, message: `Operação de ${client.name} cadastrada.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// ── Correção de operação (Etapa G, parte 1) ──────────────────────────────────────────────────────────────────────────
+// Só operação em aberto, do ciclo atual, sem pagamentos e sem renovações (D-G1, opção a): nenhum valor já recebido muda.
+// Os termos novos passam pela mesma leitura e pelas mesmas regras do cadastro (operationTermsFromForm); modalidade e
+// periodicidade não mudam. Primeiro a prévia (antes e depois, sem gravar); depois a confirmação, com motivo, que grava
+// a operação, o histórico (loan_operation_revision) e a auditoria na mesma transação.
+export type OperationEditPreview = { ok: true; changes: OperationChange[]; version: string; availableAfterCents: number } | { ok: false; error: string };
+
+const editSnapshot = (operation: typeof loanOperations.$inferSelect, clientName: string): OperationEditSnapshot => ({
+  clientId: operation.clientId, clientName, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
+  totalCents: operation.totalCents, loanDate: operation.loanDate, dueDate: operation.dueDate, firstDueDate: operation.firstDueDate, installmentCount: operation.installmentCount,
+  installmentCents: operation.installmentCents, calculationRule: operation.calculationRule, modality: operation.modality, frequency: operation.frequency,
+});
+
+async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: FormData, lock: boolean) {
+  const operationId = text(data, "operationId", 80);
+  if (!operationId) return { ok: false as const, error: "Operação inválida." };
+  const query = tx.select().from(loanOperations)
+    .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))));
+  const [operation] = lock ? await query.for("update") : await query;
+  if (!operation) return { ok: false as const, error: "Operação não encontrada nesta carteira." };
+  if (operation.status !== "OPEN") return { ok: false as const, error: "Só operações em aberto podem ser corrigidas." };
+  const [paid] = await tx.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
+  const [renewed] = await tx.select({ count: sql<number>`count(*)::int` }).from(loanRenewals).where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId)));
+  if (paid.count > 0 || renewed.count > 0) return { ok: false as const, error: "Esta operação já tem pagamento registrado. Para não mudar o que já foi recebido, a correção fica bloqueada." };
+  const terms = operationTermsFromForm(data);
+  if (!terms.ok) return terms;
+  if (terms.values.modality !== operation.modality || terms.values.frequency !== operation.frequency) {
+    return { ok: false as const, error: "A modalidade e a periodicidade não mudam na correção. Para isso, exclua a operação e cadastre de novo." };
+  }
+  const clientId = text(data, "clientId", 80) || operation.clientId;
+  const [client] = await tx.select({ id: clients.id, name: clients.name, archivedAt: clients.archivedAt }).from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId)));
+  if (!client || (client.archivedAt && client.id !== operation.clientId)) return { ok: false as const, error: "Cliente não encontrado nesta carteira." };
+  const [currentClient] = client.id === operation.clientId ? [client] : await tx.select({ name: clients.name }).from(clients).where(and(eq(clients.id, operation.clientId), eq(clients.tenantId, tenantId)));
+  const before = editSnapshot(operation, currentClient?.name ?? "");
+  const next = {
+    clientId: client.id, principalCents: terms.principalCents, loanDate: terms.loanDate, dueDate: terms.dueDate,
+    installmentCount: null, installmentCents: null, ...terms.values,
+  };
+  const after: OperationEditSnapshot = { ...before, ...next, clientName: client.name, firstDueDate: next.firstDueDate ?? null };
+  const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId));
+  // O principal antigo volta ao disponível e o novo sai: só a diferença precisa caber no capital.
+  const availableCents = await availableCapitalCents(tx, tenantId, { initialCapitalCents: wallet?.initialCapitalCents ?? 0, cycleNumber: wallet?.cycleNumber ?? 1 });
+  const availableAfterCents = availableCents + operation.principalCents - next.principalCents;
+  return { ok: true as const, operation, before, after, next, changes: operationChanges(before, after), availableCents, availableAfterCents };
+}
+
+export async function previewOperationEditAction(data: FormData): Promise<OperationEditPreview> {
+  return withTenantContext(async (tx, { tenantId }): Promise<OperationEditPreview> => {
+    const plan = await planOperationEdit(tx, tenantId, data, false);
+    if (!plan.ok) return plan;
+    if (plan.next.principalCents > plan.operation.principalCents && plan.availableAfterCents < 0) {
+      return { ok: false, error: `Capital disponível insuficiente para aumentar o valor. Disponível hoje: ${formatMoney(Math.max(plan.availableCents, 0))}.` };
+    }
+    return { ok: true, changes: plan.changes, version: plan.operation.updatedAt.toISOString(), availableAfterCents: plan.availableAfterCents };
+  });
+}
+
+export async function updateOperationAction(data: FormData): Promise<ActionResult> {
+  const reason = editReason(text(data, "reason", 400));
+  if (!reason.ok) return reason;
+  if (text(data, "confirmed", 4) !== "1") return { ok: false, error: "Revise as alterações e confirme." };
+  const version = text(data, "version", 40);
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    // Mesma trava do cadastro (capital) e a da operação (pagamentos simultâneos esperam esta correção terminar).
+    await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+    const plan = await planOperationEdit(tx, tenantId, data, true);
+    if (!plan.ok) return plan;
+    if (plan.operation.updatedAt.toISOString() !== version) return { ok: false, error: "A operação mudou depois da prévia. Revise as alterações de novo." };
+    if (plan.changes.length === 0) return { ok: false, error: "Nada foi alterado." };
+    if (plan.next.principalCents > plan.operation.principalCents && plan.availableAfterCents < 0) {
+      return { ok: false, error: `Capital disponível insuficiente para aumentar o valor. Disponível hoje: ${formatMoney(Math.max(plan.availableCents, 0))}.` };
+    }
+    const { operation } = plan;
+    await tx.update(loanOperations).set({ ...plan.next, updatedAt: sql`now()` }).where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    // Colunas da operação antes e depois (o nome do cliente fica só nos campos alterados).
+    const columns = (snapshot: OperationEditSnapshot) => Object.fromEntries(Object.entries(snapshot).filter(([key]) => key !== "clientName"));
+    const beforeColumns = columns(plan.before);
+    const afterColumns = columns(plan.after);
+    await tx.insert(loanOperationRevisions).values({
+      id: id("opr"), tenantId, operationId: operation.id, reason: reason.value, changes: plan.changes, before: beforeColumns, after: afterColumns, editedByUserId: session.user.id,
+    });
+    const tenant = await tx.query.tenants.findFirst({ where: eq(tenants.id, tenantId), columns: { name: true } });
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_UPDATED", entity: "loan_operation", entityId: operation.id, tenantId, tenantName: tenant?.name ?? null,
+      before: beforeColumns, after: afterColumns, description: `Operação corrigida: ${reason.value}`,
+    });
+    return { ok: true, message: `Operação corrigida (${plan.changes.length} ${plan.changes.length === 1 ? "campo" : "campos"}).` };
   });
   if (result.ok) revalidatePath("/");
   return result;
