@@ -144,6 +144,18 @@ export function compareByNextOpenDue(a: Pick<OperationView, "nextOpenDueDate" | 
   return b.loanDate.localeCompare(a.loanDate) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
 }
 
+// Ordem das Cobranças (todas as abas): pela mesma próxima obrigação em aberto (nextOpenDueDate, vinda do extrato em
+// rules.ts), da vencida há mais tempo para a mais distante; empate pelo nome do cliente e pelo id da operação. Sem
+// obrigação em aberto vai para o fim. Só ordena: não muda vencimento, situação nem valor.
+export function compareCharges(a: Pick<OperationView, "nextOpenDueDate" | "clientName" | "id">, b: Pick<OperationView, "nextOpenDueDate" | "clientName" | "id">) {
+  if (a.nextOpenDueDate !== b.nextOpenDueDate) {
+    if (!a.nextOpenDueDate) return 1;
+    if (!b.nextOpenDueDate) return -1;
+    return a.nextOpenDueDate.localeCompare(b.nextOpenDueDate);
+  }
+  return a.clientName.localeCompare(b.clientName, "pt-BR") || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
 // Recebe só os dados do ciclo atual da carteira (operações, pagamentos e movimentos de capital); ciclos encerrados
 // pelo "Zerar carteira" ficam no banco e não entram nos cards.
 export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn = null, cycleNumber = 1, capitalMovements = [], operations, payments, today }: {
@@ -188,6 +200,9 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
 
   const live = views.filter((operation) => operation.status !== "CANCELED");
   const open = views.filter((operation) => operation.status === "OPEN");
+  // Cobranças: operações em aberto com obrigação pendente, na ordem de cobrança. Uma operação em aberto sem saldo não
+  // entra em Hoje/Amanhã/Próximas/Em atraso nem nos contadores; em "Em aberto" fica no fim (chargeOrder).
+  const byDue = open.filter((operation) => operation.nextOpenDueDate !== null).sort(compareCharges);
   const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
   // Caixa: entra com o capital inicial, os aportes e as outras entradas manuais, sai com retiradas (salário, sócio,
@@ -226,8 +241,8 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       total: live.length,
       active: open.length,
       paid: views.filter((operation) => operation.status === "PAID").length,
-      dueToday: open.filter((operation) => operation.daysUntilDue === 0).length,
-      overdue: open.filter((operation) => operation.daysUntilDue < 0).length,
+      dueToday: byDue.filter((operation) => operation.daysUntilDue === 0).length,
+      overdue: byDue.filter((operation) => operation.daysUntilDue < 0).length,
     },
   };
 
@@ -239,7 +254,6 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     amountCents: operation.nextInstallment ? operation.nextInstallment.remainingCents : operation.balanceCents,
     status: relativeDue(operation.daysUntilDue), tone: operation.daysUntilDue < 0 ? "late" : "due",
   });
-  const byDue = [...open].sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate));
   const operationById = new Map(views.map((operation) => [operation.id, operation]));
   const allocated = views.flatMap((operation) => operation.payments);
   const history: ChargeItem[] = allocated.sort((a, b) => b.paidAt.localeCompare(a.paidAt) || b.createdAt.localeCompare(a.createdAt)).slice(0, 20).map((payment) => {
@@ -311,7 +325,8 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   });
 
   // Operações excluídas (CANCELED) não aparecem em nenhuma lista nem card; só no extrato do capital.
-  return { summary, profitability: summarizeOperations(live), operations: live, operationOrder: [...live].sort(compareByNextOpenDue).map((operation) => operation.id), charges, upcoming, chart, capitalLedger: capitalLedger.reverse() };
+  return { summary, profitability: summarizeOperations(live), operations: live, operationOrder: [...live].sort(compareByNextOpenDue).map((operation) => operation.id),
+    chargeOrder: [...open].sort(compareCharges).map((operation) => operation.id), charges, upcoming, chart, capitalLedger: capitalLedger.reverse() };
 }
 
 export type Portfolio = ReturnType<typeof buildPortfolio>;
