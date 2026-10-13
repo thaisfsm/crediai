@@ -1,6 +1,7 @@
 // Consolida a carteira do tenant a partir das linhas do banco. Funções puras: sem acesso a banco.
 import { addDays, daysBetween, formatDate, initialsOf, shortDate, todayIso } from "./format";
 import type { ClientProfile } from "./client-profile";
+import type { ChartSeries } from "./chart";
 import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
@@ -284,9 +285,9 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   }));
   const series = (spanDays: number, points: number) => {
     const days = Array.from({ length: points }, (_, index) => addDays(today, -Math.round(spanDays - (spanDays * index) / (points - 1))));
-    return { labels: days.map(shortDate), values: days.map(receivableAt) };
+    return { dates: days, labels: days.map(shortDate), values: days.map(receivableAt) };
   };
-  const chart: Record<ChartPeriod, { labels: string[]; values: number[] }> = { "7D": series(6, 7), "30D": series(30, 7), "90D": series(90, 7) };
+  const chart: Record<ChartPeriod, ChartSeries> = { "7D": series(6, 7), "30D": series(30, 7), "90D": series(90, 7) };
 
   const reversedIds = new Set(capitalMovements.map((movement) => movement.reversedMovementId).filter(Boolean));
   const movementDescription = (movement: CapitalMovementRecord) => movement.description ?? movement.notes

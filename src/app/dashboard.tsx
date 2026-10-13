@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
+import { CHART_VIEWBOX, chartGeometry, type ChartSeries } from "@/lib/finance/chart";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { Icon } from "./ui-icon";
@@ -32,40 +33,51 @@ function compactMoney(cents: number) {
   return `R$ ${Math.round(reais).toLocaleString("pt-BR")}`;
 }
 
-function niceCeiling(value: number) {
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const step = [1, 1.5, 2, 3, 5, 7.5, 10].find((candidate) => candidate * magnitude >= value) ?? 10;
-  return step * magnitude;
-}
-
-function WalletChart({ series }: { series: { labels: string[]; values: number[] } }) {
-  const peak = Math.max(0, ...series.values);
-  const top = peak > 0 ? niceCeiling(peak) : 100_000;
-  const coords = series.values.map((value, index) => ({
-    x: 96 + (index / Math.max(series.values.length - 1, 1)) * 592,
-    y: 175 - (value / top) * 147,
-  }));
-  const line = coords.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+function WalletChart({ series }: { series: ChartSeries }) {
+  const { peak, top, points } = chartGeometry(series);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const active = activeIndex === null ? null : points[activeIndex];
+  const line = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
   const area = `${line} L 688 190 L 96 190 Z`;
   const current = series.values.at(-1) ?? 0;
+  // Posição em % da caixa do SVG (preserveAspectRatio="none" estica o viewBox inteiro sobre ela).
+  const left = (x: number) => `${(x / CHART_VIEWBOX.width) * 100}%`;
+  const topOf = (y: number) => `${(y / CHART_VIEWBOX.height) * 100}%`;
 
   return (
     <div className="chart-visual">
-      <svg className="wallet-chart" viewBox="0 0 700 220" role="img" aria-labelledby="chart-title chart-description" preserveAspectRatio="none">
-        <title id="chart-title">Evolução da carteira</title>
-        <desc id="chart-description">Saldo a receber da carteira de {series.labels[0]} a {series.labels.at(-1)}, terminando em {formatMoney(current)}.</desc>
-        <defs>
-          <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#36b9ad" stopOpacity=".20" />
-            <stop offset="100%" stopColor="#36b9ad" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {[28, 77, 126, 175].map((y) => <line key={y} x1="90" x2="688" y1={y} y2={y} className="chart-gridline" />)}
-        {[1, 2 / 3, 1 / 3, 0].map((fraction, index) => <text key={index} x="0" y={31 + index * 49} className="chart-axis">{compactMoney(top * fraction)}</text>)}
-        <path d={area} fill="url(#chartFill)" />
-        <path d={line} fill="none" className="chart-line" />
-        {coords.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={index === coords.length - 1 ? 5 : 3.5} className={index === coords.length - 1 ? "chart-dot chart-dot-current" : "chart-dot"} />)}
-      </svg>
+      {/* Sem <title> dentro do SVG: o navegador mostrava esse título como tooltip nativo ao passar o mouse em qualquer ponto. */}
+      <div className="chart-plot" onPointerLeave={() => setActiveIndex(null)}>
+        <svg className="wallet-chart" viewBox="0 0 700 220" role="img" aria-label="Evolução da carteira" aria-describedby="chart-description" preserveAspectRatio="none">
+          <desc id="chart-description">Saldo a receber da carteira de {series.labels[0]} a {series.labels.at(-1)}, terminando em {formatMoney(current)}.</desc>
+          <defs>
+            <linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#36b9ad" stopOpacity=".20" />
+              <stop offset="100%" stopColor="#36b9ad" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          {[28, 77, 126, 175].map((y) => <line key={y} x1="90" x2="688" y1={y} y2={y} className="chart-gridline" />)}
+          {[1, 2 / 3, 1 / 3, 0].map((fraction, index) => <text key={index} x="0" y={31 + index * 49} className="chart-axis">{compactMoney(top * fraction)}</text>)}
+          <path d={area} fill="url(#chartFill)" />
+          <path d={line} fill="none" className="chart-line" />
+          {points.map((point, index) => {
+            const isCurrent = index === points.length - 1;
+            return <circle key={index} cx={point.x} cy={point.y} r={isCurrent ? 5 : index === activeIndex ? 4.5 : 3.5} className={`chart-dot${isCurrent ? " chart-dot-current" : ""}${index === activeIndex ? " chart-dot-active" : ""}`} />;
+          })}
+        </svg>
+        <div className="chart-hits">
+          {points.map((point, index) => (
+            <button key={index} type="button" className="chart-hit" style={{ left: left(point.x), top: topOf(point.y) }} aria-label={`${point.dateLabel}: saldo a receber ${point.valueLabel}`} aria-describedby={index === activeIndex ? "chart-tooltip" : undefined} onPointerEnter={() => setActiveIndex(index)} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)} onKeyDown={(event) => { if (event.key === "Escape") setActiveIndex(null); }} />
+          ))}
+        </div>
+        {active && (
+          <div id="chart-tooltip" role="tooltip" className={`chart-tooltip${activeIndex === 0 ? " chart-tooltip-start" : activeIndex === points.length - 1 ? " chart-tooltip-end" : ""}${active.y < 90 ? " chart-tooltip-below" : ""}`} style={{ left: left(active.x), top: topOf(active.y) }}>
+            <span className="chart-tooltip-date">{active.dateLabel}</span>
+            <strong className="chart-tooltip-value">{active.valueLabel}</strong>
+            <small>Saldo a receber</small>
+          </div>
+        )}
+      </div>
       {peak === 0 && <div className="chart-empty">Sem saldo a receber no período. Cadastre uma operação para acompanhar a evolução.</div>}
       <div className="chart-labels" aria-hidden="true">{series.labels.map((label, index) => <span key={index}>{label}</span>)}</div>
       <div className="chart-summary"><span><i className="legend-dot" /> Saldo a receber</span><span className="chart-current">{formatMoney(current)}</span></div>
@@ -234,7 +246,7 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
                 <article className="panel portfolio-panel">
                   <div className="panel-header"><div><div className="panel-title-row"><h2>Evolução da carteira</h2><span className="info-dot" title="Saldo a receber (principal + juros em aberto) no fim de cada dia">i</span></div><p>Saldo a receber da carteira ao longo do tempo.</p></div><div className="period-switch" aria-label="Período do gráfico">{(["7D", "30D", "90D"] as ChartPeriod[]).map((item) => <button key={item} className={period === item ? "period-active" : ""} onClick={() => setPeriod(item)} aria-pressed={period === item}>{item}</button>)}</div></div>
                   <div className="chart-stats"><div><span>Carteira a receber</span><strong>{formatMoney(summary.receivableCents)}</strong></div>{periodChange !== null && <span className="chart-change"><Icon name="trend" size={14} /> {periodChange.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% <small>no período</small></span>}</div>
-                  <WalletChart series={series} />
+                  <WalletChart key={period} series={series} />
                 </article>
 
                 <article className="panel yield-panel">
