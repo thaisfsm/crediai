@@ -1194,8 +1194,10 @@ export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto" 
   const [filter, setFilter] = useState<ChargesView>(initialFilter);
   const open = portfolio.operations.filter((operation) => operation.status === "OPEN");
   const countOf = (item: ChargesView) => (item === "Em aberto" ? open.length : portfolio.charges[item].length);
-  const ids = new Set(filter === "Em aberto" ? open.map((operation) => operation.id) : portfolio.charges[filter].map((charge) => charge.operationId));
-  const operations = portfolio.operations.filter((operation) => ids.has(operation.id)).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  // A ordem vem pronta do servidor (chargeOrder e cada aba em charges): a vencida há mais tempo primeiro.
+  const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
+  const ids = filter === "Em aberto" ? portfolio.chargeOrder : portfolio.charges[filter].map((charge) => charge.operationId);
+  const operations = ids.flatMap((id) => byId.get(id) ?? []);
   const balance = operations.reduce((total, operation) => total + operation.balanceCents, 0);
   return (
     <div className="workspace-page">
