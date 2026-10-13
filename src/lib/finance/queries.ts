@@ -129,6 +129,38 @@ export async function loadTenantPortfolio() {
   };
 }
 
+// Relatório com TODOS os ciclos (Etapa E, D-E1): operações, pagamentos e renovações de todos os ciclos da carteira, com
+// as mesmas contas do extrato. Só leitura; ciclos encerrados não mudam. Operações excluídas ficam de fora do relatório.
+export async function loadAllCyclesOperations() {
+  const data = await withTenantContext(async (tx, { tenantId }) => {
+    const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name })
+      .from(loanOperations)
+      .innerJoin(clients, eq(clients.id, loanOperations.clientId))
+      .where(eq(loanOperations.tenantId, tenantId))
+      .orderBy(desc(loanOperations.loanDate), desc(loanOperations.createdAt));
+    const paymentRows = await tx.select({ payment: payments, clientName: clients.name })
+      .from(payments)
+      .innerJoin(loanOperations, eq(loanOperations.id, payments.operationId))
+      .innerJoin(clients, eq(clients.id, loanOperations.clientId))
+      .where(eq(payments.tenantId, tenantId))
+      .orderBy(desc(payments.paidAt), desc(payments.createdAt));
+    const renewalRows = await tx.select({ renewal: loanRenewals }).from(loanRenewals)
+      .where(eq(loanRenewals.tenantId, tenantId))
+      .orderBy(asc(loanRenewals.periodNumber));
+    return { operationRows, paymentRows, renewalRows };
+  });
+  const renewalsByOperation = new Map<string, RenewalRecord[]>();
+  for (const { renewal } of data.renewalRows) {
+    renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), toRenewalRecord(renewal)]);
+  }
+  const { operations } = buildPortfolio({
+    hasWallet: true, initialCapitalCents: 0, today: todayIso(),
+    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? []), cycleNumber: operation.cycleNumber })),
+    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName)),
+  });
+  return operations;
+}
+
 export type ClientDocumentInfo = { id: string; clientId: string; label: string; fileName: string; contentType: string; sizeBytes: number; createdAt: string };
 
 export type TenantPortfolio = Awaited<ReturnType<typeof loadTenantPortfolio>>;

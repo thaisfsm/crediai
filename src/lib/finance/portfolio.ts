@@ -13,6 +13,8 @@ export type OperationRecord = {
   loanDate: string; dueDate: string; status: OperationStatus; settledAt: string | null; calculationRule: string; createdAt: string;
   // Para operação excluída (CANCELED): quando foi excluída. Só ela usa este campo.
   updatedAt?: string;
+  // Ciclo da carteira em que a operação foi feita (só preenchido no relatório com todos os ciclos).
+  cycleNumber?: number;
   // Renovações por pagamento só dos juros. interestCents/totalCents acima são sempre os do período original.
   renewals?: RenewalRecord[];
   // Modalidade: pagamento único (padrão) ou parcelado com parcela fixa.

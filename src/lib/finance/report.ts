@@ -1,14 +1,16 @@
 // Relatório de rentabilidade com filtros (Etapa E): período e situação, por cliente e por operação. Regras puras, usadas
 // na tela e nos testes; tudo vem das operações já calculadas pelo extrato (operationLedger), sem conta nova.
 // Período (D-E2): juros e principal recebidos contam pela DATA DO PAGAMENTO; principal emprestado conta pela DATA DO
-// EMPRÉSTIMO; saldo em aberto e juros previstos são sempre os de hoje. Só o ciclo atual da carteira (D-E1, padrão).
+// EMPRÉSTIMO; saldo em aberto e juros previstos são sempre os de hoje. Ciclo atual por padrão; "Todos os ciclos" inclui os ciclos encerrados (D-E1).
 import { addDays } from "./format";
 import type { OperationView } from "./portfolio";
 
 export const REPORT_STATUSES = { ALL: "Todas", OPEN: "Em aberto", OVERDUE: "Em atraso", PAID: "Quitadas" } as const;
 export type ReportStatus = keyof typeof REPORT_STATUSES;
-export const REPORT_PERIODS = { CYCLE: "Todo o ciclo", THIS_MONTH: "Este mês", LAST_MONTH: "Mês passado", LAST_30: "Últimos 30 dias", CUSTOM: "Personalizado" } as const;
+export const REPORT_PERIODS = { CYCLE: "Todo o período", THIS_MONTH: "Este mês", LAST_MONTH: "Mês passado", LAST_30: "Últimos 30 dias", CUSTOM: "Personalizado" } as const;
 export type ReportPeriod = keyof typeof REPORT_PERIODS;
+export const REPORT_SCOPES = { CURRENT: "Ciclo atual", ALL: "Todos os ciclos" } as const;
+export type ReportScope = keyof typeof REPORT_SCOPES;
 export type ReportFilters = { period: ReportPeriod; from: string; to: string; status: ReportStatus };
 
 // Intervalo do período escolhido (datas inclusivas). null = sem limite (todo o ciclo).

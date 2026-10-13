@@ -97,3 +97,64 @@ test("RL1. tela: período de setembro, situação quitadas, abrir a operação (
   }
   assert.equal(await dataHash(), before, "o relatório não grava nada");
 });
+
+// Linha do cliente numa tabela: valores em R$ na ordem das colunas.
+const moneyIn = (text) => [...text.matchAll(/R\$\s?([\d.]+,\d{2})/g)].map((match) => match[1]);
+
+test("RL2. ficha (lista de clientes) e relatório do ciclo atual mostram os mesmos números do cliente", async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const page = await context.newPage();
+  await page.goto(`${BASE}/?tela=clientes`);
+  // Lista de clientes: principal emprestado, juros recebidos e saldo.
+  const [lent, interest, balance] = moneyIn(await page.locator("tr", { hasText: "Cliente Relatório A" }).first().innerText());
+  await page.goto(`${BASE}/?tela=relatorios`);
+  const row = page.getByRole("region", { name: "Rentabilidade por cliente" }).locator("tr.report-client-row", { hasText: "Cliente Relatório A" });
+  await row.waitFor();
+  // Relatório: emprestado, recuperado, juros recebidos, juros previstos, saldo.
+  const report = moneyIn(await row.innerText());
+  assert.deepEqual([report[0], report[2], report[4]], [lent, interest, balance]);
+  assert.deepEqual([lent, interest], ["1.500,00", "400,00"]);
+  await context.close();
+});
+
+test("RL3. ciclos: depois de zerar a carteira, Ciclo atual mostra só o ciclo novo e Todos os ciclos inclui o encerrado, só para consulta", async () => {
+  assert.equal((await action(robério, "resetWalletAction", { confirmation: "ZERAR CARTEIRA" }))?.ok, true);
+  assert.equal((await action(robério, "saveWalletAction", { initialCapital: "10.000,00" }))?.ok, true);
+  assert.equal((await action(robério, "createOperationAction", { modality: "SINGLE", frequency: "MONTHLY", clientId: "c_e2e_rel2", principal: "300,00", rate: "10", loanDate: "2026-10-05", dueDate: "2026-11-05" }))?.ok, true);
+  const hash = await dataHash();
+  for (const [label, viewport] of [["desktop", { width: 1440, height: 900 }], ["celular", { width: 390, height: 844 }]]) {
+    const context = await browser.newContext({ viewport });
+    const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+    await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/?tela=relatorios`);
+    const section = page.getByRole("region", { name: "Rentabilidade por cliente" });
+    const rowA = () => section.locator("tr.report-client-row", { hasText: "Cliente Relatório A" });
+    const rowB = () => section.locator("tr.report-client-row", { hasText: "Cliente Relatório B" });
+    // Padrão: ciclo atual. Só a operação nova de B.
+    assert.equal(await section.getByLabel("Ciclos").inputValue(), "CURRENT");
+    await rowB().waitFor();
+    assert.equal(await rowA().count(), 0);
+    assert.equal(moneyIn(await rowB().innerText())[0], "300,00");
+    // Todos os ciclos: A volta com o histórico do ciclo 1; B soma os dois ciclos.
+    await section.getByLabel("Ciclos").selectOption("ALL");
+    await rowA().waitFor();
+    assert.deepEqual([moneyIn(await rowA().innerText())[0], moneyIn(await rowA().innerText())[2]], ["1.500,00", "400,00"]);
+    assert.equal(moneyIn(await rowB().innerText())[0], "2.300,00");
+    await rowA().getByRole("button", { name: "Cliente Relatório A" }).click();
+    const old = section.locator("tr.report-operation-row", { hasText: "01/08/2026" });
+    await old.getByText("ciclo 1").waitFor();
+    if (SHOTS) await section.screenshot({ path: `${SHOTS}/relatorio-todos-ciclos-${label}.png` });
+    // Operação de ciclo encerrado: abre só para consulta.
+    await old.getByRole("button", { name: /^Abrir #/ }).click();
+    const panel = page.locator(".payment-panel");
+    await panel.getByText("Histórico de pagamentos").waitFor();
+    assert.equal(await panel.getByRole("button", { name: "Editar pagamento" }).count(), 0);
+    assert.equal(await panel.getByLabel("Valor recebido (R$)").count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal (${label})`);
+    await context.close();
+  }
+  assert.equal(await dataHash(), hash, "o relatório de todos os ciclos não grava nada");
+});
