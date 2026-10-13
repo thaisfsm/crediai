@@ -1069,3 +1069,19 @@ button { color:inherit; }
 .contract-missing small { color:#a8b9c4; font-size:10px; }
 .inline-form { display:inline-flex; flex-direction:column; gap:4px; }
 .document-list li strong .status-chip { margin-left:6px; vertical-align:middle; }
+
+/* Evolução da carteira: tooltip de cada ponto (data e saldo a receber), por mouse, toque ou teclado. */
+.chart-plot { position:relative; }
+.chart-hits { position:absolute; inset:0; pointer-events:none; }
+.chart-hit { position:absolute; width:24px; height:24px; padding:0; border:0; border-radius:50%; background:transparent; transform:translate(-50%,-50%); cursor:pointer; pointer-events:auto; }
+.chart-hit:focus-visible { outline:2px solid #57dcd6; outline-offset:1px; }
+.chart-dot-active { fill:#a5fff2; }
+.chart-tooltip { position:absolute; z-index:5; display:flex; flex-direction:column; gap:2px; padding:7px 10px; border:1px solid rgba(104,183,207,.22); border-radius:9px; color:#d4e5ed; background:linear-gradient(145deg,rgba(12,29,42,.98),rgba(8,19,31,.99)); box-shadow:0 10px 26px rgba(0,0,0,.38); white-space:nowrap; pointer-events:none; transform:translate(-50%,calc(-100% - 12px)); }
+.chart-tooltip-start { transform:translate(-14px,calc(-100% - 12px)); }
+.chart-tooltip-end { transform:translate(calc(-100% + 14px),calc(-100% - 12px)); }
+.chart-tooltip.chart-tooltip-below { transform:translate(-50%,12px); }
+.chart-tooltip-start.chart-tooltip-below { transform:translate(-14px,12px); }
+.chart-tooltip-end.chart-tooltip-below { transform:translate(calc(-100% + 14px),12px); }
+.chart-tooltip-date { color:#8fa6b4; font-size:9px; }
+.chart-tooltip-value { color:#edf6fa; font-size:13px; font-weight:650; letter-spacing:-.2px; }
+.chart-tooltip small { color:#7f95a4; font-size:8px; }
