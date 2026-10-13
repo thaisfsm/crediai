@@ -142,3 +142,25 @@ export function normalizePhone(value: string): { ok: true; value: string | null 
 export function centsToInput(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+// CPF (11 dígitos) ou CNPJ (14 dígitos), usado no cadastro de investidores (pessoa física ou jurídica).
+export function maskCpfCnpj(value: string) {
+  const digits = onlyDigits(value).slice(0, 14);
+  if (digits.length <= 11) return maskCpf(digits);
+  return digits.replace(/^(\d{2})(\d)/, "$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d)/, ".$1/$2").replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+}
+
+export function formatCpfCnpj(stored: string | null) {
+  if (!stored) return null;
+  const length = onlyDigits(stored).length;
+  return length === 11 || length === 14 ? maskCpfCnpj(stored) : stored;
+}
+
+export function normalizeCpfCnpj(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  const digits = onlyDigits(value);
+  if (!digits) return { ok: true, value: null };
+  if ((digits.length !== 11 && digits.length !== 14) || /^(\d)\1+$/.test(digits)) {
+    return { ok: false, error: "Informe o CPF (11 dígitos, 411.797.058-58) ou o CNPJ (14 dígitos, 12.345.678/0001-90)." };
+  }
+  return { ok: true, value: digits };
+}

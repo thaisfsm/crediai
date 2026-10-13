@@ -22,7 +22,8 @@ test("AU3. IP do cliente: primeiro endereço do x-forwarded-for, senão x-real-i
 });
 
 test("AU4. todas as ações administrativas pedidas têm evento de auditoria gravado no código", () => {
-  const source = readFileSync("src/app/admin/actions.ts", "utf8") + readFileSync("src/app/admin/planos/actions.ts", "utf8") + readFileSync("scripts/create-super-admin.ts", "utf8");
+  const source = readFileSync("src/app/admin/actions.ts", "utf8") + readFileSync("src/app/admin/planos/actions.ts", "utf8") + readFileSync("scripts/create-super-admin.ts", "utf8")
+    + readFileSync("src/app/investidores/actions.ts", "utf8");
   for (const action of Object.keys(AUDIT_ACTIONS)) assert.ok(source.includes(`"${action}"`), `${action} sem registro`);
   // Toda ação exportada que altera dados chama recordAdminAudit (nenhuma ação administrativa sem auditoria).
   const admin = readFileSync("src/app/admin/actions.ts", "utf8");
@@ -30,6 +31,13 @@ test("AU4. todas as ações administrativas pedidas têm evento de auditoria gra
   for (const name of exported) {
     const body = admin.slice(admin.indexOf(`export async function ${name}`)).split(/\nexport async function /)[0];
     assert.ok(body.includes("recordAdminAudit("), `${name} não grava auditoria`);
+  }
+  // Investidores: toda ação exportada grava auditoria (função audit → recordAdminAudit) na mesma transação.
+  const investors = readFileSync("src/app/investidores/actions.ts", "utf8");
+  assert.ok(investors.includes("await recordAdminAudit(tx, actor,"));
+  for (const name of [...investors.matchAll(/export async function (\w+)/g)].map((match) => match[1])) {
+    const body = investors.slice(investors.indexOf(`export async function ${name}`)).split(/\nexport async function /)[0];
+    assert.ok(body.includes("await audit(tx, scope,"), `${name} não grava auditoria`);
   }
 });
 

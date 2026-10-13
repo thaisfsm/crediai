@@ -1,5 +1,5 @@
-// Campos do cadastro completo do cliente: endereços, referências e avalista. Usado pelo formulário, pela ação de
-// gravação e pela ficha do cliente, para que os três tratem sempre os mesmos campos.
+// Campos do cadastro completo do cliente: contatos e redes sociais, endereços, referências e avalista. Usado pelo
+// formulário, pela ação de gravação e pela ficha do cliente, para que os três tratem sempre os mesmos campos.
 export const addressKinds = { residential: "Endereço residencial", business: "Endereço comercial" } as const;
 export type AddressKind = keyof typeof addressKinds;
 export const addressParts = ["Cep", "Street", "Number", "Complement", "District", "City", "State"] as const;
@@ -14,10 +14,14 @@ export const referencePartLabels = { Name: "Nome", Phone: "Telefone", Relationsh
 export const guarantorParts = ["Name", "Document", "Phone", "Notes"] as const;
 export const guarantorPartLabels = { Name: "Nome do avalista", Document: "CPF do avalista", Phone: "Telefone do avalista", Notes: "Observação sobre o avalista" } as const;
 
+// Contatos e redes sociais (opcionais): WhatsApp, e-mail, Instagram e Facebook.
+export const contactKeys = ["whatsapp", "email", "instagram", "facebook"] as const;
+export type ContactKey = (typeof contactKeys)[number];
+
 type AddressKey = `${AddressKind}${AddressPart}`;
 type ReferenceKey = `reference${(typeof referenceSlots)[number]}${(typeof referenceParts)[number]}`;
 type GuarantorKey = `guarantor${(typeof guarantorParts)[number]}`;
-export type ClientProfileKey = AddressKey | ReferenceKey | GuarantorKey;
+export type ClientProfileKey = ContactKey | AddressKey | ReferenceKey | GuarantorKey;
 export type ClientProfile = Record<ClientProfileKey, string | null>;
 
 export const addressKey = (kind: AddressKind, part: AddressPart) => `${kind}${part}` as AddressKey;
@@ -25,6 +29,7 @@ export const referenceKey = (slot: (typeof referenceSlots)[number], part: (typeo
 export const guarantorKey = (part: (typeof guarantorParts)[number]) => `guarantor${part}` as GuarantorKey;
 
 export const clientProfileKeys: ClientProfileKey[] = [
+  ...contactKeys,
   ...(Object.keys(addressKinds) as AddressKind[]).flatMap((kind) => addressParts.map((part) => addressKey(kind, part))),
   ...referenceSlots.flatMap((slot) => referenceParts.map((part) => referenceKey(slot, part))),
   ...guarantorParts.map(guarantorKey),

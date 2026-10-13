@@ -5,6 +5,7 @@ import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, walletCycles, wallets } from "@/lib/db/schema";
+import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatDate, formatMoney, isIsoDate, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
@@ -63,7 +64,7 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
   // Cadastro completo (endereços, referências, avalista): texto livre, CEP e UF conferidos; telefones e CPF do avalista
   // com a mesma regra do cliente.
   const profile = {} as ClientProfile;
-  for (const key of clientProfileKeys) profile[key] = optional(text(data, key, key === "guarantorNotes" ? 500 : 160));
+  for (const key of clientProfileKeys) profile[key] = optional(text(data, key, key === "guarantorNotes" ? 500 : key === "instagram" || key === "facebook" ? 250 : 160));
   for (const key of ["residentialCep", "businessCep"] as const) {
     const cep = onlyDigits(profile[key] ?? "");
     if (profile[key] && cep.length !== 8) return { ok: false as const, error: "O CEP precisa ter 8 dígitos, por exemplo 01310-100." };
@@ -78,6 +79,18 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
     const checked = keepLegacy(normalizePhone(profile[key] ?? ""), profile[key] ?? "", previous?.[key]);
     if (!checked.ok) return { ok: false as const, error: `${key === "guarantorPhone" ? "Telefone do avalista" : `Telefone da referência ${key[9]}`}: ${checked.error}` };
     profile[key] = checked.value;
+  }
+  // Contatos: WhatsApp com a regra do telefone, e-mail só no formato básico, redes sociais com @usuário ou endereço.
+  const whatsapp = keepLegacy(normalizePhone(profile.whatsapp ?? ""), profile.whatsapp ?? "", previous?.whatsapp);
+  if (!whatsapp.ok) return { ok: false as const, error: `WhatsApp: ${whatsapp.error}` };
+  profile.whatsapp = whatsapp.value;
+  const email = normalizeEmail(profile.email ?? "");
+  if (!email.ok) return email;
+  profile.email = email.value;
+  for (const key of ["instagram", "facebook"] as const) {
+    const social = normalizeSocial(profile[key] ?? "");
+    if (!social.ok) return { ok: false as const, error: `${key === "instagram" ? "Instagram" : "Facebook"}: ${social.error}` };
+    profile[key] = social.value;
   }
   const guarantorDocument = keepLegacy(normalizeCpf(profile.guarantorDocument ?? ""), profile.guarantorDocument ?? "", previous?.guarantorDocument);
   if (!guarantorDocument.ok) return { ok: false as const, error: `CPF do avalista: ${guarantorDocument.error}` };

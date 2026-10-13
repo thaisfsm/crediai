@@ -18,10 +18,21 @@ export const AUDIT_ACTIONS = {
   PASSWORD_RESET: "Senha redefinida",
   PLAN_CREATED: "Plano criado no catálogo",
   PLAN_UPDATED: "Plano do catálogo alterado",
+  INVESTOR_CREATED: "Investidor cadastrado",
+  INVESTOR_UPDATED: "Dados do investidor alterados",
+  INVESTOR_STATUS_CHANGED: "Status do investidor alterado",
+  INVESTMENT_CREATED: "Investimento cadastrado",
+  INVESTMENT_UPDATED: "Dados do investimento alterados",
+  INVESTMENT_STATUS_CHANGED: "Status do investimento alterado",
+  INVESTMENT_DOCUMENT_UPLOADED: "Documento do investimento enviado",
+  INVESTMENT_DOCUMENT_REPLACED: "Documento do investimento substituído",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 
-export const AUDIT_ENTITIES: Record<string, string> = { tenant: "Cliente SaaS", subscription: "Assinatura", user: "Usuário", plan: "Plano", subscription_charge: "Mensalidade" };
+export const AUDIT_ENTITIES: Record<string, string> = {
+  tenant: "Cliente SaaS", subscription: "Assinatura", user: "Usuário", plan: "Plano", subscription_charge: "Mensalidade",
+  investor: "Investidor", investment: "Investimento", investment_document: "Documento do investimento",
+};
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.
 const SECRET_KEY = /pass(word)?|hash|token|secret/i;
@@ -59,4 +70,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   firstDueDate: "Primeiro vencimento", nextDueDate: "Próximo vencimento", graceDays: "Tolerância (dias)", expiresAt: "Fim do teste",
   active: "Acesso liberado", mustChangePassword: "Precisa trocar a senha", role: "Papel", priceInCents: "Preço padrão (centavos)",
   description: "Descrição", dueDate: "Vencimento", amountCents: "Valor (centavos)", paidAt: "Pago em", sessionsClosed: "Sessões encerradas",
+  document: "CPF/CNPJ", phone: "Telefone", whatsapp: "WhatsApp", instagram: "Instagram", facebook: "Facebook", notes: "Observações",
+  investorId: "Investidor", investorName: "Investidor", agreedRateBps: "Taxa combinada (pontos-base)", ratePeriod: "Período da taxa",
+  startDate: "Início", maturityDate: "Vencimento do contrato", dueDay: "Dia de vencimento", kind: "Tipo de documento", fileName: "Arquivo",
+  contentType: "Formato", sizeBytes: "Tamanho (bytes)", replacedDocumentId: "Documento substituído",
 };

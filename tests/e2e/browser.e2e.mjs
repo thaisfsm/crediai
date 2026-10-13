@@ -65,9 +65,13 @@ test("U2. telas sem rolagem horizontal no celular (390 px)", async () => {
   const tenant = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const tenantPage = await signIn(tenant, "fernando@teste.local");
   for (const tela of ["", "capital", "clientes", "operacoes", "pagamentos", "cobrancas", "relatorios", "configuracoes"]) pages.push([tenantPage, `/${tela ? `?tela=${tela}` : ""}`]);
+  // Investidores (dados criados por investors.e2e.mjs, quando ele roda antes; senão, só a página principal).
+  const investor = await one(`select id from investor where tenant_id = 'ten_fernando' order by created_at limit 1`);
+  const investment = await one(`select id from investment where tenant_id = 'ten_fernando' order by created_at limit 1`);
+  for (const path of ["/investidores", investor && `/investidores/${investor}`, investment && `/investidores/investimentos/${investment}`].filter(Boolean)) pages.push([tenantPage, path]);
   const master = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const masterPage = await signIn(master, "thais@teste.local");
-  for (const path of ["/admin", "/admin/planos", "/admin/clientes/ten_fernando", "/admin/registros", "/admin/registros?aba=auditoria", "/admin/registros?aba=tenants", "/admin/registros?aba=operacoes"]) pages.push([masterPage, path]);
+  for (const path of ["/admin", "/admin/planos", "/admin/clientes/ten_fernando", "/admin/registros", "/admin/registros?aba=auditoria", "/admin/registros?aba=tenants", "/admin/registros?aba=operacoes", "/investidores"]) pages.push([masterPage, path]);
   for (const [page, path] of pages) {
     await page.goto(`${BASE}${path}`);
     await page.waitForLoadState("networkidle");
@@ -77,6 +81,43 @@ test("U2. telas sem rolagem horizontal no celular (390 px)", async () => {
   }
   await tenant.close();
   await master.close();
+});
+
+test("U5. Investidores pelo menu: cadastro pelo formulário, ficha, novo investimento e contrato (desktop)", async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await signIn(context, "roberio@teste.local");
+  await page.locator("aside").getByRole("link", { name: "Investidores", exact: true }).click();
+  await page.waitForURL(/\/investidores$/);
+  await page.locator(".breadcrumbs strong", { hasText: "Investidores" }).waitFor();
+  for (const card of ["Capital investido", "Investimentos ativos", "Rendimentos previstos", "Rendimentos pagos", "Total a devolver", "Próximos vencimentos"]) await page.locator(".metric-card", { hasText: card }).waitFor();
+  await page.getByRole("button", { name: /Novo investidor/ }).click();
+  const form = page.locator("form", { has: page.locator('input[name="name"]') }).first();
+  await form.locator('input[name="name"]').fill("Investidor pelo Navegador");
+  await form.locator('input[name="document"]').fill("52998224725");
+  assert.equal(await form.locator('input[name="document"]').inputValue(), "529.982.247-25", "máscara de CPF");
+  await form.locator('input[name="whatsapp"]').fill("11987650000");
+  await form.locator('input[name="instagram"]').fill("@navegador");
+  await form.getByRole("button", { name: /Cadastrar investidor/ }).click();
+  await page.getByRole("link", { name: "Investidor pelo Navegador" }).waitFor({ timeout: 15_000 });
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/desktop-investidores.png`, fullPage: true });
+  await page.getByRole("link", { name: "Investidor pelo Navegador" }).click();
+  await page.waitForURL(/\/investidores\/inv_/);
+  await page.getByRole("link", { name: "@navegador" }).waitFor();
+  await page.getByRole("button", { name: /Novo investimento/ }).click();
+  await page.locator('input[name="amount"]').fill("20.000,00");
+  await page.locator('input[name="rate"]').fill("2");
+  await page.locator('select[name="ratePeriod"]').selectOption("MONTHLY");
+  await page.getByRole("button", { name: /Cadastrar investimento/ }).click();
+  await page.getByRole("cell", { name: "R$ 20.000,00" }).waitFor({ timeout: 15_000 });
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/desktop-investidor.png`, fullPage: true });
+  await page.getByRole("link", { name: "Abrir" }).first().click();
+  await page.waitForURL(/\/investidores\/investimentos\//);
+  await page.getByText("Contrato assinado ainda não enviado").waitFor();
+  await page.locator('input[name="file"]').setInputFiles({ name: "contrato.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 navegador") });
+  await page.getByRole("button", { name: /Enviar documento/ }).click();
+  await page.getByRole("link", { name: "Visualizar" }).waitFor({ timeout: 15_000 });
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/desktop-investimento.png`, fullPage: true });
+  await context.close();
 });
 
 test("U3. banco fora do ar: tela de nova tentativa, sem ir para /setup e sem perder a sessão", async () => {

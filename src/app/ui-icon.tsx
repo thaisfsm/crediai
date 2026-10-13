@@ -4,7 +4,7 @@ export type IconName =
   | "grid" | "users" | "wallet" | "receipt" | "calendar" | "chart"
   | "settings" | "help" | "chevron" | "bell" | "search" | "plus"
   | "arrow" | "more" | "clock" | "sparkles" | "shield" | "check"
-  | "alert" | "filter" | "close" | "trend" | "dollar";
+  | "alert" | "filter" | "close" | "trend" | "dollar" | "briefcase" | "file";
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const shapes: Record<IconName, ReactNode> = {
@@ -31,6 +31,8 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
     close: <path d="m18 6-12 12M6 6l12 12" />,
     trend: <><path d="M3 17 9 11l4 4 8-9" /><path d="M15 6h6v6" /></>,
     dollar: <><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>,
+    briefcase: <><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18M11 13v2h2v-2" /></>,
+    file: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></>,
   };
 
   return (

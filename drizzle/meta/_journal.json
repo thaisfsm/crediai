@@ -99,6 +99,13 @@
       "when": 1791318086265,
       "tag": "0014_admin_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791380982924,
+      "tag": "0015_investors",
+      "breakpoints": true
     }
   ]
 }
