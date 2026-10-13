@@ -4,6 +4,8 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // Documentos do cliente vão por Server Action e podem ter até 5 MB (mais a margem do formulário).
   experimental: { serverActions: { bodySizeLimit: "6mb" } },
+  // Fontes embutidas no PDF do contrato de investimento (lidas do disco pelo servidor).
+  outputFileTracingIncludes: { "/investidores/**/*": ["./src/lib/investors/fonts/*.ttf"] },
 };
 
 export default nextConfig;

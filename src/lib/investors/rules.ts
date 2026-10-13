@@ -2,6 +2,8 @@
 // Nenhuma regra financeira de investimento está definida: não há cálculo de rendimento, capitalização, saldo, total a
 // devolver, resgate, multa ou renovação. O painel só soma e conta o que foi cadastrado.
 import { normalizeEmail, normalizeSocial } from "../contacts";
+import { addressFields, type Address } from "./address";
+import { addressParts, type AddressPart } from "../finance/client-profile";
 import { addDays, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
 
 export const INVESTOR_STATUS = { ACTIVE: "Ativo", INACTIVE: "Inativo" } as const;
@@ -30,12 +32,20 @@ type Failure = { ok: false; error: string };
 type Read = (key: string, max: number) => string;
 const optional = (value: string) => (value ? value : null);
 
+// Endereço do investidor em colunas address_cep, address_street… (opcional no cadastro; exigido no contrato).
+export type InvestorAddressKey = `address${AddressPart}`;
+export const investorAddressKeys = addressParts.map((part) => `address${part}` as InvestorAddressKey);
+export type InvestorAddress = Record<InvestorAddressKey, string | null>;
+
 export type InvestorValues = {
   name: string; document: string | null; phone: string | null; whatsapp: string | null; email: string | null;
   instagram: string | null; facebook: string | null; notes: string | null; status: InvestorStatus;
-};
+} & InvestorAddress;
 
-// Campos do investidor. Só o nome é obrigatório; telefone, WhatsApp e e-mail têm o formato conferido; redes sociais
+// Endereço como objeto { Cep, Street, … } a partir das colunas do investidor.
+export const investorAddress = (row: InvestorAddress): Address => Object.fromEntries(addressParts.map((part) => [part, row[`address${part}`] ?? null])) as Address;
+
+// Campos do investidor. Só o nome é obrigatório; o endereço é opcional, mas é exigido para gerar o contrato; telefone, WhatsApp e e-mail têm o formato conferido; redes sociais
 // aceitam @usuário ou endereço sem outra validação.
 export function investorFields(read: Read): { ok: true; values: InvestorValues } | Failure {
   const name = read("name", 160);
@@ -54,9 +64,14 @@ export function investorFields(read: Read): { ok: true; values: InvestorValues }
   if (!facebook.ok) return { ok: false, error: `Facebook: ${facebook.error}` };
   const status = parseInvestorStatus(read("status", 20) || "ACTIVE");
   if (!status) return { ok: false, error: "Escolha o status do investidor." };
+  const address = addressFields(read, "address");
+  if (!address.ok) return { ok: false, error: `Endereço: ${address.error}` };
   return {
     ok: true,
-    values: { name, document: document.value, phone: phone.value, whatsapp: whatsapp.value, email: email.value, instagram: instagram.value, facebook: facebook.value, notes: optional(read("notes", 1000)), status },
+    values: {
+      name, document: document.value, phone: phone.value, whatsapp: whatsapp.value, email: email.value, instagram: instagram.value, facebook: facebook.value, notes: optional(read("notes", 1000)), status,
+      ...(Object.fromEntries(addressParts.map((part) => [`address${part}`, address.value[part]])) as InvestorAddress),
+    },
   };
 }
 

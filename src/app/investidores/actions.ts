@@ -1,15 +1,19 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { AuditAction } from "@/lib/admin/audit-rules";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { investmentDocuments, investments, investors, tenants } from "@/lib/db/schema";
+import { investmentContractors, investmentContracts, investmentDocuments, investments, investors, tenants } from "@/lib/db/schema";
 import { formatMoney } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext } from "@/lib/investors/access";
-import { DOCUMENT_KINDS, investmentFields, investorFields, parseDocumentKind, type InvestmentValues, type InvestorValues } from "@/lib/investors/rules";
+import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
+import { contractFonts } from "@/lib/investors/contract-fonts";
+import { renderContractPdf } from "@/lib/investors/contract-pdf";
+import { contractDataHash, contractSource, loadContractor } from "@/lib/investors/contract-source";
+import { DOCUMENT_KINDS, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, type InvestmentValues, type InvestorValues } from "@/lib/investors/rules";
 
 export type InvestorActionResult = { ok: true; message: string; id?: string } | { ok: false; error: string };
 
@@ -21,7 +25,14 @@ const reader = (data: FormData) => (key: string, max: number) => String(data.get
 
 // Observações não vão em texto para a auditoria (podem ter dados sensíveis): só se estão preenchidas e o tamanho.
 const notesMark = (notes: string | null) => (notes ? `preenchidas (${notes.length} caracteres)` : null);
-const investorSnapshot = (values: InvestorValues) => ({ ...values, notes: notesMark(values.notes) });
+// Endereço também não vai por extenso: só se está preenchido e a cidade/UF.
+const addressMark = (values: { addressStreet: string | null; addressCity: string | null; addressState: string | null; addressCep: string | null }) =>
+  values.addressStreet || values.addressCity || values.addressCep ? `preenchido (${[values.addressCity, values.addressState].filter(Boolean).join("/") || "sem cidade"})` : null;
+function investorSnapshot(values: InvestorValues) {
+  const snapshot: Record<string, unknown> = { ...values, notes: notesMark(values.notes), address: addressMark(values) };
+  for (const key of investorAddressKeys) delete snapshot[key];
+  return snapshot;
+}
 const investmentSnapshot = (values: InvestmentValues) => ({ ...values, notes: notesMark(values.notes) });
 
 async function tenantName(tx: TenantTransaction, tenantId: string) {
@@ -82,7 +93,10 @@ export async function updateInvestorAction(data: FormData): Promise<InvestorActi
       const [current] = await tx.select().from(investors).where(and(eq(investors.id, investorId), tenantFilter(scope, investors.tenantId)));
       if (!current) return { ok: false, error: "Investidor não encontrado." };
       await tx.update(investors).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investors.id, current.id), eq(investors.tenantId, current.tenantId)));
-      const before = investorSnapshot({ name: current.name, document: current.document, phone: current.phone, whatsapp: current.whatsapp, email: current.email, instagram: current.instagram, facebook: current.facebook, notes: current.notes, status: current.status });
+      const before = investorSnapshot({
+        name: current.name, document: current.document, phone: current.phone, whatsapp: current.whatsapp, email: current.email, instagram: current.instagram, facebook: current.facebook, notes: current.notes, status: current.status,
+        ...(Object.fromEntries(investorAddressKeys.map((key) => [key, current[key]])) as Pick<InvestorValues, (typeof investorAddressKeys)[number]>),
+      });
       const after = investorSnapshot(fields.values);
       const { status: statusBefore, ...dataBefore } = before;
       const { status: statusAfter, ...dataAfter } = after;
@@ -166,6 +180,18 @@ async function readDocumentFile(data: FormData) {
   return { ok: true as const, content, contentType, fileName };
 }
 
+// Contrato assinado: a versão gerada pelo sistema que foi assinada. Precisa ser do mesmo investimento (e tenant).
+// "" = contrato não gerado pelo sistema. Campo ausente = undefined (na substituição, mantém o vínculo anterior).
+async function signedContractVersion(tx: TenantTransaction, data: FormData, investment: { id: string; tenantId: string }) {
+  if (!data.has("contractId")) return { ok: true as const, contractId: undefined, version: undefined };
+  const contractId = String(data.get("contractId") ?? "").trim().slice(0, 80);
+  if (!contractId) return { ok: true as const, contractId: null, version: null };
+  const [contract] = await tx.select({ id: investmentContracts.id, version: investmentContracts.version }).from(investmentContracts)
+    .where(and(eq(investmentContracts.id, contractId), eq(investmentContracts.investmentId, investment.id), eq(investmentContracts.tenantId, investment.tenantId)));
+  if (!contract) return { ok: false as const, error: "Escolha uma versão do contrato deste investimento." };
+  return { ok: true as const, contractId: contract.id, version: contract.version };
+}
+
 const fileSnapshot = (file: { kind: string; fileName: string; contentType: string; sizeBytes: number }) =>
   ({ kind: file.kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.sizeBytes });
 
@@ -187,11 +213,14 @@ export async function uploadInvestmentDocumentAction(data: FormData): Promise<In
           .where(and(eq(investmentDocuments.investmentId, investment.id), eq(investmentDocuments.tenantId, investment.tenantId), eq(investmentDocuments.kind, "SIGNED_CONTRACT"), isNull(investmentDocuments.replacedAt)));
         if (existing) return SIGNED_CONTRACT_ERROR;
       }
+      const link = kind === "SIGNED_CONTRACT" ? await signedContractVersion(tx, data, investment) : { ok: true as const, contractId: null, version: null };
+      if (!link.ok) return link;
       const documentId = id("idoc");
       const values = { kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.length };
-      await tx.insert(investmentDocuments).values({ id: documentId, tenantId: investment.tenantId, investmentId: investment.id, ...values, content: file.content, uploadedByUserId: scope.user.id });
-      await audit(tx, scope, investment.tenantId, "INVESTMENT_DOCUMENT_UPLOADED", "investment_document", documentId, null, { investmentId: investment.id, ...fileSnapshot(values) },
-        `${DOCUMENT_KINDS[kind]} enviado (${file.fileName})`);
+      await tx.insert(investmentDocuments).values({ id: documentId, tenantId: investment.tenantId, investmentId: investment.id, ...values, contractId: link.contractId ?? null, content: file.content, uploadedByUserId: scope.user.id });
+      await audit(tx, scope, investment.tenantId, "INVESTMENT_DOCUMENT_UPLOADED", "investment_document", documentId, null,
+        { investmentId: investment.id, ...fileSnapshot(values), ...(kind === "SIGNED_CONTRACT" ? { contractId: link.contractId ?? null, contractVersion: link.version ?? null } : {}) },
+        `${DOCUMENT_KINDS[kind]} enviado (${file.fileName})${link.version ? ` – assinatura da versão ${link.version} do contrato gerado` : ""}`);
       return { ok: true, message: `${DOCUMENT_KINDS[kind]} enviado.`, id: documentId };
     });
   } catch (error) {
@@ -213,9 +242,13 @@ export async function replaceInvestmentDocumentAction(data: FormData): Promise<I
     const [previous] = await tx.select({
       id: investmentDocuments.id, tenantId: investmentDocuments.tenantId, investmentId: investmentDocuments.investmentId, kind: investmentDocuments.kind,
       fileName: investmentDocuments.fileName, contentType: investmentDocuments.contentType, sizeBytes: investmentDocuments.sizeBytes, replacedAt: investmentDocuments.replacedAt,
+      contractId: investmentDocuments.contractId,
     }).from(investmentDocuments).where(and(eq(investmentDocuments.id, documentId), tenantFilter(scope, investmentDocuments.tenantId)));
     if (!previous) return { ok: false, error: "Documento não encontrado." };
     if (previous.replacedAt) return { ok: false, error: "Esta versão já foi substituída. Substitua a versão atual." };
+    const link = previous.kind === "SIGNED_CONTRACT" ? await signedContractVersion(tx, data, { id: previous.investmentId, tenantId: previous.tenantId }) : { ok: true as const, contractId: null, version: null };
+    if (!link.ok) return link;
+    const contractId = link.contractId === undefined ? previous.contractId : link.contractId;
     const newId = id("idoc");
     // Primeiro marca a anterior como substituída (o índice só aceita um contrato assinado vigente), depois grava a nova.
     // Se outra substituição simultânea chegou antes, nada é marcado e esta não grava uma segunda versão vigente.
@@ -224,12 +257,135 @@ export async function replaceInvestmentDocumentAction(data: FormData): Promise<I
       .returning({ id: investmentDocuments.id });
     if (marked.length === 0) return { ok: false, error: "Esta versão já foi substituída. Substitua a versão atual." };
     const values = { kind: previous.kind, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.content.length };
-    await tx.insert(investmentDocuments).values({ id: newId, tenantId: previous.tenantId, investmentId: previous.investmentId, ...values, content: file.content, uploadedByUserId: scope.user.id });
+    await tx.insert(investmentDocuments).values({ id: newId, tenantId: previous.tenantId, investmentId: previous.investmentId, ...values, contractId, content: file.content, uploadedByUserId: scope.user.id });
     const kindLabel = DOCUMENT_KINDS[previous.kind as keyof typeof DOCUMENT_KINDS] ?? "Documento";
     await audit(tx, scope, previous.tenantId, "INVESTMENT_DOCUMENT_REPLACED", "investment_document", newId,
-      { investmentId: previous.investmentId, ...fileSnapshot(previous) }, { investmentId: previous.investmentId, replacedDocumentId: previous.id, ...fileSnapshot(values) },
+      { investmentId: previous.investmentId, ...fileSnapshot(previous), ...(previous.kind === "SIGNED_CONTRACT" ? { contractId: previous.contractId } : {}) },
+      { investmentId: previous.investmentId, replacedDocumentId: previous.id, ...fileSnapshot(values), ...(previous.kind === "SIGNED_CONTRACT" ? { contractId } : {}) },
       `${kindLabel} substituído (${previous.fileName} → ${file.fileName})`);
     return { ok: true, message: `${kindLabel} substituído. A versão anterior continua no histórico.`, id: newId };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Contrato de investimento gerado pelo sistema. O PDF gerado não é assinado: o usuário baixa, envia ao investidor por
+// conta própria e depois anexa a versão assinada em Documentos (Contrato assinado), indicando a versão correspondente.
+
+// Lê o investimento no escopo da sessão, com o investidor (sempre do mesmo tenant).
+async function investmentInScope(tx: TenantTransaction, scope: Parameters<typeof tenantFilter>[0], investmentId: string, lock = false) {
+  const query = tx.select({ investment: investments, investor: investors }).from(investments)
+    .innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
+    .where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId)));
+  // FOR UPDATE do investimento: duas gerações simultâneas do mesmo contrato ficam em fila (versões sem buraco nem duplicata).
+  const [row] = lock ? await query.for("update", { of: investments }) : await query;
+  return row ?? null;
+}
+
+// Dados da empresa contratante (um cadastro por carteira, usado em todos os contratos dela).
+export async function saveContractorAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  if (!investmentId) return { ok: false, error: "Investimento inválido." };
+  const fields = contractorFields(read);
+  if (!fields.ok) return fields;
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const row = await investmentInScope(tx, scope, investmentId);
+    if (!row) return { ok: false, error: "Investimento não encontrado." };
+    // O tenant é sempre o do investimento (para o usuário comum, a própria carteira): nunca vem do formulário.
+    const tenantId = row.investment.tenantId;
+    const previous = await loadContractor(tx, tenantId);
+    const { address, confirmed, ...rest } = fields.values;
+    const values = {
+      ...rest, addressCep: address.Cep, addressStreet: address.Street, addressNumber: address.Number, addressComplement: address.Complement,
+      addressDistrict: address.District, addressCity: address.City, addressState: address.State,
+      confirmedAt: confirmed ? sql`now()` : null, confirmedByUserId: confirmed ? scope.user.id : null, updatedByUserId: scope.user.id, updatedAt: sql`now()`,
+    };
+    await tx.insert(investmentContractors).values({ tenantId, ...values }).onConflictDoUpdate({ target: investmentContractors.tenantId, set: values });
+    const snapshot = (source: { legalName: string | null; document: string | null; addressCity: string | null; addressState: string | null; representativeName: string | null } & Record<string, unknown>, isConfirmed: boolean) => ({
+      legalName: source.legalName, document: source.document, address: [source.addressStreet, source.addressNumber, source.addressDistrict, source.addressCity, source.addressState, source.addressCep].filter(Boolean).join(", ") || null,
+      representativeName: source.representativeName, representativeDocument: source.representativeDocument ? "preenchido" : null, confirmed: isConfirmed,
+    });
+    await audit(tx, scope, tenantId, "INVESTMENT_CONTRACTOR_UPDATED", "investment_contractor", tenantId,
+      previous ? snapshot(previous, Boolean(previous.confirmedAt)) : null, snapshot({ ...values, legalName: rest.legalName, document: rest.document, representativeName: rest.representativeName }, confirmed),
+      confirmed ? "Dados da empresa contratante confirmados" : "Dados da empresa contratante salvos sem confirmação");
+    return { ok: true, message: confirmed ? "Dados da empresa contratante salvos e confirmados." : "Dados salvos. Confirme-os para poder gerar o contrato." };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+// Gera a primeira versão do contrato ou uma nova versão. A versão anterior fica no histórico (substituída) e nenhum
+// documento assinado é tocado. Faltando dado essencial, nada é gerado e a mensagem diz o que falta.
+export async function generateContractAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  if (!investmentId) return { ok: false, error: "Investimento inválido." };
+  const includeNotes = read("includeNotes", 4) === "1";
+  const confirmSignedKept = read("confirmSignedKept", 4) === "1";
+  const fonts = await contractFonts();
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const row = await investmentInScope(tx, scope, investmentId, true);
+    if (!row) return { ok: false, error: "Investimento não encontrado." };
+    const { investment, investor } = row;
+    const source = contractSource(investment, investor, await loadContractor(tx, investment.tenantId));
+    const missing = missingContractData(source, includeNotes);
+    if (missing.length) return { ok: false, error: `Não é possível gerar a versão final do contrato. Falta: ${missing.map((item) => `${item.section}: ${item.item}`).join("; ")}.` };
+
+    const [current] = await tx.select().from(investmentContracts)
+      .where(and(eq(investmentContracts.investmentId, investment.id), eq(investmentContracts.tenantId, investment.tenantId), isNull(investmentContracts.supersededAt)));
+    const dataHash = contractDataHash(source, includeNotes);
+    if (current && current.dataHash === dataHash) return { ok: false, error: `Os dados não mudaram desde a versão ${current.version}. Use a versão atual ou altere os dados antes de gerar outra.` };
+    // Já existe contrato assinado vigente: a nova versão não o substitui, e o usuário precisa confirmar que entendeu.
+    const [signed] = await tx.select({ id: investmentDocuments.id }).from(investmentDocuments)
+      .where(and(eq(investmentDocuments.investmentId, investment.id), eq(investmentDocuments.tenantId, investment.tenantId), eq(investmentDocuments.kind, "SIGNED_CONTRACT"), isNull(investmentDocuments.replacedAt)));
+    if (signed && !confirmSignedKept) return { ok: false, error: "Este investimento já tem contrato assinado. Confirme que a nova versão não substitui o contrato assinado (ele continua em Documentos) e precisa ser assinada à parte." };
+
+    const [{ last }] = await tx.select({ last: sql<number>`coalesce(max(${investmentContracts.version}), 0)::int` }).from(investmentContracts)
+      .where(and(eq(investmentContracts.investmentId, investment.id), eq(investmentContracts.tenantId, investment.tenantId)));
+    const version = Number(last) + 1;
+    const generatedAt = new Date();
+    const pdf = Buffer.from(await renderContractPdf(buildContract(source, includeNotes, { version, generatedAt }), generatedAt, fonts));
+    const contractId = id("ictr");
+    const fileName = contractFileName(investor.name, version);
+    const sha256 = createHash("sha256").update(pdf).digest("hex");
+    // Primeiro marca a versão vigente como substituída (o índice só aceita uma vigente), depois grava a nova.
+    if (current) {
+      await tx.update(investmentContracts).set({ supersededAt: sql`now()`, supersededByContractId: contractId })
+        .where(and(eq(investmentContracts.id, current.id), eq(investmentContracts.tenantId, current.tenantId), isNull(investmentContracts.supersededAt)));
+    }
+    await tx.insert(investmentContracts).values({
+      id: contractId, tenantId: investment.tenantId, investmentId: investment.id, version, templateVersion: CONTRACT_TEMPLATE_VERSION, dataHash, includesNotes: includeNotes,
+      fileName, sizeBytes: pdf.length, sha256, content: pdf, generatedByUserId: scope.user.id, createdAt: generatedAt,
+    });
+    // Auditoria sem dados pessoais: versão, arquivo, hash e o vínculo com o investimento.
+    await audit(tx, scope, investment.tenantId, "INVESTMENT_CONTRACT_GENERATED", "investment_contract", contractId,
+      current ? { investmentId: investment.id, version: current.version, contractId: current.id } : null,
+      { investmentId: investment.id, version, fileName, sizeBytes: pdf.length, sha256, templateVersion: CONTRACT_TEMPLATE_VERSION, includesNotes: includeNotes, signedContractKept: Boolean(signed) },
+      current ? `Nova versão do contrato gerada (versão ${version}, substitui a versão ${current.version})` : `Contrato gerado (versão ${version})`);
+    return { ok: true, message: current ? `Versão ${version} do contrato gerada. A versão ${current.version} continua no histórico.` : "Contrato gerado (versão 1). Baixe o PDF e envie para assinatura.", id: contractId };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+// Registro manual de que a versão vigente foi enviada para assinatura (o envio acontece fora do sistema).
+export async function markContractSentAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const contractId = read("contractId", 80);
+  if (!contractId) return { ok: false, error: "Contrato inválido." };
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const [contract] = await tx.select({ id: investmentContracts.id, tenantId: investmentContracts.tenantId, investmentId: investmentContracts.investmentId, version: investmentContracts.version, sentAt: investmentContracts.sentAt, supersededAt: investmentContracts.supersededAt })
+      .from(investmentContracts).where(and(eq(investmentContracts.id, contractId), tenantFilter(scope, investmentContracts.tenantId)));
+    if (!contract) return { ok: false, error: "Contrato não encontrado." };
+    if (contract.supersededAt) return { ok: false, error: "Esta versão foi substituída. Envie a versão atual." };
+    if (contract.sentAt) return { ok: false, error: "Esta versão já está marcada como enviada." };
+    await tx.update(investmentContracts).set({ sentAt: sql`now()`, sentByUserId: scope.user.id })
+      .where(and(eq(investmentContracts.id, contract.id), eq(investmentContracts.tenantId, contract.tenantId), isNull(investmentContracts.sentAt)));
+    await audit(tx, scope, contract.tenantId, "INVESTMENT_CONTRACT_SENT", "investment_contract", contract.id, { investmentId: contract.investmentId, version: contract.version, sent: false },
+      { investmentId: contract.investmentId, version: contract.version, sent: true }, `Versão ${contract.version} do contrato marcada como enviada para assinatura`);
+    return { ok: true, message: `Versão ${contract.version} marcada como enviada para assinatura.` };
   });
   if (result.ok) refresh();
   return result;
