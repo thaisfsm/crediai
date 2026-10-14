@@ -78,18 +78,26 @@ test("PQ2. o banco aceita parcelado quinzenal só com parcelas coerentes e recus
 });
 
 test("PQ3. pagamento parcial mantém a parcela em aberto; quitação fecha a operação; capital soma cada pagamento uma vez", async () => {
-  const first = await action(robério, "registerPaymentAction", { operationId: opId, amount: "300,00", paidAt: "2026-11-06" });
+  // Pagamento não pode ter data futura (auditoria de 14/10/2026): os pagamentos vão numa operação igual, só que
+  // retroativa (empréstimo em 13/08, vencimentos 06/09, 21/09 e 06/10), em vez das datas de novembro do exemplo.
+  const created = await action(robério, "createOperationAction", { clientId: "c_e2e_quinz", modality: "INSTALLMENT", installmentFrequency: "BIWEEKLY", loanAmount: "600,00", installment: "300,00", term: "3", loanDate: "2026-08-13", firstDueDate: "2026-09-06" });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  const retroId = await one(`select id from loan_operation where client_id = 'c_e2e_quinz' and first_due_date = '2026-09-06'`);
+  const first = await action(robério, "registerPaymentAction", { operationId: retroId, amount: "300,00", paidAt: "2026-09-06" });
   assert.equal(first.ok, true, JSON.stringify(first));
-  assert.match(first.message, /Próximo vencimento: 21\/11\/2026/);
-  const partial = await action(robério, "registerPaymentAction", { operationId: opId, amount: "150,00", paidAt: "2026-11-21" });
-  assert.match(partial.message, /Saldo em aberto: R\$\s450,00\. Próximo vencimento: 21\/11\/2026/);
+  assert.match(first.message, /Próximo vencimento: 21\/09\/2026/);
+  const partial = await action(robério, "registerPaymentAction", { operationId: retroId, amount: "150,00", paidAt: "2026-09-21" });
+  assert.match(partial.message, /Saldo em aberto: R\$\s450,00\. Próximo vencimento: 21\/09\/2026/);
   // Acima do saldo: recusado.
-  assert.equal((await action(robério, "registerPaymentAction", { operationId: opId, amount: "450,01", paidAt: "2026-11-25" })).ok, false);
-  const last = await action(robério, "registerPaymentAction", { operationId: opId, amount: "450,00", paidAt: "2026-12-06" });
+  assert.equal((await action(robério, "registerPaymentAction", { operationId: retroId, amount: "450,01", paidAt: "2026-09-25" })).ok, false);
+  const last = await action(robério, "registerPaymentAction", { operationId: retroId, amount: "450,00", paidAt: "2026-10-06" });
   assert.match(last.message, /Operação quitada/);
-  const [op] = await admin(`select status, settled_at::text as settled_at from loan_operation where id = '${opId}'`);
-  assert.deepEqual([op.status, op.settled_at], ["PAID", "2026-12-06"]);
-  assert.equal(await available("ten_roberio"), availableBefore - 60000 + 90000);
+  const [op] = await admin(`select status, settled_at::text as settled_at from loan_operation where id = '${retroId}'`);
+  assert.deepEqual([op.status, op.settled_at], ["PAID", "2026-10-06"]);
+  // Duas operações de R$ 600 (a do exemplo e a retroativa) saíram; os R$ 900 da retroativa voltaram.
+  assert.equal(await available("ten_roberio"), availableBefore - 60000 - 60000 + 90000);
+  // Na operação do exemplo, pagamento com a data da 1ª parcela (06/11, futura) é recusado.
+  assert.match((await action(robério, "registerPaymentAction", { operationId: opId, amount: "300,00", paidAt: FIRST_DUE })).error, /depois de hoje/);
 });
 
 test("PQ4. tela: prévia dos vencimentos 06/11, 21/11 e 06/12 antes de cadastrar (desktop e celular)", async () => {

@@ -213,7 +213,7 @@ test("CP6. envio duplicado e concorrência: uma baixa e uma saída por envio; nu
 });
 
 test("CP7. capital insuficiente (hoje e retroativo) bloqueia a baixa sem gravar nada", async () => {
-  const investment = await investorAction(robério, "createInvestmentAction", { investorId: ids.investor, amount: "50.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: daysAgo(38), contractNumber: "CP-B" });
+  const investment = await investorAction(robério, "createInvestmentAction", { investorId: ids.investor, amount: "60.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: daysAgo(38), contractNumber: "CP-B" });
   ids.investmentB = investment.id;
   await investorAction(robério, "addInvestmentScheduleItemAction", { investmentId: ids.investmentB, dueDate: TODAY, yieldAmount: "", principalAmount: "60.000,00", description: "" });
   ids.itemB = await one(`select id from investment_schedule_item where investment_id = '${ids.investmentB}'`);

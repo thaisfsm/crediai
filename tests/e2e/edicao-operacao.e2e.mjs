@@ -139,7 +139,7 @@ test("EO5. duas correções simultâneas da mesma prévia: uma grava, a outra é
 });
 
 test("EO6. com pagamento registrado a correção fica bloqueada e nada muda", async () => {
-  const paid = await action(robério, "registerPaymentAction", { operationId: ids.single, amount: "100,00", paidAt: "2026-10-20" });
+  const paid = await action(robério, "registerPaymentAction", { operationId: ids.single, amount: "100,00", paidAt: "2026-10-13" });
   assert.equal(paid?.ok, true, JSON.stringify(paid));
   const original = await row(ids.single);
   const blocked = await action(robério, "previewOperationEditAction", { operationId: ids.single, ...SINGLE, principal: "1.100,00" });

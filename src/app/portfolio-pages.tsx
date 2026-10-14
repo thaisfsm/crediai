@@ -912,7 +912,7 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
   return (
     <form className="form-grid edit-payment-form" onSubmit={onSubmit} aria-label="Editar pagamento">
       <input type="hidden" name="paymentId" value={payment.id} />
-      <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} min={operation.loanDate} required />
+      <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} min={operation.loanDate} max={today} required />
       <label className="field"><span>Valor pago (R$)</span><input name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
       {renewal && <p className="capital-note field-wide">Este pagamento renovou o período até {formatDate(renewal.newDueDate)}. Ele pode ser corrigido para um valor maior (o excedente abate o principal), mas não menor que os juros pagos na renovação.</p>}
       <label className="field field-wide"><span>Observação</span><input name="notes" defaultValue={payment.notes ?? ""} placeholder="Opcional" maxLength={500} /></label>
@@ -999,7 +999,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
         {isOpen && (
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
-            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} required />
+            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
             <label className="field"><span>Valor recebido (R$)</span><input name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
             <div className="payment-shortcuts field-wide">
               {canRenew && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.interestRemainingCents))}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
