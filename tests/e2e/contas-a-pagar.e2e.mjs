@@ -53,7 +53,6 @@ const page = async (cookie, path) => {
 };
 let counter = 0;
 const requestId = () => `e2e-cp-${Date.now()}-${++counter}-abcdef`;
-const reais = (cents) => (cents / 100).toFixed(2).replace(".", ",");
 
 // Capital disponível pela mesma fórmula do servidor, direto do banco.
 const available = async (tenantId) => Number(await one(`select w.initial_capital_cents
