@@ -435,3 +435,87 @@ Regras para todas: **só com o seu OK por etapa**; ordem obrigatória; em cada e
 - **Neon:** nenhuma branch criada ou apagada; só `SELECT`.
 - **Dados reais:** nenhum usuário, senha, carteira, cliente, contrato, operação, pagamento ou dado financeiro alterado; nenhuma operação de teste em produção.
 - **PRs:** todos continuam em draft, incluindo o novo #20.
+
+---
+
+## 13. Adendo (14/10/2026, tarde): busca global do topo e página `/setup`
+
+Achados na navegação **com login** na produção (sessão MASTER já aberta no Chrome de Thaís, só leitura). Esta é a
+primeira validação com login da seção 9 ("Publicados **e** validados em produção com login").
+
+### 13.1 O que foi validado na produção com login (Claude in Chrome, só leitura, sem gravar nada)
+| Tela | Resultado |
+|---|---|
+| Visão geral, Capital, Clientes, Operações, Pagamentos, Cobranças, Relatórios, Configurações, Financeiro, Investidores, `/admin` | Abrem sem erro no console; totais consistentes entre as telas (capital disponível R$ 1.800,00; emprestado R$ 11.000,00; a receber R$ 11.800,00; juros recebidos R$ 1.800,00 em 4 pagamentos). Juros e saldo das 2 operações recalculados à mão: corretos. |
+| Simulador de Nova operação (preenchido e **não** enviado; página recarregada depois) | Único: R$ 1.000 a 10% → juros R$ 100, total R$ 1.100. Parcelado: 3 × R$ 400 → lucro R$ 200, 6,67% a.m., último vencimento 14/01/2027. Avisos "parcelas somam menos" e "maior que o capital disponível" aparecem; o servidor também recusa (`createOperationAction`, capital insuficiente). |
+| Celular (390 px, iframe na mesma origem) | Nenhuma das 11 telas com rolagem horizontal; tabelas viram cartões. |
+| **Busca do topo** | **Falha:** abre o campo, mas digitar e apertar Enter não faz nada (o `<input>` não tinha `onChange`/`onKeyDown`). |
+| **`/setup` sem login** | Mostra "BANCO DE DADOS CONECTADO… PostgreSQL" a qualquer visitante. Não cria nada, mas expõe estado da infraestrutura. |
+| Observações sem correção (decisão de design) | Selo "Prévia local" e painel "CrediAI Intelligence" com status fixos ("Processamento ativo", "agora") em produção; KPI do Admin "0 vencidos" junto de "Período de teste vencido" na lista de atenção (teste vencido conta como "em teste" por regra em `commercialGroup`). |
+
+### 13.2 Correções (branch `claude/auditoria-busca-global-setup`, base `main` 5c55e47; **não enviada ao GitHub**)
+Commits locais `13872be` e `9fae773`. Patch: `crediai-busca-global-setup.patch`.
+
+| Arquivo | Mudança |
+|---|---|
+| `src/lib/finance/search.ts` (novo) | `searchPortfolio`: clientes por nome/e-mail (sem acento, sem diferença de maiúsculas) e CPF/telefone por dígitos (mín. 3, aceita máscara dos dois lados); operações por código (com ou sem `#`) e nome do cliente; mín. 2 caracteres; até 8 resultados. Função pura, sem banco nem sessão. |
+| `src/app/dashboard.tsx` | Campo ligado à busca (limite de 80 caracteres); lista de resultados clicável e navegável por Tab; Enter abre o 1º resultado; Esc fecha; "Nenhum cliente ou operação encontrado" anunciado (`role="status"`). Cliente abre a ficha em Clientes; operação abre Operações. Só roda com a busca aberta. |
+| `src/app/portfolio-pages.tsx` | `ClientsPage` aceita `initialClientId` (abre a ficha do cliente escolhido na busca). |
+| `src/app/globals.css` | Estilo da lista de resultados (foco do teclado mantido). |
+| `src/app/setup/page.tsx` | Com banco no ar e `NODE_ENV=production`, `redirect("/")` **no servidor** (componente de servidor; nada é enviado ao navegador). Em desenvolvimento continua mostrando a confirmação e os comandos. Banco não configurado, fora do ar ou com erro: comportamento inalterado (testes DB1–DB5). |
+| `tests/search.test.mjs` (novo) | 8 testes: acentos/maiúsculas, CPF e telefone por dígitos, código com/sem `#`, consulta curta e sem resultado, limite, busca pura (sem `@/lib/db`, `@/lib/auth`, `use server`, `fetch`), escopo da carteira da sessão, `/setup` redireciona no servidor. |
+
+**Isolamento por tenant e MASTER:** a busca não cria endpoint nem consulta nova. Ela filtra só `portfolio.clients` e
+`portfolio.operations`, que `page.tsx` carrega com `loadTenantPortfolio()` → `withTenantContext` (tenant da sessão,
+filtro explícito `tenant_id` em clientes, operações e pagamentos). O MASTER, no `/`, vê só a própria carteira
+(`ten_thais`); dados dos tenants continuam só em `/admin`. Portanto um tenant não acha dados de outro pela busca, e a
+carteira do MASTER não se mistura com as dos tenants. Comprovado por leitura do código e pelo teste estrutural; **não**
+comprovado por E2E (13.4).
+
+**Relação com a pilha:** o PR #12 traz outra busca (`searchClientsAction`, só clientes, dentro da tela Clientes, no
+servidor). As duas convivem; ao publicar a pilha, avaliar se a busca do topo passa a usar a regra de
+`client-search.ts`. Conflito previsto ao juntar com a pilha: só `src/app/portfolio-pages.tsx` (linhas vizinhas em
+`ClientsPage`, resolução trivial: manter as duas).
+
+### 13.3 Testes executados nesta etapa (números reais)
+| Verificação | Resultado | Como |
+|---|---|---|
+| Testes unitários da busca | **8/8 passam** | `node --experimental-strip-types --test tests/search.test.mjs` |
+| `database-status`, `finance-rules`, `billing-rules` (regressão financeira e de `/setup`) | **28/28 passam** | idem |
+| Typecheck do módulo novo | **passa** | `tsc --strict --noEmit src/lib/finance/search.ts` |
+| Demais testes unitários (`admin-audit`, `charges-order`, `financeiro`, `investor-contract`, `investors`, `operations-order`, `rounding`, `wallet-chart`) | **não executados** | `ERR_MODULE_NOT_FOUND`: dependem de `node_modules` |
+| Typecheck completo, lint, `next build` | **não executados** | sem `node_modules` |
+| E2E (`isolation`, `browser`, `cobrancas`, `financeiro`, `investors`, `investor-contract`, `admin-audit`, `grafico-carteira`) | **não executados** | exigem `node_modules`, PostgreSQL local e o seed fictício (`ten_roberio`, `ten_fernando`, `ten_thais`…), que não está no repositório |
+| Validação da busca corrigida no navegador | **não executada** | não há build da branch publicado em lugar nenhum (13.5) |
+
+**Causa comprovada do bloqueio:** neste ambiente, `registry.npmjs.org` está na lista de acesso direto do proxy, mas
+o container não tem DNS de saída (`Could not resolve host`), e pelo proxy a conexão é recusada (`403 CONNECT`, política
+da organização). Tentado também um Vercel Sandbox descartável (rede liberada, 4 vCPU): ele sobe, mas não consegue
+clonar o repositório privado sem credencial, e enviar o código por chamada de ferramenta (≈264 KB comprimidos) não é
+viável com segurança. Sandbox desligado após 73 s, sem dado algum.
+
+### 13.4 GitHub e preview
+- **GitHub:** `git push` recusado pelo proxy da sessão: *"thaisfsm/crediai is not in this session's authorized repository
+  set"* (403). Leitura funciona; escrita e API (`gh`) não. **PR não foi criado.**
+- **Preview da Vercel:** não existe para esta branch. Observação: as variáveis `DATABASE_URL`, `BETTER_AUTH_SECRET` e
+  `BETTER_AUTH_URL` estão só no ambiente **Production**; um preview sobe sem banco (cai em `/setup` "não configurado")
+  e não serve para testar a busca com login.
+
+### 13.5 Situação por item
+| Item | Implementado | Testado | Validado no navegador | Publicado em produção |
+|---|---|---|---|---|
+| Busca global do topo | Sim (branch local) | Unitário + estrutural | Não (falha original confirmada na produção) | **Não** |
+| `/setup` redireciona em produção | Sim (branch local) | Estrutural + DB1–DB5 | Não (estado atual confirmado na produção) | **Não** |
+
+### 13.6 Para concluir (barreiras reais)
+1. **Escrita no GitHub:** adicionar `thaisfsm/crediai` como repositório da sessão (fonte do projeto CrediAi_Oficial no
+   Claude Code, com permissão de push; o app GitHub do Claude precisa ter acesso ao repositório). Com isso: push das
+   duas branches, PR draft da correção (base `main`) e atualização deste relatório no PR #20.
+2. **Ambiente com npm** (o mesmo da sessão que rodou as seções 5 e 6, com PostgreSQL local e seed fictício) para
+   typecheck, lint, build, unitários e E2E completos; ou liberar `registry.npmjs.org` na rede desta sessão.
+3. **Validar a busca no navegador:** depois do PR, num `pnpm build && pnpm start` local com o seed fictício, ou num
+   preview com banco **descartável** (nunca o de produção). A decisão de dar banco ao Preview da Vercel é sua.
+
+### 13.7 Confirmação desta etapa
+Nenhum merge, deploy, migration, conta criada ou dado real alterado. Na produção: só navegação e leitura; os campos do
+simulador foram preenchidos sem envio e descartados. Usuários reais (incluindo Fernando e Robério) não foram tocados.
