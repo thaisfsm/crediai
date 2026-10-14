@@ -1129,3 +1129,23 @@ button { color:inherit; }
 /* Contas a Pagar: linha de detalhe e baixa de uma obrigação */
 .obligation-detail-row > td { white-space: normal; }
 .obligation-detail { display: grid; gap: 10px; padding: 6px 0; }
+
+/* Auditoria visual (14/10/2026): letra e área de toque mínimas para botões, abas e legendas. Fica no fim do arquivo
+   para valer sobre as regras de tamanho acima, sem mudar cores nem o desenho dos componentes. */
+.primary-button, .outline-button, .intelligence-action { min-height: 34px; font-size: 11px; }
+.heading-actions .outline-button, .heading-actions .primary-button { min-height: 36px; padding: 0 12px; font-size: 11px; }
+.period-switch button { height: 28px; min-width: 38px; font-size: 10px; }
+.charge-tabs button, .charge-tabs a { min-height: 34px; font-size: 11px; }
+.metric-caption { white-space: normal; text-overflow: clip; line-height: 1.35; }
+.metric-foot { align-items: flex-start; }
+@media (max-width: 740px) {
+  .primary-button, .outline-button, .intelligence-action, .row-actions .outline-button,
+  .heading-actions .outline-button, .heading-actions .primary-button { min-height: 40px; padding: 0 12px; font-size: 12px; }
+  .period-switch button { height: 34px; min-width: 42px; font-size: 11px; }
+  .charge-tabs button, .charge-tabs a { min-height: 40px; font-size: 12px; }
+  /* Legenda do card ocupa a largura toda em vez de dividir a linha com o valor ao lado (sem cortar com "…") */
+  .metric-foot { flex-direction: column; gap: 3px; }
+  .metric-caption { max-width: none; font-size: 10px; }
+  /* Célula vazia (ex.: total do Financeiro) não vira um rótulo sem valor no modo cartão */
+  .data-table td:empty { display: none; }
+}
