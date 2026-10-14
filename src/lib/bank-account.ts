@@ -58,7 +58,8 @@ export function bankFields(read: Read): { ok: true; values: BankValues } | Failu
   const holderDocument = read("bankHolderDocument", 40);
   if (holderDocument) {
     const digits = onlyDigits(holderDocument);
-    const problem = digits.length === 14 ? cnpjProblem(digits) : cpfProblem(digits);
+    // Confere o texto digitado (não só os dígitos), para que "abc" seja recusado em vez de gravado vazio.
+    const problem = digits.length === 14 ? cnpjProblem(holderDocument) : cpfProblem(holderDocument);
     if (problem) return { ok: false, error: `CPF/CNPJ do titular: ${problem}` };
     values.bankHolderDocument = digits;
   }
