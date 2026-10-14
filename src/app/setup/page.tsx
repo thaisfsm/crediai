@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { databaseStatus } from "@/lib/db";
 import { DatabaseErrorState } from "@/app/database-error-state";
 
@@ -9,8 +10,11 @@ export const dynamic = "force-dynamic";
 export default async function SetupPage() {
   const status = await databaseStatus();
   if (status === "unavailable" || status === "error") return <DatabaseErrorState kind={status} />;
+  // Banco no ar: em produção volta direto para o app (não expõe o estado da infraestrutura a visitantes);
+  // em desenvolvimento mostra a confirmação com os comandos de preparo do ambiente local.
   if (status === "ok") {
-    return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> BANCO DE DADOS CONECTADO</div><h1>Tudo certo com o banco de dados</h1><p>O CrediAI está conectado ao PostgreSQL. Você pode voltar para o sistema.</p>{process.env.NODE_ENV !== "production" && <p className="setup-note">Ambiente local novo? Aplique o esquema com <code>pnpm db:migrate</code> e crie a conta administrativa com <code>pnpm admin:create</code>.</p>}<Link href="/" className="auth-submit">Ir para o CrediAI <span>→</span></Link></section></main>;
+    if (process.env.NODE_ENV === "production") redirect("/");
+    return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> BANCO DE DADOS CONECTADO</div><h1>Tudo certo com o banco de dados</h1><p>O CrediAI está conectado ao PostgreSQL. Você pode voltar para o sistema.</p><p className="setup-note">Ambiente local novo? Aplique o esquema com <code>pnpm db:migrate</code> e crie a conta administrativa com <code>pnpm admin:create</code>.</p><Link href="/" className="auth-submit">Ir para o CrediAI <span>→</span></Link></section></main>;
   }
   return <main className="setup-page"><section className="setup-card"><div className="auth-kicker"><i /> CONFIGURAÇÃO</div><h1>Conecte o PostgreSQL gerenciado</h1><p>O banco de dados ainda não foi configurado neste ambiente (`DATABASE_URL` ausente).</p><ol><li>Configure `DATABASE_URL` com a URL PostgreSQL de runtime.</li><li>Configure `DATABASE_MIGRATION_URL` para executar as migrations.</li><li>Reinicie o servidor e aplique <code>pnpm db:migrate</code>.</li></ol><p className="setup-note">Sem banco, autenticação e áreas privadas permanecem protegidas.</p><Link href="/" className="auth-submit">Verificar novamente <span>→</span></Link></section></main>;
 }

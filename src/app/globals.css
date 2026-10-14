@@ -521,6 +521,21 @@ button { color:inherit; }
 .search-popover,.notification-popover { border:1px solid rgba(125,174,195,.2); color:#cfdee6; background:rgba(11,24,35,.97); box-shadow:0 18px 50px rgba(0,0,0,.38); backdrop-filter:blur(20px); }
 .search-popover input { color:#e5f0f5; background:transparent; }.search-popover input::placeholder { color:#718997; }.popover-title { color:#e2edf2; }.popover-title span { color:#7ce2db; }.notification-popover p { color:#9cb0bb; border-color:rgba(127,169,188,.12); }.notification-popover button { color:#71e3db; }
 .mobile-scrim { background:rgba(1,7,12,.72); backdrop-filter:blur(5px); }
+/* Busca global do topo com resultados */
+.search-popover.search-popover-results { flex-direction: column; align-items: stretch; gap: 8px; }
+.search-row { display: flex; align-items: center; gap: 9px; }
+.search-results { margin: 0; padding: 4px 0 0; list-style: none; border-top: 1px solid rgba(127,169,188,.14); max-height: 300px; overflow-y: auto; }
+.search-results button { display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px; border: 0; border-radius: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.search-results button:hover, .search-results button:focus-visible { background: rgba(124,226,219,.08); }
+.search-results strong { color: #e5f0f5; font-size: 12px; }
+.search-results small { color: #8fa5b1; font-size: 10px; }
+.search-empty { margin: 0; padding: 6px 2px 2px; color: #8fa5b1; font-size: 11px; }
+/* A regra geral de .search-popover button (ícone de 27×27) não pode valer para os resultados: sem isto a linha fica
+   com 27 px e o detalhe ("Cliente", nome do cliente da operação) é cortado e sobreposto ao próximo resultado. */
+.search-results button { height: auto; min-height: 40px; place-items: initial; }
+/* No celular o botão de busca fica no meio da barra: o painel ancorado à direita dele saía pela esquerda da tela. */
+@media (max-width: 740px) { .search-popover { position: fixed; top: 64px; right: 16px; left: 16px; width: auto; } }
+
 :focus-visible { outline:2px solid #56e2dc; outline-offset:3px; }
 
 @media (max-width:960px) { .sidebar { box-shadow:16px 0 44px rgba(0,0,0,.48); } }
