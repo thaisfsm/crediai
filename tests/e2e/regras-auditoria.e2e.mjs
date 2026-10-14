@@ -81,8 +81,11 @@ test("REG2. pagamento com data futura é recusado (cadastro e correção) e nada
 });
 
 test("REG3. corrigir o pagamento para uma data mais tarde que descobre uma retirada feita no meio é recusado", async () => {
-  // Disponível: 1.000 (aporte 5.000 − empréstimo 4.000) + 1.000 recebido há 2 dias = 2.000. Retirada de 2.000 ontem.
-  assert.equal((await action(robério, "registerWithdrawalAction", { amount: "2.000,00", occurredAt: shift(-1) }))?.ok, true);
+  // Disponível: 1.000 (aporte 5.000 − empréstimo 4.000) + 1.000 recebido há 2 dias = 2.000. Retirada de 2.000 hoje
+  // (a retirada não pode ser antes do início do ciclo, que na carteira fictícia é hoje). Mover o pagamento para hoje o
+  // coloca depois da retirada no extrato: o saldo da retirada ficaria em −1.000.
+  const withdrawal = await action(robério, "registerWithdrawalAction", { amount: "2.000,00", occurredAt: TODAY });
+  assert.equal(withdrawal?.ok, true, JSON.stringify(withdrawal));
   const before = await ledgerHash();
   const moved = await action(robério, "editPaymentAction", { paymentId: ids.payment, amount: "1.000,00", paidAt: TODAY });
   assert.equal(moved?.ok, false, JSON.stringify(moved));
