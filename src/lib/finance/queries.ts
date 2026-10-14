@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { withTenantContext } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, clients, investmentPriorContributions, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
 import { buildPortfolio, summarizeOperations, type ClientRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
@@ -15,6 +15,8 @@ export async function loadTenantPortfolio() {
     // Só o ciclo atual entra nos cálculos; os pagamentos seguem o ciclo da operação.
     const cycleNumber = wallet?.cycleNumber ?? 1;
     const movementRows = await tx.select().from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber))).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
+    // Aportes indicados como a entrada do dinheiro de um contrato antigo de investidor (migração 0023): não se estornam.
+    const investorLinkedRows = await tx.select({ id: investmentPriorContributions.capitalMovementId }).from(investmentPriorContributions).where(eq(investmentPriorContributions.tenantId, tenantId));
     const clientRows = await tx.select().from(clients).where(eq(clients.tenantId, tenantId)).orderBy(asc(clients.name));
     const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name })
       .from(loanOperations)
@@ -59,7 +61,7 @@ export async function loadTenantPortfolio() {
       paymentCount: sql<string>`(select count(*) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
       receivedCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
     }).from(walletCycles).where(eq(walletCycles.tenantId, tenantId)).orderBy(desc(walletCycles.cycleNumber));
-    return { wallet, cycleNumber, movementRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, correctionRows, documentRows, historyRows, closedCycles };
   });
 
   const revisionsByPayment = new Map<string, PaymentRevisionRecord[]>();
@@ -110,6 +112,7 @@ export async function loadTenantPortfolio() {
   return {
     ...portfolio,
     today: todayIso(),
+    investorLinkedContributionIds: data.investorLinkedRows.map((row) => row.id),
     // Clientes arquivados ficam fora da lista e do cadastro de operação; o histórico das operações continua com o nome.
     clients: clientList.filter((client) => !client.archivedAt).map((client) => ({
       ...client,

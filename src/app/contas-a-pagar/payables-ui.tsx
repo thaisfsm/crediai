@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, type FormEvent } from "react";
 import { formatDate, formatMoney, parseMoneyToCents, centsToInput } from "@/lib/finance/format";
 import {
-  OBLIGATION_KINDS, OBLIGATION_STATUS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, statusSlug,
+  LEGACY_EVIDENCE_ERROR, OBLIGATION_KINDS, OBLIGATION_STATUS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, statusSlug,
   type Obligation, type ObligationKind, type ObligationStatus, type PaymentMethod,
 } from "@/lib/investors/payables";
 import type { PayablesPageData } from "@/lib/investors/payables-queries";
@@ -135,15 +135,19 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
               <td><ObligationStatusChip status={obligation.status} /></td>
               <td className="actions-cell"><span className="row-actions">
                 <button type="button" className="outline-button" aria-expanded={open} onClick={() => { setOpenKey(open ? null : obligation.key); setPaying(false); }}>{open ? "Fechar" : "Detalhes"}</button>
-                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && (
+                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && !obligation.paymentBlock && (
                   <button type="button" className="primary-button" onClick={() => { setOpenKey(obligation.key); setPaying(true); }}>Registrar baixa</button>
                 )}
-              </span></td>
+              </span>
+              {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (
+                <small className="admin-cell-note payment-block-note">Baixa bloqueada: <Link prefetch={false} className="text-link inline-link" href={`/investidores/investimentos/${obligation.investmentId}`}>{obligation.paymentBlock === LEGACY_EVIDENCE_ERROR ? "indique a entrada ou o aporte anterior" : "registre a entrada no capital"}</Link></small>
+              )}</td>
             </tr>
             {open && (
               <tr className="obligation-detail-row"><td colSpan={columns}>
                 <ObligationDetail obligation={obligation} />
-                {paying && canPay && obligation.balanceCents > 0 && (
+                {canPay && obligation.balanceCents > 0 && obligation.paymentBlock && <p className="capital-note">{obligation.paymentBlock}</p>}
+                {paying && canPay && obligation.balanceCents > 0 && !obligation.paymentBlock && (
                   <PaymentForm obligation={obligation} today={today} minDate={minDate} availableCents={availableCents}
                     onDone={() => { setPaying(false); onDone(); }} onCancel={() => setPaying(false)} />
                 )}

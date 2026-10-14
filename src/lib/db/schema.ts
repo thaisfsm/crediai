@@ -578,10 +578,16 @@ export const investments = pgTable("investment", {
   notes: text("notes"),
   status: investmentStatus("status").notNull().default("ACTIVE"),
   calculationRule: text("calculation_rule"),
+  // Regra da entrada no capital (migração 0023). 'REQUIRED': contrato cadastrado com a regra; a baixa só passa com a
+  // entrada do contrato registrada. NULL: contrato que já existia quando a migração 0023 rodou (a coluna nasceu vazia,
+  // sem backfill); a baixa passa com a entrada OU com o aporte anterior indicado pelo usuário (investment_prior_contribution).
+  // Um gatilho grava 'REQUIRED' em todo contrato novo (mesmo que alguém mande NULL) e impede mudar o valor depois.
+  capitalEntryRule: text("capital_entry_rule"),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
+  check("investment_capital_entry_rule_valid", sql`${table.capitalEntryRule} is null or ${table.capitalEntryRule} = 'REQUIRED'`),
   index("investment_tenant_id_idx").on(table.tenantId),
   index("investment_investor_id_idx").on(table.investorId),
   unique("investment_tenant_id_id_unique").on(table.tenantId, table.id),
@@ -648,6 +654,31 @@ export const investmentCapitalEntries = pgTable("investment_capital_entry", {
   pgPolicy("investment_capital_entry_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
   pgPolicy("investment_capital_entry_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
   pgPolicy("investment_capital_entry_delete_admin_only", { for: "delete", using: adminScope }),
+]).enableRLS();
+
+// Aporte anterior de um contrato antigo (migração 0023): só para contrato com capital_entry_rule NULL (já existia antes
+// da regra da entrada), sem entrada registrada. O usuário indica o aporte comum (CONTRIBUTION da tela Capital, não
+// estornado, do mesmo tenant) pelo qual o dinheiro do contrato já entrou no capital; com isso a baixa passa sem lançar
+// uma nova entrada (que contaria o dinheiro em dobro). No máximo um por contrato; exclui a entrada (e vice-versa); não
+// se altera nem se apaga; o aporte indicado não pode mais ser estornado (gatilhos da migração 0023).
+export const investmentPriorContributions = pgTable("investment_prior_contribution", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  capitalMovementId: text("capital_movement_id").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("investment_prior_contribution_investment_unique").on(table.investmentId),
+  uniqueIndex("investment_prior_contribution_tenant_idempotency_unique").on(table.tenantId, table.idempotencyKey),
+  index("investment_prior_contribution_movement_idx").on(table.tenantId, table.capitalMovementId),
+  foreignKey({ name: "investment_prior_contribution_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  foreignKey({ name: "investment_prior_contribution_movement_same_tenant_fk", columns: [table.tenantId, table.capitalMovementId], foreignColumns: [capitalMovements.tenantId, capitalMovements.id] }).onDelete("restrict"),
+  pgPolicy("investment_prior_contribution_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("investment_prior_contribution_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
+  pgPolicy("investment_prior_contribution_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("investment_prior_contribution_delete_admin_only", { for: "delete", using: adminScope }),
 ]).enableRLS();
 
 // Baixa (pagamento efetivo) de uma obrigação do cronograma do investidor: rendimento (YIELD) ou devolução de principal

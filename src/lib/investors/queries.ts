@@ -173,7 +173,8 @@ export async function loadInvestmentDetail(investmentId: string) {
     // Contas a Pagar: entrada no capital e baixas deste contrato, e as obrigações do cronograma com o que já foi pago.
     const cash = await loadInvestmentCash(tx, row.investment, scope.tenantId);
     const obligations = buildObligations({
-      investments: [{ id: row.investment.id, investorId: row.investor.id, investorName: row.investor.name, contractNumber: row.investment.contractNumber, status: row.investment.status, startDate: row.investment.startDate, amountCents: row.investment.amountCents }],
+      investments: [{ id: row.investment.id, investorId: row.investor.id, investorName: row.investor.name, contractNumber: row.investment.contractNumber, status: row.investment.status, startDate: row.investment.startDate, amountCents: row.investment.amountCents,
+        capitalEntryRule: row.investment.capitalEntryRule, hasEntry: Boolean(cash.entry), hasPriorContribution: Boolean(cash.prior) }],
       items: scheduleRows.map((item) => ({ ...item, investmentId: row.investment.id })), payments: cash.payments, today: todayIso(),
     });
     const contractorRow = await loadContractor(tx, row.investment.tenantId);

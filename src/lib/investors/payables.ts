@@ -4,6 +4,7 @@
 // As obrigações vêm só do cronograma do contrato (investment_schedule_item): cada linha gera até duas obrigações,
 // rendimento e devolução de principal, com os valores DIGITADOS pelo usuário. Nada aqui calcula rendimento. Uma
 // obrigação prevista não mexe no capital; só a baixa confirmada grava UMA saída em capital_movement.
+import { normalizeName } from "../finance/client-search";
 import { formatDate, formatMoney, isIsoDate, parseMoneyToCents } from "../finance/format";
 
 export const OBLIGATION_KINDS = { YIELD: "Rendimento", PRINCIPAL: "Devolução de principal" } as const;
@@ -34,6 +35,8 @@ const REQUEST_ID = /^[A-Za-z0-9-]{16,64}$/;
 
 export type PayableInvestment = {
   id: string; investorId: string; investorName: string; contractNumber: string | null; status: string; startDate: string; amountCents: number;
+  // Regra da entrada (migração 0023) e o que o contrato já tem: a entrada registrada ou o aporte anterior indicado.
+  capitalEntryRule: string | null; hasEntry: boolean; hasPriorContribution: boolean;
 };
 export type PayableItem = { id: string; investmentId: string; number: number; dueDate: string; yieldCents: number; principalCents: number; description: string | null };
 export type PayablePayment = {
@@ -44,6 +47,8 @@ export type Obligation = {
   key: string; scheduleItemId: string; investmentId: string; investorId: string; investorName: string; contractNumber: string | null; contractLabel: string;
   investmentStatus: string; startDate: string; number: number; dueDate: string; description: string | null; kind: ObligationKind;
   expectedCents: number; paidCents: number; balanceCents: number; status: ObligationStatus; payments: PayablePayment[];
+  // Por que a baixa ainda não pode ser registrada (regra da entrada); null quando pode.
+  paymentBlock: string | null;
 };
 
 export const contractLabel = (investment: Pick<PayableInvestment, "contractNumber" | "amountCents" | "startDate">) =>
@@ -70,6 +75,7 @@ export function buildObligations({ investments, items, payments, today }: { inve
   for (const item of items) {
     const investment = byId.get(item.investmentId);
     if (!investment) continue;
+    const evidence = entryEvidence(investment);
     for (const kind of ["YIELD", "PRINCIPAL"] as const) {
       const expectedCents = kind === "YIELD" ? item.yieldCents : item.principalCents;
       if (expectedCents <= 0) continue;
@@ -82,6 +88,7 @@ export function buildObligations({ investments, items, payments, today }: { inve
         contractNumber: investment.contractNumber, contractLabel: contractLabel(investment), investmentStatus: investment.status, startDate: investment.startDate,
         number: item.number, dueDate: item.dueDate, description: item.description, kind, expectedCents, paidCents,
         balanceCents: Math.max(expectedCents - paidCents, 0), status: obligationStatus({ expectedCents, paidCents, dueDate: item.dueDate }, today), payments: list,
+        paymentBlock: evidence.ok ? null : evidence.error,
       });
     }
   }
@@ -107,13 +114,12 @@ export function parsePayablesFilters(search: { q?: string; de?: string; ate?: st
   };
 }
 
-const fold = (value: string) => value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const inPeriod = (date: string, filters: Pick<PayablesFilters, "from" | "to">) => (!filters.from || date >= filters.from) && (!filters.to || date <= filters.to);
 
 // Busca por investidor (ou identificação do contrato), tipo, situação e período do vencimento.
 export function filterObligations(obligations: Obligation[], filters: PayablesFilters) {
-  const q = fold(filters.q);
-  return obligations.filter((obligation) => (!q || fold(obligation.investorName).includes(q) || fold(obligation.contractNumber ?? "").includes(q))
+  const q = normalizeName(filters.q);
+  return obligations.filter((obligation) => (!q || normalizeName(obligation.investorName).includes(q) || normalizeName(obligation.contractNumber ?? "").includes(q))
     && (!filters.kind || obligation.kind === filters.kind) && (!filters.status || obligation.status === filters.status) && inPeriod(obligation.dueDate, filters));
 }
 
@@ -184,15 +190,52 @@ export function checkPayment(payment: Pick<PaymentFields, "amountCents" | "paidO
 // Data da entrada: a data em que o dinheiro foi investido; sem ela, a data de início do contrato.
 export const entryDateOf = (investment: { investedOn: string | null; startDate: string }) => investment.investedOn ?? investment.startDate;
 
-export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered }: {
-  enteredOn: string; today: string; cycleStartedOn: string | null; investmentStatus: string; hasWallet: boolean; alreadyRegistered: boolean;
+export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered, priorContributionDeclared = false }: {
+  enteredOn: string; today: string; cycleStartedOn: string | null; investmentStatus: string; hasWallet: boolean; alreadyRegistered: boolean; priorContributionDeclared?: boolean;
 }): { ok: true } | { ok: false; error: string } {
   if (alreadyRegistered) return { ok: false, error: "A entrada deste investimento já foi registrada no capital. Nada foi lançado em dobro." };
+  if (priorContributionDeclared) return { ok: false, error: "O dinheiro deste contrato já foi indicado como um aporte anterior. Registrar a entrada contaria o valor em dobro. Nada foi lançado." };
   if (investmentStatus === "CANCELED") return { ok: false, error: "Este contrato está cancelado: a entrada não pode ser registrada." };
   if (!hasWallet) return { ok: false, error: "Defina o capital inicial da carteira (tela Capital) antes de registrar a entrada." };
   if (enteredOn > today) return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) ainda não chegou. Registre a entrada a partir dessa data.` };
   if (cycleStartedOn && enteredOn < cycleStartedOn) {
     return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}). Nada foi registrado: confira a data no contrato.` };
+  }
+  return { ok: true };
+}
+
+// ── Regra da entrada para a baixa (migração 0023) ───────────────────────────────────────────────────────────────────
+// Contrato novo (capital_entry_rule = 'REQUIRED', gravado pelo banco em todo contrato cadastrado depois da 0023): a
+// baixa só passa com a entrada do contrato registrada no capital. Contrato antigo (NULL: já existia quando a 0023 rodou,
+// sem backfill): passa com a entrada OU com o aporte comum anterior indicado pelo usuário. Sem nenhum dos dois, a baixa
+// é recusada com a explicação; o sistema nunca decide sozinho que o dinheiro de um contrato antigo já entrou.
+export const ENTRY_REQUIRED_ERROR = "Registre primeiro a entrada deste investimento no capital (página do contrato). Sem a entrada, a baixa não é registrada.";
+export const LEGACY_EVIDENCE_ERROR = "Contrato cadastrado antes da regra da entrada: antes da baixa, registre a entrada do investimento no capital ou indique, na página do contrato, o aporte pelo qual o dinheiro já entrou.";
+export const isLegacyContract = (investment: Pick<PayableInvestment, "capitalEntryRule">) => investment.capitalEntryRule === null;
+
+export function entryEvidence(investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "hasPriorContribution">): { ok: true } | { ok: false; error: string } {
+  if (investment.hasEntry) return { ok: true };
+  if (!isLegacyContract(investment)) return { ok: false, error: ENTRY_REQUIRED_ERROR };
+  return investment.hasPriorContribution ? { ok: true } : { ok: false, error: LEGACY_EVIDENCE_ERROR };
+}
+
+// Aporte anterior de um contrato antigo: um aporte comum (CONTRIBUTION da tela Capital ou do Financeiro, nunca de
+// investidor), não estornado, da carteira do contrato e do ciclo atual (o que veio antes de "Zerar carteira" não está
+// mais no capital). Nunca junto com a entrada (contaria o dinheiro em dobro).
+export type PriorContributionCandidate = { id: string; kind: string; source: string; occurredAt: string; amountCents: number; reversed: boolean };
+export function checkPriorContribution({ investment, alreadyDeclared, movement, cycleStartedOn, today }: {
+  investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "status">; alreadyDeclared: boolean; movement: PriorContributionCandidate | null; cycleStartedOn: string | null; today: string;
+}): { ok: true } | { ok: false; error: string } {
+  if (!isLegacyContract(investment)) return { ok: false, error: "Este contrato foi cadastrado com a regra da entrada: registre a entrada do investimento no capital." };
+  if (investment.status === "CANCELED") return { ok: false, error: "Este contrato está cancelado: nada pode ser indicado." };
+  if (investment.hasEntry) return { ok: false, error: "A entrada deste investimento já está registrada no capital. Não há aporte anterior a indicar." };
+  if (alreadyDeclared) return { ok: false, error: "O aporte anterior deste contrato já foi indicado. Nada foi alterado." };
+  if (!movement || movement.kind !== "CONTRIBUTION" || movement.source === "INVESTOR" || movement.reversed) {
+    return { ok: false, error: "Aporte não encontrado nesta carteira ou não pode ser usado (estornado ou de investidor). Nada foi registrado." };
+  }
+  if (movement.occurredAt > today) return { ok: false, error: "Este aporte tem data futura. Nada foi registrado." };
+  if (cycleStartedOn && movement.occurredAt < cycleStartedOn) {
+    return { ok: false, error: `Este aporte é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}) e não está mais no capital. Nada foi registrado.` };
   }
   return { ok: true };
 }
