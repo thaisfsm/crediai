@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { searchPortfolio } from "../src/lib/finance/search.ts";
 
 // Busca global do topo (dados fictícios).
@@ -35,4 +36,27 @@ test("consulta curta ou sem correspondência não retorna nada", () => {
 
 test("respeita o limite de resultados", () => {
   assert.equal(searchPortfolio("op", clients, operations, 1).length, 1);
+});
+
+// Estruturais (mesmo estilo de database-status.test.mjs): garantias que não dependem de banco.
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("a busca é pura: não importa banco, sessão nem ação de servidor (não abre caminho para outro tenant)", () => {
+  const source = read("src/lib/finance/search.ts");
+  assert.doesNotMatch(source, /from "@\/lib\/(db|auth)|use server|fetch\(/);
+});
+
+test("o dashboard busca só nos dados da carteira da sessão (portfolio vindo de loadTenantPortfolio)", () => {
+  const dashboard = read("src/app/dashboard.tsx");
+  assert.match(dashboard, /searchPortfolio\(searchQuery, portfolio\.clients, portfolio\.operations\)/);
+  assert.match(read("src/app/page.tsx"), /const portfolio = await loadTenantPortfolio\(\);/);
+  // Entrada limitada no campo.
+  assert.match(dashboard, /aria-label="Buscar clientes ou operações" maxLength=\{80\}/);
+});
+
+test("/setup redireciona no servidor em produção quando o banco está no ar e não mostra comandos do ambiente", () => {
+  const setup = read("src/app/setup/page.tsx");
+  assert.match(setup, /import \{ redirect \} from "next\/navigation";/);
+  assert.match(setup, /if \(status === "ok"\) \{\n\s+if \(process\.env\.NODE_ENV === "production"\) redirect\("\/"\);/);
+  assert.doesNotMatch(setup, /^"use client"/m);
 });

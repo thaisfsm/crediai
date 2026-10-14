@@ -174,7 +174,8 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
     if (window.location.pathname === "/" && window.location.search !== navHref(label).slice(1)) window.history.replaceState(window.history.state, "", navHref(label));
   };
 
-  const searchResults = searchPortfolio(searchQuery, portfolio.clients, portfolio.operations);
+  // Só dados da carteira já carregados pelo servidor com o tenant da sessão: a busca não consulta nada novo.
+  const searchResults = searchOpen ? searchPortfolio(searchQuery, portfolio.clients, portfolio.operations) : [];
   const closeSearch = () => { setSearchOpen(false); setSearchQuery(""); };
   // Cliente abre a página dele em Clientes; operação abre a tela de Operações.
   const openResult = (result: SearchResult) => {
@@ -197,10 +198,10 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
             <div className="top-action-wrap">
               <button className={`icon-button ${searchOpen ? "icon-button-selected" : ""}`} aria-label="Abrir busca" onClick={() => setSearchOpen(!searchOpen)}><Icon name="search" size={18} /></button>
               {searchOpen && <div className="search-popover search-popover-results">
-                <div className="search-row"><Icon name="search" size={17} /><input autoFocus placeholder="Buscar clientes ou operações" aria-label="Buscar clientes ou operações" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closeSearch(); if (event.key === "Enter" && searchResults[0]) openResult(searchResults[0]); }} /><button aria-label="Fechar busca" onClick={closeSearch}><Icon name="close" size={16} /></button></div>
+                <div className="search-row"><Icon name="search" size={17} /><input autoFocus placeholder="Buscar clientes ou operações" aria-label="Buscar clientes ou operações" maxLength={80} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closeSearch(); if (event.key === "Enter" && searchResults[0]) openResult(searchResults[0]); }} /><button aria-label="Fechar busca" onClick={closeSearch}><Icon name="close" size={16} /></button></div>
                 {searchQuery.trim().length >= 2 && (searchResults.length
-                  ? <ul className="search-results" role="listbox" aria-label="Resultados da busca">{searchResults.map((result) => <li key={`${result.kind}-${result.id}`}><button type="button" role="option" aria-selected="false" onClick={() => openResult(result)}><strong>{result.title}</strong><small>{result.detail}</small></button></li>)}</ul>
-                  : <p className="search-empty">Nenhum cliente ou operação encontrado.</p>)}
+                  ? <ul className="search-results" aria-label="Resultados da busca">{searchResults.map((result) => <li key={`${result.kind}-${result.id}`}><button type="button" onClick={() => openResult(result)}><strong>{result.title}</strong><small>{result.detail}</small></button></li>)}</ul>
+                  : <p className="search-empty" role="status">Nenhum cliente ou operação encontrado.</p>)}
               </div>}
             </div>
             <div className="top-action-wrap">
