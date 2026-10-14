@@ -13,7 +13,7 @@ import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalize
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { loadAllCyclesOperations } from "@/lib/finance/queries";
 import type { OperationView } from "@/lib/finance/portfolio";
-import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
+import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
@@ -285,6 +285,10 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
     if (principalCents > availableCents) {
       return { ok: false, error: `Capital disponível insuficiente. Disponível para novas operações: ${formatMoney(Math.max(availableCents, 0))}.` };
     }
+    // Empréstimo retroativo: o dinheiro sai na data do empréstimo, então nenhum saldo do extrato a partir dela pode
+    // ficar negativo (mesma regra das retiradas e das saídas do Financeiro).
+    const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { add: { date: loanDate, amountCents: -principalCents } });
+    if (negative) return { ok: false, error: capitalGapError("este empréstimo", loanDate, negative) };
     await tx.insert(loanOperations).values({
       id: id("op"), tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
     });
@@ -337,6 +341,11 @@ async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: 
   // O principal antigo volta ao disponível e o novo sai: só a diferença precisa caber no capital.
   const availableCents = await availableCapitalCents(tx, tenantId, { initialCapitalCents: wallet?.initialCapitalCents ?? 0, cycleNumber: wallet?.cycleNumber ?? 1 });
   const availableAfterCents = availableCents + operation.principalCents - next.principalCents;
+  // Valor maior ou data mais antiga: o empréstimo corrigido não pode deixar nenhum saldo do extrato negativo.
+  if (next.principalCents > operation.principalCents || next.loanDate < operation.loanDate) {
+    const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { removeKey: operation.id, add: { date: next.loanDate, amountCents: -next.principalCents } });
+    if (negative && availableAfterCents >= 0) return { ok: false as const, error: capitalGapError("a operação corrigida", next.loanDate, negative) };
+  }
   return { ok: true as const, operation, before, after, next, changes: operationChanges(before, after), availableCents, availableAfterCents };
 }
 
@@ -515,6 +524,10 @@ async function availableCapitalCents(tx: TenantTransaction, tenantId: string, { 
   return initialCapitalCents + Number(movements) - Number(lent) + Number(received);
 }
 
+// Mensagem quando a mudança deixaria algum saldo do extrato do capital negativo.
+const capitalGapError = (what: string, date: string, negative: { date: string; balanceCents: number }) =>
+  `Capital insuficiente: com ${what} em ${formatDate(date)}, o saldo de ${formatDate(negative.date)} ficaria negativo (${formatMoney(negative.balanceCents)}). Confira a data e o valor. Nada foi registrado.`;
+
 async function currentCycle(tx: TenantTransaction, tenantId: string) {
   const [wallet] = await tx.select({ cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId));
   return wallet?.cycleNumber ?? 1;
@@ -582,6 +595,8 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   if (!operationId) return { ok: false, error: "Operação inválida." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
+  // Pagamento só entra no capital e no lucro quando o dinheiro chegou: data futura não é aceita.
+  if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Trava a operação para que dois pagamentos simultâneos não passem do saldo.
     const [operation] = await tx.select().from(loanOperations)
@@ -647,6 +662,7 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
   if (!paymentId) return { ok: false, error: "Pagamento inválido." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
+  if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Mesma ordem de travas da criação de operação e do pagamento: carteira, depois operação.
     const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
@@ -684,6 +700,11 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
       if (availableCents - (payment.amountCents - amountCents) < 0) {
         return { ok: false, error: `Não é possível reduzir este pagamento em ${formatMoney(payment.amountCents - amountCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };
       }
+    }
+    // Pagamento menor ou mais tarde: o dinheiro entra depois (ou menos), e uma saída feita no meio pode ficar sem cobertura.
+    if (amountCents < payment.amountCents || paidAt > payment.paidAt) {
+      const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { removeKey: payment.id, add: { date: paidAt, amountCents } });
+      if (negative) return { ok: false, error: capitalGapError("o pagamento corrigido", paidAt, negative) };
     }
     await tx.insert(paymentRevisions).values({
       id: id("rev"), tenantId, paymentId: payment.id, previousAmountCents: payment.amountCents, previousPaidAt: payment.paidAt, previousNotes: payment.notes,
