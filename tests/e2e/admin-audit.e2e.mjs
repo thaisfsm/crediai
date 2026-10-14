@@ -134,9 +134,7 @@ test("A5. Registros: conta MASTER não aparece como cliente em teste; vencimento
   const masterRow = tenants.slice(start, tenants.indexOf("·", start));
   assert.match(masterRow, /Conta da plataforma/);
   assert.match(masterRow, /Não se aplica/);
-  // "Vence em" da conta MASTER é "—" (o vencimento do teste fictício, 14/10/2026, não aparece). Antes o teste procurava a
-  // data em toda a linha e falhava justamente em 14/10/2026, quando a data de criação do tenant fictício é a mesma.
-  assert.match(masterRow, /Não se aplica — \d\d\/\d\d\/\d{4}/);
+  assert.doesNotMatch(masterRow, /14\/10\/2026/);
   const operations = await html(thais, "/admin/registros?aba=operacoes");
   assert.match(operations, /Vencimento original/);
   assert.match(operations, /Vencimento atual/);
