@@ -530,6 +530,11 @@ button { color:inherit; }
 .search-results strong { color: #e5f0f5; font-size: 12px; }
 .search-results small { color: #8fa5b1; font-size: 10px; }
 .search-empty { margin: 0; padding: 6px 2px 2px; color: #8fa5b1; font-size: 11px; }
+/* A regra geral de .search-popover button (ícone de 27×27) não pode valer para os resultados: sem isto a linha fica
+   com 27 px e o detalhe ("Cliente", nome do cliente da operação) é cortado e sobreposto ao próximo resultado. */
+.search-results button { height: auto; min-height: 40px; place-items: initial; }
+/* No celular o botão de busca fica no meio da barra: o painel ancorado à direita dele saía pela esquerda da tela. */
+@media (max-width: 740px) { .search-popover { position: fixed; top: 64px; right: 16px; left: 16px; width: auto; } }
 
 :focus-visible { outline:2px solid #56e2dc; outline-offset:3px; }
 
