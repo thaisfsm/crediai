@@ -8,6 +8,7 @@ import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import { CHART_VIEWBOX, chartGeometry, type ChartSeries } from "@/lib/finance/chart";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
+import { searchPortfolio, type SearchResult } from "@/lib/finance/search";
 import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
@@ -138,6 +139,8 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [openClientId, setOpenClientId] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   useTableLabels();
   const [intelligenceCoreOpen, setIntelligenceCoreOpen] = useState(false);
@@ -160,7 +163,8 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
   const [chargesView, setChargesView] = useState<ChargesView>("Em aberto");
   // Cada clique no menu abre a tela do início (por exemplo, Clientes volta para a lista, saindo da página de um cliente).
   const [visit, setVisit] = useState(0);
-  const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView } = {}) => {
+  const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView; clientId?: string } = {}) => {
+    setOpenClientId(options.clientId ?? null);
     setVisit((count) => count + 1);
     setOperationsFocus(options.focus ?? null);
     setChargesView(options.charges ?? "Em aberto");
@@ -168,6 +172,14 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
     setMobileMenuOpen(false);
     // Endereço da tela atual (recarregar a página mantém a tela). replaceState não refaz a requisição ao servidor.
     if (window.location.pathname === "/" && window.location.search !== navHref(label).slice(1)) window.history.replaceState(window.history.state, "", navHref(label));
+  };
+
+  const searchResults = searchPortfolio(searchQuery, portfolio.clients, portfolio.operations);
+  const closeSearch = () => { setSearchOpen(false); setSearchQuery(""); };
+  // Cliente abre a página dele em Clientes; operação abre a tela de Operações.
+  const openResult = (result: SearchResult) => {
+    closeSearch();
+    if (result.kind === "client") navigate("Clientes", { clientId: result.id }); else navigate("Operações");
   };
 
   return (
@@ -184,7 +196,12 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
             <span className="secure-label"><Icon name="sparkles" size={14} /> Prévia local</span>
             <div className="top-action-wrap">
               <button className={`icon-button ${searchOpen ? "icon-button-selected" : ""}`} aria-label="Abrir busca" onClick={() => setSearchOpen(!searchOpen)}><Icon name="search" size={18} /></button>
-              {searchOpen && <div className="search-popover"><Icon name="search" size={17} /><input autoFocus placeholder="Buscar clientes ou operações" aria-label="Buscar clientes ou operações" /><button aria-label="Fechar busca" onClick={() => setSearchOpen(false)}><Icon name="close" size={16} /></button></div>}
+              {searchOpen && <div className="search-popover search-popover-results">
+                <div className="search-row"><Icon name="search" size={17} /><input autoFocus placeholder="Buscar clientes ou operações" aria-label="Buscar clientes ou operações" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") closeSearch(); if (event.key === "Enter" && searchResults[0]) openResult(searchResults[0]); }} /><button aria-label="Fechar busca" onClick={closeSearch}><Icon name="close" size={16} /></button></div>
+                {searchQuery.trim().length >= 2 && (searchResults.length
+                  ? <ul className="search-results" role="listbox" aria-label="Resultados da busca">{searchResults.map((result) => <li key={`${result.kind}-${result.id}`}><button type="button" role="option" aria-selected="false" onClick={() => openResult(result)}><strong>{result.title}</strong><small>{result.detail}</small></button></li>)}</ul>
+                  : <p className="search-empty">Nenhum cliente ou operação encontrado.</p>)}
+              </div>}
             </div>
             <div className="top-action-wrap">
               <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{pendingCharges > 0 && <span className="notification-dot" />}</button>
@@ -283,7 +300,7 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
           ) : active === "Capital" ? (
             <CapitalPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Clientes" ? (
-            <ClientsPage key={visit} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
+            <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
           ) : active === "Operações" ? (
             <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} />
           ) : active === "Pagamentos" ? (

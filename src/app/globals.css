@@ -1085,3 +1085,13 @@ button { color:inherit; }
 .chart-tooltip-date { color:#8fa6b4; font-size:9px; }
 .chart-tooltip-value { color:#edf6fa; font-size:13px; font-weight:650; letter-spacing:-.2px; }
 .chart-tooltip small { color:#7f95a4; font-size:8px; }
+
+/* Busca global do topo com resultados */
+.search-popover.search-popover-results { flex-direction: column; align-items: stretch; gap: 8px; }
+.search-row { display: flex; align-items: center; gap: 9px; }
+.search-results { margin: 0; padding: 4px 0 0; list-style: none; border-top: 1px solid rgba(127,169,188,.14); max-height: 300px; overflow-y: auto; }
+.search-results button { display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px; border: 0; border-radius: 8px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.search-results button:hover, .search-results button:focus-visible { background: rgba(124,226,219,.08); outline: none; }
+.search-results strong { color: #e5f0f5; font-size: 12px; }
+.search-results small { color: #8fa5b1; font-size: 10px; }
+.search-empty { margin: 0; padding: 6px 2px 2px; color: #8fa5b1; font-size: 11px; }
