@@ -346,7 +346,7 @@ test("CP13. telas no desktop e no celular: contas a pagar, detalhe, formulário 
     await browserPage.goto(`${BASE}/investidores/investimentos/${ids.investmentB}`);
     const cash = browserPage.getByRole("region", { name: "Capital e pagamentos do investimento" });
     await cash.getByRole("button", { name: "Registrar a entrada deste investimento no capital" }).click();
-    await cash.getByText(`Confirmo que ${money(5_000_000)} entraram na carteira`).waitFor();
+    await cash.getByText(`Confirmo que ${money(6_000_000)} entraram na carteira`).waitFor();
     if (SHOTS) await cash.screenshot({ path: `${SHOTS}/contrato-entrada-capital-${label}.png` });
     assert.equal(await browserPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal no contrato (${label})`);
     await context.close();
