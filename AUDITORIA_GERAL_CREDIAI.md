@@ -453,7 +453,7 @@ primeira validação com login da seção 9 ("Publicados **e** validados em prod
 | **`/setup` sem login** | Mostra "BANCO DE DADOS CONECTADO… PostgreSQL" a qualquer visitante. Não cria nada, mas expõe estado da infraestrutura. |
 | Observações sem correção (decisão de design) | Selo "Prévia local" e painel "CrediAI Intelligence" com status fixos ("Processamento ativo", "agora") em produção; KPI do Admin "0 vencidos" junto de "Período de teste vencido" na lista de atenção (teste vencido conta como "em teste" por regra em `commercialGroup`). |
 
-### 13.2 Correções (branch `claude/auditoria-busca-global-setup`, base `main` 5c55e47; **não enviada ao GitHub**)
+### 13.2 Correções (branch `claude/auditoria-busca-global-setup`, base `main` 5c55e47; enviada depois: PR [#21](https://github.com/thaisfsm/crediai/pull/21), draft, ver 13.8)
 Commits locais `13872be` e `9fae773`. Patch: `crediai-busca-global-setup.patch`.
 
 | Arquivo | Mudança |
@@ -504,8 +504,8 @@ viável com segurança. Sandbox desligado após 73 s, sem dado algum.
 ### 13.5 Situação por item
 | Item | Implementado | Testado | Validado no navegador | Publicado em produção |
 |---|---|---|---|---|
-| Busca global do topo | Sim (branch local) | Unitário + estrutural | Não (falha original confirmada na produção) | **Não** |
-| `/setup` redireciona em produção | Sim (branch local) | Estrutural + DB1–DB5 | Não (estado atual confirmado na produção) | **Não** |
+| Busca global do topo | Sim (PR #21, draft) | Unitário, estrutural, E2E e navegador local (13.8) | Sim, no navegador local com dados fictícios; a falha original foi confirmada na produção | **Não** |
+| `/setup` redireciona em produção | Sim (PR #21, draft) | Estrutural, DB1–DB5 e navegador local (13.8) | Sim, no navegador local com `next start`: 307 → `/`. O estado atual foi confirmado na produção | **Não** |
 
 ### 13.6 Para concluir (barreiras reais)
 1. **Escrita no GitHub:** adicionar `thaisfsm/crediai` como repositório da sessão (fonte do projeto CrediAi_Oficial no
@@ -519,3 +519,61 @@ viável com segurança. Sandbox desligado após 73 s, sem dado algum.
 ### 13.7 Confirmação desta etapa
 Nenhum merge, deploy, migration, conta criada ou dado real alterado. Na produção: só navegação e leitura; os campos do
 simulador foram preenchidos sem envio e descartados. Usuários reais (incluindo Fernando e Robério) não foram tocados.
+
+### 13.8 Envio e validação completa (14/10/2026, 19h UTC, thread "Auditoria geral", com npm e Postgres descartável)
+As barreiras 1 e 2 da seção 13.6 foram resolvidas assim.
+
+**Os patches conferem.** Os sha256 são os informados: busca 35f54b8a…1722 e relatório 02d090c5…60be. Os dois
+aplicam limpo com `git am`, a busca sobre `origin/main` 5c55e47 e o relatório sobre `claude/project-thread-6z1878`
+98b1d27. Os patch-ids são idênticos aos dos commits originais `13872be`, `9fae773` e `98a84f5`. Só o SHA muda, porque
+muda a data do commit. As correções não foram recriadas.
+
+**PRs.**
+- Correção: [#21](https://github.com/thaisfsm/crediai/pull/21), draft, base `main`, commits `c397945`, `88fdc76` e
+  `474aa7e`.
+- Este relatório: PR draft próprio, branch `claude/auditoria-relatorio-busca-setup`, base `claude/project-thread-6z1878`.
+
+**Defeito achado na validação e corrigido.** O commit novo é o `474aa7e` (só CSS). A regra `.search-popover button`,
+feita para o ícone de 27×27, também valia para os resultados. Cada linha ficava com 27 px, e o detalhe ("Cliente" ou o
+nome do cliente da operação) era cortado e sobreposto ao resultado seguinte. No celular, o painel ancorado à direita da
+lupa saía pela esquerda da tela. As capturas de antes e de depois estão em
+`/mnt/project-files/auditoria-busca-global-setup/telas/`.
+
+| Verificação | Resultado real | Comando |
+|---|---|---|
+| Build, lint, typecheck completo, schema | sem erro, nas duas rodadas (antes e depois do `474aa7e`) | `npm run build`, `npm run lint`, `npx tsc --noEmit`, `drizzle-kit check` |
+| Unitários | **111/111**, sendo 103 da main e 8 da busca; nas duas rodadas | `npm test` |
+| E2E com BYPASSRLS (7 arquivos, banco novo a cada arquivo) | **61/62** | `run-all.sh crediai_bypass` |
+| E2E sem BYPASSRLS (só RLS) | **61/62**, com `isolation` 7/7 | `run-all.sh crediai_app` |
+| `browser.e2e.mjs` | **6/6**, nas duas rodadas | `node --test tests/e2e/browser.e2e.mjs` |
+| Busca e `/setup` no navegador, desktop 1440 e celular 390 | **30/30**, depois do `474aa7e` | `navegador-busca-setup.mjs` |
+
+A única falha de E2E é o **A5** de `admin-audit`, igual nos dois perfis. O teste procura "14/10/2026" na linha inteira
+da conta MASTER, e hoje é 14/10/2026. Ele falha do mesmo jeito na main sem a busca (seção 5.1), e a correção do teste
+está no PR #20 (`1420999`). Os E2E rodaram antes do `474aa7e`; depois dele, que só muda CSS, rodaram de novo o build,
+o lint, os tipos, os unitários, o `browser.e2e` e a verificação no navegador.
+
+**O que a verificação no navegador cobriu.** Login real como Fernando, com dados fictícios. Os casos:
+- nome sem diferença de maiúsculas;
+- CPF por dígitos e com máscara;
+- telefone e e-mail;
+- código da operação com e sem `#`;
+- mensagem quando não há resultado (`role=status`);
+- consulta de 1 letra, que não busca;
+- limite de 80 caracteres;
+- clique no cliente, que abre a ficha em Clientes;
+- Enter, que abre o 1º resultado (uma operação abre Operações);
+- Esc, que fecha e limpa;
+- painel dentro da tela e linhas com título e detalhe inteiros;
+- nenhuma rolagem horizontal;
+- console sem erro.
+
+O isolamento foi testado no navegador: Robério (outro tenant) e o MASTER, em `/`, não acham nenhum cliente ou operação
+do Fernando, nem pelo nome, pelo CPF ou pelo código. `/setup` sem login, com o banco no ar e `next start`
+(`NODE_ENV=production`), responde **307 → `/`** e termina em `/login`, sem mostrar o estado do banco.
+
+**Ainda pendente.** Validação com login na produção depois de publicar, e publicação, as duas só com seu OK. Na
+publicação, juntar com a pilha #12–#20 gera conflito trivial em `src/app/portfolio-pages.tsx`: manter as duas mudanças.
+
+**Confirmação.** Nenhum merge, deploy ou migration. Nenhum dado real foi lido para teste ou alterado. Os PRs estão em
+draft.
