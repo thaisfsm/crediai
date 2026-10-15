@@ -10,6 +10,7 @@ import { DateField } from "../date-field";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon, type IconName } from "../ui-icon";
 import { registerFinanceMovementAction } from "./actions";
+import { FinanceSubnav } from "./finance-subnav";
 
 function MetricCard({ label, value, caption, icon, tone = "teal" }: { label: string; value: string; caption: string; icon: IconName; tone?: "teal" | "blue" | "purple" }) {
   return (
@@ -97,6 +98,7 @@ export function FinanceHome({ data }: { data: FinancePageData }) {
         <button className="outline-button" disabled={!data.hasWallet} onClick={() => setCreating(creating === "IN" ? null : "IN")}><Icon name="plus" size={17} /> Nova entrada</button>
         <button className="primary-button" disabled={!data.hasWallet} onClick={() => setCreating(creating === "OUT" ? null : "OUT")}><Icon name="arrow" size={17} /> Nova saída</button>
       </PageHeading>
+      <FinanceSubnav active="movimentacoes" />
 
       {!data.hasWallet && <EmptyPanel icon="wallet" text="Defina o capital inicial da carteira na tela Capital para começar a registrar movimentações." action={<Link prefetch={false} className="primary-button" href="/?tela=capital">Ir para Capital</Link>} />}
 

@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import { Fragment, useRef, useState, type FormEvent } from "react";
 import { formatDate, formatMoney, parseMoneyToCents, centsToInput } from "@/lib/finance/format";
 import {
-  LEGACY_EVIDENCE_ERROR, OBLIGATION_KINDS, OBLIGATION_STATUS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, statusSlug,
-  type Obligation, type ObligationKind, type ObligationStatus, type PaymentMethod,
+  LEGACY_EVIDENCE_ERROR, OBLIGATION_KINDS, OBLIGATION_SOURCES, OBLIGATION_STATUS, PAYABLE_TABS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, obligationDescription, statusSlug,
+  type Obligation, type ObligationKind, type ObligationStatus, type PayableTab, type PaymentMethod,
 } from "@/lib/investors/payables";
 import type { PayablesPageData } from "@/lib/investors/payables-queries";
 import { DateField } from "../date-field";
+import { FinanceSubnav } from "../financeiro/finance-subnav";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon, type IconName } from "../ui-icon";
 import { registerInvestmentPaymentAction } from "./actions";
@@ -116,16 +117,17 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
-  const columns = showInvestor ? 8 : 7;
+  const columns = showInvestor ? 9 : 8;
   return (
     <div className="table-scroll"><table className="data-table" aria-label={label}>
-      <thead><tr>{showInvestor && <th>Investidor e contrato</th>}<th>Vencimento</th><th>Tipo</th><th>Previsto</th><th>Pago</th><th>Saldo</th><th>Situação</th><th /></tr></thead>
+      <thead><tr><th>Descrição</th>{showInvestor && <th>Investidor e contrato</th>}<th>Vencimento</th><th>Tipo</th><th>Previsto</th><th>Pago</th><th>Saldo</th><th>Situação</th><th /></tr></thead>
       <tbody>{obligations.map((obligation) => {
         const open = openKey === obligation.key;
         const minDate = [obligation.startDate, cycleStartedOn ?? ""].sort().at(-1) as string;
         return (
           <Fragment key={obligation.key}>
             <tr>
+              <td>{obligationDescription(obligation)}<small className="admin-cell-note">{OBLIGATION_SOURCES[obligation.source]}</small></td>
               {showInvestor && <td><strong>{obligation.investorName}</strong><small className="admin-cell-note">{obligation.contractLabel} · parcela {obligation.number}</small></td>}
               <td>{formatDate(obligation.dueDate)}</td>
               <td>{OBLIGATION_KINDS[obligation.kind]}</td>
@@ -166,30 +168,63 @@ const SECTIONS = [
   { key: "upcoming", title: "Próximas", empty: "Nenhuma obrigação futura em aberto.", icon: "calendar" },
   { key: "paid", title: "Pagas", empty: "Nenhuma obrigação paga ainda.", icon: "check" },
 ] as const;
+type SectionKey = (typeof SECTIONS)[number]["key"] | "today";
+const TAB_SECTIONS: Record<PayableTab, { key: SectionKey; title: string; empty: string; icon: IconName }[]> = {
+  hoje: [{ key: "today", title: "Obrigações de hoje", empty: "Nada vence hoje.", icon: "clock" }],
+  vencidos: [SECTIONS[0]],
+  proximos: [SECTIONS[2]],
+  pagos: [SECTIONS[3]],
+  todos: [...SECTIONS],
+};
 
-// /contas-a-pagar: obrigações com investidores vindas dos cronogramas dos contratos, separadas em vencidas, de hoje,
-// próximas e pagas, com totais, busca e filtros. Só a carteira da sessão.
+// /contas-a-pagar (dentro do Financeiro): obrigações com investidores vindas dos cronogramas dos contratos, em abas
+// (Hoje, Vencidos, Próximos, Pagos, Todos), com o resumo do dia, busca e filtros. Só a carteira da sessão.
 export function PayablesHome({ data }: { data: PayablesPageData }) {
   const router = useRouter();
-  const { filters, totals, sections } = data;
+  const { filters, totals, sections, overview, tab } = data;
   const filtered = Boolean(filters.q || filters.from || filters.to || filters.status || filters.kind);
   const period = filters.from || filters.to ? `${filters.from ? formatDate(filters.from) : "início"} a ${filters.to ? formatDate(filters.to) : "hoje"}` : "Todo o histórico";
+  const query = (aba: PayableTab) => {
+    const params = new URLSearchParams();
+    if (aba !== "hoje") params.set("aba", aba);
+    if (filters.q) params.set("q", filters.q);
+    if (filters.from) params.set("de", filters.from);
+    if (filters.to) params.set("ate", filters.to);
+    if (filters.status) params.set("situacao", statusSlug(filters.status));
+    if (filters.kind) params.set("tipo", kindSlug(filters.kind));
+    const text = params.toString();
+    return text ? `/contas-a-pagar?${text}` : "/contas-a-pagar";
+  };
+  const tabCount: Record<PayableTab, number> = { hoje: sections.today.length, vencidos: sections.overdue.length, proximos: sections.upcoming.length, pagos: sections.paid.length, todos: data.matched };
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · CONTAS A PAGAR" title="Contas a pagar"
+      <PageHeading eyebrow="CREDIAI · FINANCEIRO" title="Contas a pagar"
         description="Rendimentos e devoluções de principal combinados com os investidores, a partir do cronograma de cada contrato. Só a baixa confirmada tira dinheiro do capital." />
+      <FinanceSubnav active="contas" />
 
       {!data.hasWallet && <EmptyPanel icon="wallet" text="Defina o capital inicial da carteira na tela Capital para registrar pagamentos." action={<Link prefetch={false} className="primary-button" href="/?tela=capital">Ir para Capital</Link>} />}
 
-      <section className="metric-grid" aria-label="Resumo das contas a pagar">
-        <MetricCard icon="clock" label="Vence hoje" value={formatMoney(totals.dueTodayCents)} caption={`${sections.dueToday.length} ${sections.dueToday.length === 1 ? "obrigação" : "obrigações"}`} />
-        <MetricCard icon="alert" tone="purple" label="Total vencido" value={formatMoney(totals.overdueCents)} caption={`${sections.overdue.length} em atraso`} />
-        <MetricCard icon="check" tone="blue" label="Pago no período" value={formatMoney(totals.paidCents)} caption={`${period} · ${totals.paidCount} ${totals.paidCount === 1 ? "baixa" : "baixas"}`} />
+      <section className="metric-grid payables-day-grid" aria-label="Resumo do dia">
+        <MetricCard icon="calendar" label="Previsto hoje" value={formatMoney(overview.expectedTodayCents)} caption={`${overview.dueTodayCount} ${overview.dueTodayCount === 1 ? "obrigação vence" : "obrigações vencem"} hoje`} />
+        <MetricCard icon="check" tone="blue" label="Pago hoje" value={formatMoney(overview.paidTodayCents)} caption={`${overview.paidTodayCount} ${overview.paidTodayCount === 1 ? "baixa" : "baixas"} com data de hoje`} />
+        <MetricCard icon="clock" label="Restante hoje" value={formatMoney(overview.dueTodayCents)} caption={`${overview.pendingTodayCount} ${overview.pendingTodayCount === 1 ? "pendente" : "pendentes"} hoje`} />
+        <MetricCard icon="alert" tone="purple" label="Total vencido" value={formatMoney(overview.overdueCents)} caption={`${overview.overdueCount} em atraso`} />
         <MetricCard icon="dollar" label="Capital disponível" value={formatMoney(data.availableCents)} caption={`Em aberto: ${formatMoney(totals.openCents)}`} />
       </section>
 
+      <nav className="payables-tabs" aria-label="Filtro das contas a pagar">
+        {(Object.keys(PAYABLE_TABS) as PayableTab[]).map((key) => (
+          <Link prefetch={false} key={key} href={query(key)} aria-current={tab === key ? "page" : undefined}>{PAYABLE_TABS[key]} <span>{tabCount[key]}</span></Link>
+        ))}
+      </nav>
+
+      {tab === "hoje" && overview.overdueCount > 0 && (
+        <p className="payables-alert" role="note"><Icon name="alert" size={15} /> {overview.overdueCount} {overview.overdueCount === 1 ? "obrigação vencida continua" : "obrigações vencidas continuam"} em aberto ({formatMoney(overview.overdueCents)}). <Link prefetch={false} className="text-link inline-link" href={query("vencidos")}>Ver vencidos</Link></p>
+      )}
+
       <section className="panel form-panel" aria-label="Filtros">
         <form className="investor-filters payables-filters" action="/contas-a-pagar" method="get" role="search" key={JSON.stringify(filters)}>
+          {tab !== "hoje" && <input type="hidden" name="aba" value={tab} />}
           <label className="field"><span>Investidor</span><input name="q" defaultValue={filters.q} placeholder="Nome ou identificação do contrato" /></label>
           <DateField label="Vencimento de" name="de" defaultValue={filters.from ?? ""} />
           <DateField label="até" name="ate" defaultValue={filters.to ?? ""} />
@@ -201,14 +236,14 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
             <option value="">Todos</option>
             {(Object.keys(OBLIGATION_KINDS) as ObligationKind[]).map((kind) => <option key={kind} value={kindSlug(kind)}>{OBLIGATION_KINDS[kind]}</option>)}
           </select></label>
-          <div className="investor-filter-actions"><button className="outline-button"><Icon name="filter" size={15} /> Aplicar</button>{filtered && <Link prefetch={false} className="text-link" href="/contas-a-pagar">Limpar filtros</Link>}</div>
+          <div className="investor-filter-actions"><button className="outline-button"><Icon name="filter" size={15} /> Aplicar</button>{filtered && <Link prefetch={false} className="text-link" href={tab === "hoje" ? "/contas-a-pagar" : `/contas-a-pagar?aba=${tab}`}>Limpar filtros</Link>}</div>
         </form>
-        <p className="capital-note">{filtered ? `${data.matched} de ${data.totalCount} obrigações com estes filtros. Os totais seguem os filtros.` : `${data.totalCount} obrigações nos cronogramas dos contratos.`}</p>
+        <p className="capital-note">{filtered ? `${data.matched} de ${data.totalCount} obrigações com estes filtros. Pago no período: ${formatMoney(totals.paidCents)} (${period}).` : `${data.totalCount} obrigações nos cronogramas dos contratos. Pago em todo o histórico: ${formatMoney(totals.paidCents)}.`}</p>
       </section>
 
       {data.totalCount === 0 && <EmptyPanel icon="briefcase" text="Nenhuma obrigação ainda. Monte o cronograma de pagamentos na página de cada contrato de investimento." action={<Link prefetch={false} className="outline-button" href="/investidores">Ir para Investidores</Link>} />}
 
-      {data.totalCount > 0 && SECTIONS.map((section) => {
+      {data.totalCount > 0 && TAB_SECTIONS[tab].map((section) => {
         const list = sections[section.key];
         return (
           <section key={section.key} className="panel table-panel" aria-label={section.title}>
@@ -219,7 +254,7 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
           </section>
         );
       })}
-      <p className="capital-note">Os valores previstos são os digitados no cronograma: o sistema não calcula rendimento. Uma obrigação prevista não mexe no capital; cada baixa grava uma única saída no Financeiro (Rendimento pago a investidor ou Devolução de principal a investidor).</p>
+      <p className="capital-note">Os valores previstos são os digitados no cronograma: o sistema não calcula rendimento. Uma obrigação pendente não mexe no capital; cada baixa grava uma única saída no Financeiro (Rendimento pago a investidor ou Devolução de principal a investidor).</p>
     </div>
   );
 }

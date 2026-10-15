@@ -1177,3 +1177,41 @@ button { color:inherit; }
 .lines-editor input, .lines-editor select { width:100%; min-width:0; }
 .lines-editor td { vertical-align:top; }
 @media (max-width: 900px) { .position-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Contas a pagar no Dashboard (mesmo resumo da tela Financeiro → Contas a pagar). */
+.payables-dashboard { margin-top: 14px; padding: 16px 18px 14px; }
+.payables-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.payables-stat { display: flex; min-width: 0; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid rgba(124,172,195,.15); border-radius: 9px; }
+.payables-stat-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.payables-stat-copy strong { font-size: 17px; overflow-wrap: anywhere; }
+.payables-stat-copy small { opacity: .72; font-size: 11.5px; }
+.payables-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 0; padding: 9px 11px; border-radius: 8px; background: rgba(255, 120, 120, .08); font-size: 13px; }
+.payables-lists { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; margin-top: 14px; }
+.payables-lists h3 { margin: 0 0 6px; font-size: 14px; }
+.payables-lists h3 small { margin-left: 6px; opacity: .65; font-weight: 400; }
+.payables-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(90px, auto); align-items: center; gap: 10px; min-height: 50px; border-top: 1px solid rgba(124,172,195,.12); }
+.payables-row .charge-amount { text-align: right; }
+.payables-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.payables-tabs a { padding: 7px 13px; border: 1px solid rgba(124,172,195,.22); border-radius: 999px; font-size: 13px; text-decoration: none; color: inherit; }
+.payables-tabs a[aria-current="page"] { border-color: transparent; background: linear-gradient(135deg, #36b9ad, #2a8fd6); color: #fff; font-weight: 600; }
+.payables-tabs a span { margin-left: 5px; opacity: .8; }
+.finance-subnav { display: flex; flex-wrap: wrap; gap: 6px; }
+.finance-subnav a { padding: 7px 13px; border: 1px solid rgba(124,172,195,.22); border-radius: 8px; font-size: 13px; text-decoration: none; color: inherit; }
+.finance-subnav a[aria-current="page"] { border-color: transparent; background: rgba(54,185,173,.18); font-weight: 600; }
+.nav-subitem { padding-left: 34px; font-size: 13px; }
+@media (max-width: 1100px) { .payables-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .payables-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .payables-lists { grid-template-columns: 1fr; }
+  .payables-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .payables-dashboard { padding: 13px 12px 12px; }
+  .payables-stat .secondary-icon { display: none; }
+  .payables-stat-copy strong { font-size: 15px; white-space: nowrap; overflow-wrap: normal; }
+  .payables-row { padding: 6px 0; row-gap: 4px; }
+  .payables-row .charge-person { grid-row: 1 / span 2; }
+  .payables-row .status-chip { justify-self: end; }
+  .payables-dashboard .panel-header { flex-wrap: wrap; gap: 10px; }
+}
+.metric-grid.payables-day-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .metric-grid.payables-day-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .metric-grid.payables-day-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

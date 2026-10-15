@@ -5,11 +5,11 @@ import { capitalMovements, investmentCapitalEntries, investmentPayments, investm
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { todayIso } from "@/lib/finance/format";
 import {
-  buildObligations, filterObligations, parsePayablesFilters, payablesSections, payablesTotals,
+  buildObligations, filterObligations, parsePayableTab, parsePayablesFilters, payablesOverview, payablesSections, payablesTotals,
   type ObligationKind, type PayableInvestment, type PayablePayment, type PaymentMethod,
 } from "./payables";
 
-type Search = { q?: string; de?: string; ate?: string; situacao?: string; tipo?: string };
+type Search = { q?: string; de?: string; ate?: string; situacao?: string; tipo?: string; aba?: string };
 
 // Baixas do tenant (todas ou de um contrato), com o nome de quem registrou. Usuários não têm RLS: o filtro é explícito
 // (mesmo tenant ou o MASTER).
@@ -67,8 +67,20 @@ export async function loadPayablesPage(search: Search) {
     const visible = filterObligations(all, filters);
     return {
       today, hasWallet: Boolean(wallet), cycleStartedOn: cycleStartedOn(wallet), availableCents: portfolio.summary.availableCents,
+      tab: parsePayableTab(search.aba),
+      // Resumo do dia: sempre sobre todas as obrigações da carteira (os filtros mudam só a lista), igual ao Dashboard.
+      overview: payablesOverview(all, today),
       filters, totalCount: all.length, matched: visible.length, sections: payablesSections(visible, today), totals: payablesTotals(visible, filters, today),
     };
+  });
+}
+
+// Resumo das contas a pagar para o Dashboard: as mesmas obrigações e a mesma função de resumo da página Contas a Pagar
+// (uma única lógica), só da carteira da sessão.
+export async function loadDashboardPayables() {
+  return withTenantContext(async (tx, { tenantId }) => {
+    const today = todayIso();
+    return payablesOverview(await loadTenantObligations(tx, tenantId, today), today);
   });
 }
 export type PayablesPageData = Awaited<ReturnType<typeof loadPayablesPage>>;
