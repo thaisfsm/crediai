@@ -14,10 +14,11 @@ test("IV1. investidor: só o nome é obrigatório; CPF/CNPJ, telefones e e-mail 
   assert.deepEqual(minimal.values, {
     name: "Ana Investidora", document: null, phone: null, whatsapp: null, email: null, instagram: null, facebook: null, notes: null, status: "ACTIVE",
     addressCep: null, addressStreet: null, addressNumber: null, addressComplement: null, addressDistrict: null, addressCity: null, addressState: null,
+    bankHolderName: null, bankHolderDocument: null, bankName: null, bankBranch: null, bankAccount: null, bankAccountType: null, pixKeyType: null, pixKey: null,
   });
-  const full = investorFields(form({ name: "Empresa X Ltda", document: "12.345.678/0001-90", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321", email: " Contato@Empresa.COM ", instagram: "@empresax", facebook: "https://facebook.com/empresax", notes: "obs", status: "INACTIVE" }));
+  const full = investorFields(form({ name: "Empresa X Ltda", document: "11.222.333/0001-81", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321", email: " Contato@Empresa.COM ", instagram: "@empresax", facebook: "https://facebook.com/empresax", notes: "obs", status: "INACTIVE" }));
   assert.equal(full.ok, true);
-  assert.equal(full.values.document, "12345678000190");
+  assert.equal(full.values.document, "11222333000181");
   assert.equal(full.values.whatsapp, "11987654321");
   assert.equal(full.values.email, "contato@empresa.com");
   assert.equal(full.values.status, "INACTIVE");
@@ -44,8 +45,8 @@ test("IV2. redes sociais: @usuário ou URL, sem validação restritiva; link só
 
 test("IV3. CPF ou CNPJ com máscara", () => {
   assert.equal(maskCpfCnpj("41179705858"), "411.797.058-58");
-  assert.equal(maskCpfCnpj("12345678000190"), "12.345.678/0001-90");
-  assert.equal(formatCpfCnpj("12345678000190"), "12.345.678/0001-90");
+  assert.equal(maskCpfCnpj("11222333000181"), "11.222.333/0001-81");
+  assert.equal(formatCpfCnpj("11222333000181"), "11.222.333/0001-81");
   assert.equal(formatCpfCnpj("RG 123"), "RG 123");
   assert.equal(normalizeCpfCnpj("11111111111").ok, false);
 });
@@ -54,7 +55,10 @@ test("IV4. investimento: taxa e período obrigatórios, período nunca presumido
   const base = { amount: "50.000,00", rate: "1,5", ratePeriod: "MONTHLY", startDate: "2026-10-01" };
   const ok = investmentFields(form(base));
   assert.equal(ok.ok, true);
-  assert.deepEqual(ok.values, { amountCents: 5_000_000, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-01", maturityDate: null, dueDay: null, notes: null, status: "ACTIVE" });
+  assert.deepEqual(ok.values, {
+    amountCents: 5_000_000, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-01", maturityDate: null, dueDay: null, notes: null, status: "ACTIVE",
+    contractNumber: null, investedOn: null, termMonths: null, paymentFrequency: null, installmentCount: null,
+  });
   assert.equal(investmentFields(form({ ...base, ratePeriod: "" })).ok, false, "sem período escolhido não grava");
   assert.equal(investmentFields(form({ ...base, rate: "" })).ok, false);
   assert.equal(investmentFields(form({ ...base, amount: "0" })).ok, false);

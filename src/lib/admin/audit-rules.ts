@@ -29,6 +29,7 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_CONTRACTOR_UPDATED: "Dados da empresa contratante alterados",
   INVESTMENT_CONTRACT_GENERATED: "Contrato de investimento gerado",
   INVESTMENT_CONTRACT_SENT: "Contrato marcado como enviado para assinatura",
+  INVESTMENT_SCHEDULE_UPDATED: "Cronograma de pagamentos ao investidor alterado",
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
   WALLET_INITIAL_CAPITAL_CHANGED: "Capital inicial da carteira definido ou alterado",
 } as const;

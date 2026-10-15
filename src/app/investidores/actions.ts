@@ -1,19 +1,23 @@
 "use server";
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, max, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { AuditAction } from "@/lib/admin/audit-rules";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { investmentContractors, investmentContracts, investmentDocuments, investments, investors, tenants } from "@/lib/db/schema";
+import { bankKeys } from "@/lib/bank-account";
+import { investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, tenants } from "@/lib/db/schema";
 import { formatMoney } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext } from "@/lib/investors/access";
 import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
 import { contractFonts } from "@/lib/investors/contract-fonts";
 import { renderContractPdf } from "@/lib/investors/contract-pdf";
 import { contractDataHash, contractSource, loadContractor } from "@/lib/investors/contract-source";
-import { DOCUMENT_KINDS, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, type InvestmentValues, type InvestorValues } from "@/lib/investors/rules";
+import {
+  DOCUMENT_KINDS, MAX_SCHEDULE_ITEMS, investmentChanges, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, scheduleBuildFields, scheduleItemFields, scheduleSummary,
+  type InvestmentValues, type InvestorValues, type ScheduleItemValues,
+} from "@/lib/investors/rules";
 
 export type InvestorActionResult = { ok: true; message: string; id?: string } | { ok: false; error: string };
 
@@ -28,9 +32,11 @@ const notesMark = (notes: string | null) => (notes ? `preenchidas (${notes.lengt
 // Endereço também não vai por extenso: só se está preenchido e a cidade/UF.
 const addressMark = (values: { addressStreet: string | null; addressCity: string | null; addressState: string | null; addressCep: string | null }) =>
   values.addressStreet || values.addressCity || values.addressCep ? `preenchido (${[values.addressCity, values.addressState].filter(Boolean).join("/") || "sem cidade"})` : null;
+// Dados bancários nunca vão para a auditoria: só se estão preenchidos.
+const bankMark = (values: InvestorValues) => (bankKeys.some((key) => values[key]) ? "preenchidos" : null);
 function investorSnapshot(values: InvestorValues) {
-  const snapshot: Record<string, unknown> = { ...values, notes: notesMark(values.notes), address: addressMark(values) };
-  for (const key of investorAddressKeys) delete snapshot[key];
+  const snapshot: Record<string, unknown> = { ...values, notes: notesMark(values.notes), address: addressMark(values), bank: bankMark(values) };
+  for (const key of [...investorAddressKeys, ...bankKeys]) delete snapshot[key];
   return snapshot;
 }
 const investmentSnapshot = (values: InvestmentValues) => ({ ...values, notes: notesMark(values.notes) });
@@ -50,6 +56,8 @@ const duplicateDocument = violates(/investor_tenant_document_unique/);
 const duplicateSignedContract = violates(/investment_document_current_contract_unique/);
 const SIGNED_CONTRACT_ERROR = { ok: false as const, error: "Este investimento já tem contrato assinado. Use \"Substituir\" para enviar uma nova versão." };
 const DUPLICATE_ERROR = { ok: false as const, error: "Já existe um investidor com este CPF/CNPJ nesta carteira." };
+const duplicateContractNumber = violates(/investment_tenant_contract_number_unique/);
+const CONTRACT_NUMBER_ERROR = { ok: false as const, error: "Já existe um contrato com esta identificação nesta carteira." };
 
 function refresh() {
   revalidatePath("/investidores", "layout");
@@ -96,6 +104,7 @@ export async function updateInvestorAction(data: FormData): Promise<InvestorActi
       const before = investorSnapshot({
         name: current.name, document: current.document, phone: current.phone, whatsapp: current.whatsapp, email: current.email, instagram: current.instagram, facebook: current.facebook, notes: current.notes, status: current.status,
         ...(Object.fromEntries(investorAddressKeys.map((key) => [key, current[key]])) as Pick<InvestorValues, (typeof investorAddressKeys)[number]>),
+        ...(Object.fromEntries(bankKeys.map((key) => [key, current[key]])) as Pick<InvestorValues, (typeof bankKeys)[number]>),
       });
       const after = investorSnapshot(fields.values);
       const { status: statusBefore, ...dataBefore } = before;
@@ -128,6 +137,9 @@ export async function createInvestmentAction(data: FormData): Promise<InvestorAc
     await audit(tx, scope, investor.tenantId, "INVESTMENT_CREATED", "investment", investmentId, null, { investorId: investor.id, investorName: investor.name, ...investmentSnapshot(fields.values) },
       `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}`);
     return { ok: true, message: `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}.`, id: investmentId };
+  }).catch((error) => {
+    if (duplicateContractNumber(error)) return CONTRACT_NUMBER_ERROR;
+    throw error;
   });
   if (result.ok) refresh();
   return result;
@@ -146,14 +158,138 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
     if (!current) return { ok: false, error: "Investimento não encontrado." };
     const { investment } = current;
     await tx.update(investments).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investments.id, investment.id), eq(investments.tenantId, investment.tenantId)));
-    const { status: statusBefore, ...dataBefore } = investmentSnapshot({
+    const beforeValues: InvestmentValues = {
       amountCents: investment.amountCents, agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod, startDate: investment.startDate,
       maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status,
-    });
+      contractNumber: investment.contractNumber, investedOn: investment.investedOn, termMonths: investment.termMonths,
+      paymentFrequency: investment.paymentFrequency as InvestmentValues["paymentFrequency"], installmentCount: investment.installmentCount,
+    };
+    const { status: statusBefore, ...dataBefore } = investmentSnapshot(beforeValues);
     const { status: statusAfter, ...dataAfter } = investmentSnapshot(fields.values);
+    // Histórico visível para o tenant: o que mudou, antes e depois.
+    const changes = investmentChanges(beforeValues, fields.values);
+    if (changes.length > 0) {
+      await tx.insert(investmentRevisions).values({ id: id("ivr"), tenantId: investment.tenantId, investmentId: investment.id, kind: "CONTRACT", description: "Dados do contrato alterados", changes, changedByUserId: scope.user.id });
+    }
     if (JSON.stringify(dataBefore) !== JSON.stringify(dataAfter)) await audit(tx, scope, investment.tenantId, "INVESTMENT_UPDATED", "investment", investment.id, dataBefore, dataAfter, `Investimento de ${current.investorName} alterado`);
     if (statusBefore !== statusAfter) await audit(tx, scope, investment.tenantId, "INVESTMENT_STATUS_CHANGED", "investment", investment.id, { status: statusBefore }, { status: statusAfter }, `Status do investimento de ${current.investorName} alterado`);
     return { ok: true, message: "Investimento atualizado.", id: investment.id };
+  }).catch((error) => {
+    if (duplicateContractNumber(error)) return CONTRACT_NUMBER_ERROR;
+    throw error;
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+// ── Cronograma de pagamentos ao investidor ──────────────────────────────────────────────────────────────────────────
+// Valores e datas digitados pelo usuário; nada aqui calcula rendimento nem mexe no capital. Cada alteração trava o
+// investimento (FOR UPDATE), grava o histórico visível e a auditoria na mesma transação.
+
+type ScheduleContext = { investment: typeof investments.$inferSelect; investorName: string; items: (typeof investmentScheduleItems.$inferSelect)[] };
+
+async function lockSchedule(tx: TenantTransaction, scope: Parameters<Parameters<typeof withInvestorContext>[0]>[1], investmentId: string): Promise<ScheduleContext | { ok: false; error: string }> {
+  const [row] = await tx.select({ investment: investments, investorName: investors.name }).from(investments)
+    .innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
+    .where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId))).for("update", { of: investments });
+  if (!row) return { ok: false, error: "Investimento não encontrado." };
+  if (row.investment.status === "CANCELED" || row.investment.status === "CLOSED") return { ok: false, error: "Este investimento está encerrado ou cancelado: o cronograma não pode mais ser alterado." };
+  const items = await tx.select().from(investmentScheduleItems)
+    .where(and(eq(investmentScheduleItems.investmentId, row.investment.id), eq(investmentScheduleItems.tenantId, row.investment.tenantId)))
+    .orderBy(asc(investmentScheduleItems.dueDate), asc(investmentScheduleItems.number));
+  return { ...row, items };
+}
+
+// Grava a linha do histórico e devolve o resumo antes/depois para a auditoria (que cada ação grava em seguida).
+async function recordScheduleRevision(tx: TenantTransaction, userId: string, context: ScheduleContext, after: ScheduleItemValues[], description: string) {
+  const before = scheduleSummary(context.items);
+  const now = scheduleSummary(after);
+  const { investment } = context;
+  await tx.insert(investmentRevisions).values({ id: id("ivr"), tenantId: investment.tenantId, investmentId: investment.id, kind: "SCHEDULE", description, changes: [{ field: "Cronograma", before, after: now }], changedByUserId: userId });
+  return [investment.tenantId, "INVESTMENT_SCHEDULE_UPDATED", "investment", investment.id, { schedule: before }, { schedule: now }, `${description} (investimento de ${context.investorName})`] as const;
+}
+
+const itemValues = (items: (typeof investmentScheduleItems.$inferSelect)[]) => items.map(({ dueDate, yieldCents, principalCents, description }) => ({ dueDate, yieldCents, principalCents, description }));
+
+// Monta o cronograma inteiro. Se já existe, só substitui com a confirmação "replace" (e a mesma montagem enviada duas
+// vezes não duplica: as linhas antigas saem e as novas entram na mesma transação, numeradas de 1 em diante).
+export async function buildInvestmentScheduleAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  if (!investmentId) return { ok: false, error: "Investimento inválido." };
+  const fields = scheduleBuildFields(read);
+  if (!fields.ok) return fields;
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const context = await lockSchedule(tx, scope, investmentId);
+    if ("ok" in context) return context;
+    if (context.items.length > 0 && read("replace", 4) !== "1") return { ok: false, error: `Este investimento já tem um cronograma com ${context.items.length} ${context.items.length === 1 ? "pagamento" : "pagamentos"}. Confirme que deseja substituí-lo.` };
+    const { investment } = context;
+    await tx.delete(investmentScheduleItems).where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId)));
+    await tx.insert(investmentScheduleItems).values(fields.items.map((item, index) => ({
+      id: id("ivs"), tenantId: investment.tenantId, investmentId: investment.id, number: index + 1, ...item, createdByUserId: scope.user.id,
+    })));
+    await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, fields.items, context.items.length > 0 ? "Cronograma substituído" : "Cronograma montado")));
+    return { ok: true, message: `Cronograma com ${fields.items.length} ${fields.items.length === 1 ? "pagamento" : "pagamentos"} gravado.`, id: investment.id };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+// Inclui uma linha (datas irregulares ou um pagamento extra combinado).
+export async function addInvestmentScheduleItemAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  if (!investmentId) return { ok: false, error: "Investimento inválido." };
+  const fields = scheduleItemFields(read);
+  if (!fields.ok) return fields;
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const context = await lockSchedule(tx, scope, investmentId);
+    if ("ok" in context) return context;
+    if (context.items.length >= MAX_SCHEDULE_ITEMS) return { ok: false, error: `O cronograma pode ter no máximo ${MAX_SCHEDULE_ITEMS} pagamentos.` };
+    const { investment } = context;
+    const [last] = await tx.select({ number: max(investmentScheduleItems.number) }).from(investmentScheduleItems)
+      .where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId)));
+    await tx.insert(investmentScheduleItems).values({ id: id("ivs"), tenantId: investment.tenantId, investmentId: investment.id, number: (last?.number ?? 0) + 1, ...fields.values, createdByUserId: scope.user.id });
+    await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, [...itemValues(context.items), fields.values], "Pagamento incluído no cronograma")));
+    return { ok: true, message: "Pagamento incluído no cronograma.", id: investment.id };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+export async function updateInvestmentScheduleItemAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  const itemId = read("itemId", 80);
+  if (!investmentId || !itemId) return { ok: false, error: "Pagamento inválido." };
+  const fields = scheduleItemFields(read);
+  if (!fields.ok) return fields;
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const context = await lockSchedule(tx, scope, investmentId);
+    if ("ok" in context) return context;
+    const item = context.items.find((row) => row.id === itemId);
+    if (!item) return { ok: false, error: "Pagamento não encontrado neste cronograma." };
+    await tx.update(investmentScheduleItems).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investmentScheduleItems.id, item.id), eq(investmentScheduleItems.tenantId, item.tenantId)));
+    await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, itemValues(context.items).map((row, index) => (context.items[index].id === item.id ? fields.values : row)), "Pagamento do cronograma alterado")));
+    return { ok: true, message: "Pagamento do cronograma alterado.", id: context.investment.id };
+  });
+  if (result.ok) refresh();
+  return result;
+}
+
+export async function deleteInvestmentScheduleItemAction(data: FormData): Promise<InvestorActionResult> {
+  const read = reader(data);
+  const investmentId = read("investmentId", 80);
+  const itemId = read("itemId", 80);
+  if (!investmentId || !itemId) return { ok: false, error: "Pagamento inválido." };
+  const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
+    const context = await lockSchedule(tx, scope, investmentId);
+    if ("ok" in context) return context;
+    const item = context.items.find((row) => row.id === itemId);
+    if (!item) return { ok: false, error: "Pagamento não encontrado neste cronograma." };
+    await tx.delete(investmentScheduleItems).where(and(eq(investmentScheduleItems.id, item.id), eq(investmentScheduleItems.tenantId, item.tenantId)));
+    await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, itemValues(context.items.filter((row) => row.id !== item.id)), "Pagamento retirado do cronograma")));
+    return { ok: true, message: "Pagamento retirado do cronograma.", id: context.investment.id };
   });
   if (result.ok) refresh();
   return result;

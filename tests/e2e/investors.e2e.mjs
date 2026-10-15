@@ -80,7 +80,7 @@ test("V1. criar investidor (TENANT_USER grava na própria carteira, mesmo forjan
   assert.equal(duplicate?.ok, false);
   assert.match(duplicate.error, /CPF\/CNPJ/);
   // Investidor do tenant B, para as tentativas de acesso cruzado.
-  const other = await action(fernando, "createInvestorAction", { name: "Investidor do Fernando", document: "12.345.678/0001-90" });
+  const other = await action(fernando, "createInvestorAction", { name: "Investidor do Fernando", document: "11.222.333/0001-81" });
   assert.equal(other?.ok, true);
   ids.investorB = other.id;
 });

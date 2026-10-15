@@ -90,18 +90,18 @@ test("K1. sem dados obrigatórios: a página lista o que falta e a geração é 
 });
 
 test("K2. empresa contratante: rascunho não libera; confirmação exige dados completos; tenant vem do investimento", async () => {
-  const draft = await action(robério, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "12.345.678/0001-90", ...ADDRESS });
+  const draft = await action(robério, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "11.222.333/0001-81", ...ADDRESS });
   assert.equal(draft?.ok, true, JSON.stringify(draft));
   assert.equal(await one(`select count(*)::int from investment_contractor where tenant_id = 'ten_roberio' and confirmed_at is null`), 1);
   const stillBlocked = await action(robério, "generateContractAction", { investmentId: ids.investment });
   assert.match(stillBlocked.error, /Empresa contratante: confirmação dos dados/);
   const incomplete = await action(robério, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", confirmed: "1" });
   assert.equal(incomplete?.ok, false);
-  const confirmed = await action(robério, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "12.345.678/0001-90", representativeName: "Robério Santos", representativeDocument: "529.982.247-25", ...ADDRESS, confirmed: "1" });
+  const confirmed = await action(robério, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "11.222.333/0001-81", representativeName: "Robério Santos", representativeDocument: "529.982.247-25", ...ADDRESS, confirmed: "1" });
   assert.equal(confirmed?.ok, true, JSON.stringify(confirmed));
   const [row] = await admin(`select * from investment_contractor where tenant_id = 'ten_roberio'`);
   assert.ok(row.confirmed_at && row.confirmed_by_user_id === "u_roberio");
-  assert.equal(row.document, "12345678000190");
+  assert.equal(row.document, "11222333000181");
   assert.equal(row.address_cep, "01310100");
   // O endereço do investidor é o que ainda falta.
   const blocked = await action(robério, "generateContractAction", { investmentId: ids.investment, includeNotes: "1" });
@@ -125,7 +125,7 @@ test("K3. gerar contrato: versão 1 vinculada ao investimento, PDF com os dados 
   assert.equal(row.file_name, "contrato-investimento-joao-conceicao-araujo-v1.pdf");
   assert.equal(row.sha256, sha(row.content));
   const content = pdfText(row.content).replace(/\s+/g, " ");
-  for (const expected of ["Robério Gestão de Crédito Ltda., CNPJ nº 12.345.678/0001-90", "representante legal: Robério Santos, CPF nº 529.982.247-25", "João Conceição Araújo, CPF nº 411.797.058-58",
+  for (const expected of ["Robério Gestão de Crédito Ltda., CNPJ nº 11.222.333/0001-81", "representante legal: Robério Santos, CPF nº 529.982.247-25", "João Conceição Araújo, CPF nº 411.797.058-58",
     "Rua São João, 45, Centro, Ribeirão Preto/SP, CEP 01310-100", "R$ 50.000,50 (cinquenta mil reais e cinquenta centavos)", "1,5% ao mês", "Data de início: 13/10/2026",
     "Vencimento do contrato: 13/10/2027", "Dia de vencimento combinado: dia 10", "Rendimentos por PIX até o dia 10.", "São Paulo/SP, ____ de", "Versão 1", "Documento sem assinaturas"]) {
     assert.ok(content.includes(expected), `PDF sem "${expected}"`);
@@ -259,7 +259,7 @@ test("K9. MASTER vê, baixa e gera contrato de qualquer carteira; os dados vão 
   assert.equal((await file(thais, `/investidores/contratos/${ids.v2}`)).status, 200);
   const view = await page(thais, `/investidores/investimentos/${ids.investment}`);
   assert.match(view.html, /Robério Gestão de Crédito Ltda\./);
-  const saved = await action(thais, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "12.345.678/0001-90", representativeName: "Robério Santos", representativeDocument: "529.982.247-25", ...ADDRESS, addressNumber: "1001", confirmed: "1" });
+  const saved = await action(thais, "saveContractorAction", { investmentId: ids.investment, legalName: "Robério Gestão de Crédito Ltda.", document: "11.222.333/0001-81", representativeName: "Robério Santos", representativeDocument: "529.982.247-25", ...ADDRESS, addressNumber: "1001", confirmed: "1" });
   assert.equal(saved?.ok, true, JSON.stringify(saved));
   assert.equal(await one(`select address_number from investment_contractor where tenant_id = 'ten_roberio'`), "1001");
   assert.equal(await one(`select count(*)::int from investment_contractor where tenant_id = 'ten_thais'`), 0);
