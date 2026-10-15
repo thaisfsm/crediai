@@ -129,7 +129,7 @@ test("V4. listar e acessar detalhes: painel, lista com busca/filtros, ficha e co
   for (const expected of ["Dados e contatos", "WhatsApp", "(11) 98765-4321", "conta bancária 999-9", "Investimentos", "R$ 55.000,00", "1,5% ao mês", "R$ 10.000,00", "12% ao ano", "Pendente"]) assert.ok(detail.html.includes(expected), `ficha sem "${expected}"`);
   const contract = await page(robério, `/investidores/investimentos/${ids.investmentA}`);
   assert.equal(contract.status, 200);
-  for (const expected of ["Contrato", "Valor investido", "1,5% ao mês", "01/10/2027", "Dia 5", "Rendimento e devolução", "Aguardando regra", "Documentos", "Contrato assinado ainda não enviado"]) assert.ok(contract.html.includes(expected), `contrato sem "${expected}"`);
+  for (const expected of ["Contrato", "Valor investido", "1,5% ao mês", "01/10/2027", "Dia 5", "Posição do contrato", "Principal contratado", "Documentos", "Contrato assinado ainda não enviado"]) assert.ok(contract.html.includes(expected), `contrato sem "${expected}"`);
 });
 
 test("V5. vincular documento ao investimento: enviar, visualizar, baixar e substituir (histórico mantido)", async () => {

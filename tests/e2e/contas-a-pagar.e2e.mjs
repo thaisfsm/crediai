@@ -270,7 +270,7 @@ test("CP10. cronograma e contrato travados depois da entrada e das baixas (linha
   const update = await investorAction(robério, "updateInvestmentScheduleItemAction", { investmentId: ids.investment, itemId: ids.item1, dueDate: daysAgo(10), yieldAmount: "600,00", principalAmount: "", description: "" });
   assert.match(update.error, /já tem pagamento registrado/);
   assert.match((await investorAction(robério, "deleteInvestmentScheduleItemAction", { investmentId: ids.investment, itemId: ids.item1 })).error, /já tem pagamento registrado/);
-  assert.match((await investorAction(robério, "buildInvestmentScheduleAction", { investmentId: ids.investment, frequency: "MONTHLY", firstDueDate: TODAY, count: "2", yieldAmount: "1,00", principalAmount: "", replace: "1" })).error, /não pode ser substituído/);
+  assert.match((await investorAction(robério, "saveInvestmentScheduleLinesAction", { investmentId: ids.investment, mode: "replace", replace: "1", lines: JSON.stringify([{ kind: "YIELD", dueDate: TODAY, yieldAmount: "1,00", principalAmount: "" }]) })).error, /não pode ser substituído/);
   const contract = { investmentId: ids.investment, amount: "20.000,00", rate: "1,5", ratePeriod: "MONTHLY", startDate: daysAgo(30), investedOn: daysAgo(30), contractNumber: "CP-A" };
   assert.match((await investorAction(robério, "updateInvestmentAction", { ...contract, amount: "25.000,00" })).error, /entrada deste investimento já foi registrada/);
   assert.match((await investorAction(robério, "updateInvestmentAction", { ...contract, investedOn: daysAgo(29) })).error, /entrada deste investimento já foi registrada/);

@@ -1,5 +1,5 @@
 {
-  "id": "904418ee-40f0-409b-8fb1-e1836eeb2c43",
+  "id": "e743c7b8-9ec2-4446-a544-a4e36a283246",
   "prevId": "465af4c5-8c31-47cc-bbcc-f7740fce2e9d",
   "version": "7",
   "dialect": "postgresql",
@@ -339,6 +339,15 @@
             "public"
           ],
           "withCheck": "coalesce(current_setting('app.crediai_role', true), '') = 'TENANT_USER' and \"admin_audit_log\".\"tenant_id\" = nullif(current_setting('app.tenant_id', true), '') and \"admin_audit_log\".\"entity\" = 'loan_operation'"
+        },
+        "admin_audit_log_insert_tenant_investor_records": {
+          "name": "admin_audit_log_insert_tenant_investor_records",
+          "as": "PERMISSIVE",
+          "for": "INSERT",
+          "to": [
+            "public"
+          ],
+          "withCheck": "coalesce(current_setting('app.crediai_role', true), '') = 'TENANT_USER' and \"admin_audit_log\".\"tenant_id\" = nullif(current_setting('app.tenant_id', true), '') and \"admin_audit_log\".\"entity\" in ('investor_bank_account', 'investor_document')"
         }
       },
       "checkConstraints": {},

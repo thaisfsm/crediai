@@ -967,6 +967,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_payables", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'investment_payment'` }),
   // E as correções de operação (Etapa G), também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
+  // Contas bancárias e documentos do investidor (migração 0024), também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
 export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
