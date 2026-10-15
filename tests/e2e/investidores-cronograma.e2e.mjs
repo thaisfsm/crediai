@@ -105,10 +105,10 @@ test("IC1. investidor PF/PJ: CPF/CNPJ conferido pelo tipo, único na carteira; i
   const other = await action(fernando, "createInvestorAction", { personType: "PF", document: "411.797.058-58", name: "Investidor B Cronograma" });
   assert.equal(other?.ok, true, JSON.stringify(other));
   ids.investorB = other.id;
-  // O investidor antigo (sem tipo gravado) aparece pelo documento, sem nada ser gravado nele.
+  // O investidor antigo (sem tipo gravado) aparece como "Não informado", sem nada ser gravado nele nem classificado pelo documento.
   const before = await one(`select row(v.*)::text from investor v where id = 'inv_old_f'`);
   const legacy = await page(fernando, "/investidores/inv_old_f");
-  assert.match(legacy.html, /Tipo de pessoa Pessoa física \(pelo documento\)/);
+  assert.match(legacy.html, /Tipo de pessoa Não informado \(o documento tem formato de CPF; escolha o tipo ao editar o cadastro\)/);
   assert.equal(await one(`select row(v.*)::text from investor v where id = 'inv_old_f'`), before);
   const profile = await page(robério, `/investidores/${ids.company}`);
   assert.match(profile.html, /Tipo de pessoa Pessoa jurídica/);
@@ -380,6 +380,21 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
     assert.equal(await browserPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `ficha sem rolagem horizontal (${label})`);
     await context.close();
   }
+  // Investidor antigo (sem tipo gravado): a edição abre com o tipo em branco e não grava sem a escolha explícita.
+  const legacyContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const [legacyName, legacyValue] = fernando.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await legacyContext.addCookies([{ name: legacyName, value: legacyValue, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const legacyPage = await legacyContext.newPage();
+  const before = await one(`select row(v.*)::text from investor v where id = 'inv_old_f'`);
+  await legacyPage.goto(`${BASE}/investidores/inv_old_f`);
+  await legacyPage.getByRole("button", { name: "Editar", exact: true }).click();
+  const form = legacyPage.getByRole("region", { name: "Editar investidor" });
+  assert.equal(await form.getByLabel("Tipo de pessoa").inputValue(), "", "tipo não vem preenchido pelo documento");
+  await form.getByRole("button", { name: "Salvar alterações" }).click();
+  await legacyPage.waitForTimeout(1_000);
+  assert.equal(await one(`select row(v.*)::text from investor v where id = 'inv_old_f'`), before, "nada gravado sem escolher o tipo");
+  if (SHOTS) await form.screenshot({ path: `${SHOTS}/investidor-antigo-edicao.png` });
+  await legacyContext.close();
 });
 
 test("IC9. nada fora do módulo mudou: operações, pagamentos, capital, carteiras, clientes, tenants e usuários", async () => {

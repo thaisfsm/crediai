@@ -65,8 +65,9 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
   editing?: InvestorData; tenants?: { id: string; name: string }[]; defaultTenantId?: string | null; onDone: (id?: string) => void; onCancel?: () => void;
 }) {
   const [resetKey, setResetKey] = useState(0);
-  const [personType, setPersonType] = useState<PersonType | "">(editing?.personType ?? "");
-  const { pending, feedback, onSubmit } = useFormAction(editing ? updateInvestorAction : createInvestorAction, () => { setResetKey((key) => key + 1); setPersonType(editing?.personType ?? ""); onDone(); });
+  // Só o tipo gravado vem preenchido: o investidor antigo (sem tipo) exige a escolha explícita ao editar, nunca pelo documento.
+  const [personType, setPersonType] = useState<PersonType | "">(editing?.personTypeStored ?? "");
+  const { pending, feedback, onSubmit } = useFormAction(editing ? updateInvestorAction : createInvestorAction, () => { setResetKey((key) => key + 1); setPersonType(editing?.personTypeStored ?? ""); onDone(); });
   const pj = personType === "PJ";
   return (
     <section className="panel form-panel" aria-label={editing ? "Editar investidor" : "Novo investidor"}>
@@ -326,7 +327,7 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
       <section className="panel form-panel" aria-label={`Dados de ${investor.name}`}>
         <div className="panel-header"><div><h2>Dados e contatos</h2><p>Use &quot;Editar&quot; para alterar.</p></div></div>
         <dl className="payment-summary profile-summary">
-          <div><dt>Tipo de pessoa</dt><dd>{investor.personType ? PERSON_TYPES[investor.personType] : "Não informado"}{investor.personType && !investor.personTypeStored ? " (pelo documento)" : ""}</dd></div>
+          <div><dt>Tipo de pessoa</dt><dd>{investor.personTypeStored ? PERSON_TYPES[investor.personTypeStored] : "Não informado"}{!investor.personTypeStored && investor.personType ? ` (o documento tem formato de ${investor.personType === "PJ" ? "CNPJ" : "CPF"}; escolha o tipo ao editar o cadastro)` : ""}</dd></div>
           <div><dt>{investor.personType === "PJ" ? "CNPJ" : investor.personType === "PF" ? "CPF" : "CPF/CNPJ"}</dt><dd>{formatCpfCnpj(investor.document) ?? "—"}</dd></div>
           {investor.tradeName && <div><dt>Nome fantasia</dt><dd>{investor.tradeName}</dd></div>}
           <div><dt>{investor.personType === "PJ" ? "Data de abertura" : "Data de nascimento"}</dt><dd>{investor.birthDate ? formatDate(investor.birthDate) : "—"}</dd></div>
