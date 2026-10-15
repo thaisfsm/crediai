@@ -435,3 +435,290 @@ Regras para todas: **só com o seu OK por etapa**; ordem obrigatória; em cada e
 - **Neon:** nenhuma branch criada ou apagada; só `SELECT`.
 - **Dados reais:** nenhum usuário, senha, carteira, cliente, contrato, operação, pagamento ou dado financeiro alterado; nenhuma operação de teste em produção.
 - **PRs:** todos continuam em draft, incluindo o novo #20.
+
+---
+
+## 13. Adendo (14/10/2026, tarde): busca global do topo e página `/setup`
+
+Achados na navegação **com login** na produção (sessão MASTER já aberta no Chrome de Thaís, só leitura). Esta é a
+primeira validação com login da seção 9 ("Publicados **e** validados em produção com login").
+
+### 13.1 O que foi validado na produção com login (Claude in Chrome, só leitura, sem gravar nada)
+| Tela | Resultado |
+|---|---|
+| Visão geral, Capital, Clientes, Operações, Pagamentos, Cobranças, Relatórios, Configurações, Financeiro, Investidores, `/admin` | Abrem sem erro no console; totais consistentes entre as telas (capital disponível R$ 1.800,00; emprestado R$ 11.000,00; a receber R$ 11.800,00; juros recebidos R$ 1.800,00 em 4 pagamentos). Juros e saldo das 2 operações recalculados à mão: corretos. |
+| Simulador de Nova operação (preenchido e **não** enviado; página recarregada depois) | Único: R$ 1.000 a 10% → juros R$ 100, total R$ 1.100. Parcelado: 3 × R$ 400 → lucro R$ 200, 6,67% a.m., último vencimento 14/01/2027. Avisos "parcelas somam menos" e "maior que o capital disponível" aparecem; o servidor também recusa (`createOperationAction`, capital insuficiente). |
+| Celular (390 px, iframe na mesma origem) | Nenhuma das 11 telas com rolagem horizontal; tabelas viram cartões. |
+| **Busca do topo** | **Falha:** abre o campo, mas digitar e apertar Enter não faz nada (o `<input>` não tinha `onChange`/`onKeyDown`). |
+| **`/setup` sem login** | Mostra "BANCO DE DADOS CONECTADO… PostgreSQL" a qualquer visitante. Não cria nada, mas expõe estado da infraestrutura. |
+| Observações sem correção (decisão de design) | Selo "Prévia local" e painel "CrediAI Intelligence" com status fixos ("Processamento ativo", "agora") em produção; KPI do Admin "0 vencidos" junto de "Período de teste vencido" na lista de atenção (teste vencido conta como "em teste" por regra em `commercialGroup`). |
+
+### 13.2 Correções (branch `claude/auditoria-busca-global-setup`, base `main` 5c55e47; enviada depois: PR [#21](https://github.com/thaisfsm/crediai/pull/21), draft, ver 13.8)
+Commits locais `13872be` e `9fae773`. Patch: `crediai-busca-global-setup.patch`.
+
+| Arquivo | Mudança |
+|---|---|
+| `src/lib/finance/search.ts` (novo) | `searchPortfolio`: clientes por nome/e-mail (sem acento, sem diferença de maiúsculas) e CPF/telefone por dígitos (mín. 3, aceita máscara dos dois lados); operações por código (com ou sem `#`) e nome do cliente; mín. 2 caracteres; até 8 resultados. Função pura, sem banco nem sessão. |
+| `src/app/dashboard.tsx` | Campo ligado à busca (limite de 80 caracteres); lista de resultados clicável e navegável por Tab; Enter abre o 1º resultado; Esc fecha; "Nenhum cliente ou operação encontrado" anunciado (`role="status"`). Cliente abre a ficha em Clientes; operação abre Operações. Só roda com a busca aberta. |
+| `src/app/portfolio-pages.tsx` | `ClientsPage` aceita `initialClientId` (abre a ficha do cliente escolhido na busca). |
+| `src/app/globals.css` | Estilo da lista de resultados (foco do teclado mantido). |
+| `src/app/setup/page.tsx` | Com banco no ar e `NODE_ENV=production`, `redirect("/")` **no servidor** (componente de servidor; nada é enviado ao navegador). Em desenvolvimento continua mostrando a confirmação e os comandos. Banco não configurado, fora do ar ou com erro: comportamento inalterado (testes DB1–DB5). |
+| `tests/search.test.mjs` (novo) | 8 testes: acentos/maiúsculas, CPF e telefone por dígitos, código com/sem `#`, consulta curta e sem resultado, limite, busca pura (sem `@/lib/db`, `@/lib/auth`, `use server`, `fetch`), escopo da carteira da sessão, `/setup` redireciona no servidor. |
+
+**Isolamento por tenant e MASTER:** a busca não cria endpoint nem consulta nova. Ela filtra só `portfolio.clients` e
+`portfolio.operations`, que `page.tsx` carrega com `loadTenantPortfolio()` → `withTenantContext` (tenant da sessão,
+filtro explícito `tenant_id` em clientes, operações e pagamentos). O MASTER, no `/`, vê só a própria carteira
+(`ten_thais`); dados dos tenants continuam só em `/admin`. Portanto um tenant não acha dados de outro pela busca, e a
+carteira do MASTER não se mistura com as dos tenants. Comprovado por leitura do código e pelo teste estrutural; **não**
+comprovado por E2E (13.4).
+
+**Relação com a pilha:** o PR #12 traz outra busca (`searchClientsAction`, só clientes, dentro da tela Clientes, no
+servidor). As duas convivem; ao publicar a pilha, avaliar se a busca do topo passa a usar a regra de
+`client-search.ts`. Conflito previsto ao juntar com a pilha: só `src/app/portfolio-pages.tsx` (linhas vizinhas em
+`ClientsPage`, resolução trivial: manter as duas).
+
+### 13.3 Testes executados nesta etapa (números reais)
+| Verificação | Resultado | Como |
+|---|---|---|
+| Testes unitários da busca | **8/8 passam** | `node --experimental-strip-types --test tests/search.test.mjs` |
+| `database-status`, `finance-rules`, `billing-rules` (regressão financeira e de `/setup`) | **28/28 passam** | idem |
+| Typecheck do módulo novo | **passa** | `tsc --strict --noEmit src/lib/finance/search.ts` |
+| Demais testes unitários (`admin-audit`, `charges-order`, `financeiro`, `investor-contract`, `investors`, `operations-order`, `rounding`, `wallet-chart`) | **não executados** | `ERR_MODULE_NOT_FOUND`: dependem de `node_modules` |
+| Typecheck completo, lint, `next build` | **não executados** | sem `node_modules` |
+| E2E (`isolation`, `browser`, `cobrancas`, `financeiro`, `investors`, `investor-contract`, `admin-audit`, `grafico-carteira`) | **não executados** | exigem `node_modules`, PostgreSQL local e o seed fictício (`ten_roberio`, `ten_fernando`, `ten_thais`…), que não está no repositório |
+| Validação da busca corrigida no navegador | **não executada** | não há build da branch publicado em lugar nenhum (13.5) |
+
+**Causa comprovada do bloqueio:** neste ambiente, `registry.npmjs.org` está na lista de acesso direto do proxy, mas
+o container não tem DNS de saída (`Could not resolve host`), e pelo proxy a conexão é recusada (`403 CONNECT`, política
+da organização). Tentado também um Vercel Sandbox descartável (rede liberada, 4 vCPU): ele sobe, mas não consegue
+clonar o repositório privado sem credencial, e enviar o código por chamada de ferramenta (≈264 KB comprimidos) não é
+viável com segurança. Sandbox desligado após 73 s, sem dado algum.
+
+### 13.4 GitHub e preview
+- **GitHub:** `git push` recusado pelo proxy da sessão: *"thaisfsm/crediai is not in this session's authorized repository
+  set"* (403). Leitura funciona; escrita e API (`gh`) não. **PR não foi criado.**
+- **Preview da Vercel:** não existe para esta branch. Observação: as variáveis `DATABASE_URL`, `BETTER_AUTH_SECRET` e
+  `BETTER_AUTH_URL` estão só no ambiente **Production**; um preview sobe sem banco (cai em `/setup` "não configurado")
+  e não serve para testar a busca com login.
+
+### 13.5 Situação por item
+| Item | Implementado | Testado | Validado no navegador | Publicado em produção |
+|---|---|---|---|---|
+| Busca global do topo | Sim (PR #21, draft) | Unitário, estrutural, E2E e navegador local (13.8) | Sim, no navegador local com dados fictícios; a falha original foi confirmada na produção | **Não** |
+| `/setup` redireciona em produção | Sim (PR #21, draft) | Estrutural, DB1–DB5 e navegador local (13.8) | Sim, no navegador local com `next start`: 307 → `/`. O estado atual foi confirmado na produção | **Não** |
+
+### 13.6 Para concluir (barreiras reais)
+1. **Escrita no GitHub:** adicionar `thaisfsm/crediai` como repositório da sessão (fonte do projeto CrediAi_Oficial no
+   Claude Code, com permissão de push; o app GitHub do Claude precisa ter acesso ao repositório). Com isso: push das
+   duas branches, PR draft da correção (base `main`) e atualização deste relatório no PR #20.
+2. **Ambiente com npm** (o mesmo da sessão que rodou as seções 5 e 6, com PostgreSQL local e seed fictício) para
+   typecheck, lint, build, unitários e E2E completos; ou liberar `registry.npmjs.org` na rede desta sessão.
+3. **Validar a busca no navegador:** depois do PR, num `pnpm build && pnpm start` local com o seed fictício, ou num
+   preview com banco **descartável** (nunca o de produção). A decisão de dar banco ao Preview da Vercel é sua.
+
+### 13.7 Confirmação desta etapa
+Nenhum merge, deploy, migration, conta criada ou dado real alterado. Na produção: só navegação e leitura; os campos do
+simulador foram preenchidos sem envio e descartados. Usuários reais (incluindo Fernando e Robério) não foram tocados.
+
+### 13.8 Envio e validação completa (14/10/2026, 19h UTC, thread "Auditoria geral", com npm e Postgres descartável)
+As barreiras 1 e 2 da seção 13.6 foram resolvidas assim.
+
+**Os patches conferem.** Os sha256 são os informados: busca 35f54b8a…1722 e relatório 02d090c5…60be. Os dois
+aplicam limpo com `git am`, a busca sobre `origin/main` 5c55e47 e o relatório sobre `claude/project-thread-6z1878`
+98b1d27. Os patch-ids são idênticos aos dos commits originais `13872be`, `9fae773` e `98a84f5`. Só o SHA muda, porque
+muda a data do commit. As correções não foram recriadas.
+
+**PRs.**
+- Correção: [#21](https://github.com/thaisfsm/crediai/pull/21), draft, base `main`, commits `c397945`, `88fdc76` e
+  `474aa7e`.
+- Este relatório: PR [#22](https://github.com/thaisfsm/crediai/pull/22), draft, branch `claude/auditoria-relatorio-busca-setup`, base `claude/project-thread-6z1878`.
+
+**Defeito achado na validação e corrigido.** O commit novo é o `474aa7e` (só CSS). A regra `.search-popover button`,
+feita para o ícone de 27×27, também valia para os resultados. Cada linha ficava com 27 px, e o detalhe ("Cliente" ou o
+nome do cliente da operação) era cortado e sobreposto ao resultado seguinte. No celular, o painel ancorado à direita da
+lupa saía pela esquerda da tela. As capturas de antes e de depois estão em
+`/mnt/project-files/auditoria-busca-global-setup/telas/`.
+
+| Verificação | Resultado real | Comando |
+|---|---|---|
+| Build, lint, typecheck completo, schema | sem erro, nas duas rodadas (antes e depois do `474aa7e`) | `npm run build`, `npm run lint`, `npx tsc --noEmit`, `drizzle-kit check` |
+| Unitários | **111/111**, sendo 103 da main e 8 da busca; nas duas rodadas | `npm test` |
+| E2E com BYPASSRLS (7 arquivos, banco novo a cada arquivo) | **61/62** | `run-all.sh crediai_bypass` |
+| E2E sem BYPASSRLS (só RLS) | **61/62**, com `isolation` 7/7 | `run-all.sh crediai_app` |
+| `browser.e2e.mjs` | **6/6**, nas duas rodadas | `node --test tests/e2e/browser.e2e.mjs` |
+| Busca e `/setup` no navegador, desktop 1440 e celular 390 | **30/30**, depois do `474aa7e` | `navegador-busca-setup.mjs` |
+
+A única falha de E2E é o **A5** de `admin-audit`, igual nos dois perfis. O teste procura "14/10/2026" na linha inteira
+da conta MASTER, e hoje é 14/10/2026. Ele falha do mesmo jeito na main sem a busca (seção 5.1), e a correção do teste
+está no PR #20 (`1420999`). Os E2E rodaram antes do `474aa7e`; depois dele, que só muda CSS, rodaram de novo o build,
+o lint, os tipos, os unitários, o `browser.e2e` e a verificação no navegador.
+
+**O que a verificação no navegador cobriu.** Login real como Fernando, com dados fictícios. Os casos:
+- nome sem diferença de maiúsculas;
+- CPF por dígitos e com máscara;
+- telefone e e-mail;
+- código da operação com e sem `#`;
+- mensagem quando não há resultado (`role=status`);
+- consulta de 1 letra, que não busca;
+- limite de 80 caracteres;
+- clique no cliente, que abre a ficha em Clientes;
+- Enter, que abre o 1º resultado (uma operação abre Operações);
+- Esc, que fecha e limpa;
+- painel dentro da tela e linhas com título e detalhe inteiros;
+- nenhuma rolagem horizontal;
+- console sem erro.
+
+O isolamento foi testado no navegador: Robério (outro tenant) e o MASTER, em `/`, não acham nenhum cliente ou operação
+do Fernando, nem pelo nome, pelo CPF ou pelo código. `/setup` sem login, com o banco no ar e `next start`
+(`NODE_ENV=production`), responde **307 → `/`** e termina em `/login`, sem mostrar o estado do banco.
+
+**Ainda pendente.** Validação com login na produção depois de publicar, e publicação, as duas só com seu OK. Na
+publicação, juntar com a pilha #12–#20 gera conflito trivial em `src/app/portfolio-pages.tsx`: manter as duas mudanças.
+
+**Confirmação.** Nenhum merge, deploy ou migration. Nenhum dado real foi lido para teste ou alterado. Os PRs estão em
+draft.
+
+### 13.9 Pendências do #21 e do #22 resolvidas e integração com a pilha (14/10/2026, 20h UTC)
+PRs, todos em draft:
+- [#21](https://github.com/thaisfsm/crediai/pull/21): busca global do topo, CSS e `/setup`. Base `main`, ponta `24488b9`.
+- [#22](https://github.com/thaisfsm/crediai/pull/22): este relatório. Base `claude/project-thread-6z1878`.
+- [#23](https://github.com/thaisfsm/crediai/pull/23): integração, branch `claude/integracao-busca-sobre-pilha`. Base `claude/project-thread-6z1878` (#20, ponta `98b1d27`).
+
+A dependência fica assim: #21 → **#23** ← #20. O #21 e o #22 ficam como estão.
+
+**Conflito e resolução.** Juntar o #21 sobre o #20 deu conflito só em `src/app/portfolio-pages.tsx`, em linhas vizinhas:
+- o lado #20 adiciona `function ClientSearch` (busca de clientes do #12, no servidor) logo antes de `ClientsPage`;
+- o lado #21 muda a assinatura de `ClientsPage` para aceitar `initialClientId`.
+
+A resolução mantém `ClientSearch` inteira e usa a assinatura do #21. As duas buscas aparecem e funcionam juntas na tela
+Clientes (verificado no navegador, abaixo).
+
+Commits da integração:
+- `fa79f24`: `git merge --no-ff` do #21 (até `4e87e72`). O arquivo resolvido tem sha256 `aeb3fa6f…2991`, e o diff
+  contra o #20 tem sha256 `154ba04e…0b81` (6 arquivos, +135/−6), igual ao conferido por você.
+- `1bc4440`: junta a ponta atual do #21 (`24488b9`) mantendo `tests/e2e/admin-audit.e2e.mjs` como em `fa79f24`.
+  `git diff fa79f24 --cached` saiu vazio, e a árvore é **idêntica** à de `fa79f24` (`788e62f8…`). Por isso os
+  resultados de `fa79f24` valem para `1bc4440`. Agora o #21 inteiro é ancestral do #23, e um merge futuro do #21 não
+  tira o ajuste do A5.
+
+**A5: causa comprovada.** Não é regra financeira, fuso, ambiente nem integração. Em `/admin/registros?aba=tenants`, a
+linha MASTER mostra "Conta da plataforma | — | Não se aplica | **—** | Criado em". O teste da main procura
+"14/10/2026" na linha inteira, e o seed cria o tenant hoje. Então a data encontrada é a de **criação**, não um
+vencimento, e o teste só falha quando roda em 14/10/2026.
+
+Reprodução (`a5-reproducao.mjs`):
+- com criação em 14/10, o teste antigo falha e o do #20 passa;
+- com criação em 15/10, os dois passam;
+- se "Vence em" aparecer preenchido na MASTER, o teste do #20 falha, ou seja, ainda detecta o defeito real.
+
+O ajuste está no #20 (`1420999`) e chega ao #23 por ele. No #21, o ajuste que eu tinha copiado (`4e87e72`) foi
+desfeito com um commit novo (`24488b9`), sem reescrever histórico. Nenhuma regra financeira mudou.
+
+**Resultados.** Contagens em passou/falhou/ignorado. Servidor local `next start` (`NODE_ENV=production`) e Postgres
+descartável com dados fictícios. Cada arquivo E2E roda num banco novo: migrations 0001–0017, seed e depois as
+migrations novas.
+
+| Commit | Verificação | `crediai_bypass` (BYPASSRLS) | `crediai_app` (só RLS) |
+|---|---|---|---|
+| #21 `24488b9` | build, typecheck, lint, `drizzle-kit check` | sem erro (independe do perfil) | — |
+| #21 `24488b9` | unitários (`npm test`) | 111/0/0 (independe do perfil) | — |
+| #21 `24488b9` | E2E, 7 arquivos, hoje | **61/1/0** (falha só A5) | **61/1/0** (falha só A5) |
+| #21 `24488b9` | E2E, 7 arquivos, criação da MASTER simulada em 01/10/2026 | **62/0/0** | **62/0/0** |
+| #21 `4e87e72` | E2E, 7 arquivos (com o ajuste do A5, antes de ele ser desfeito) | 62/0/0 | 62/0/0 |
+| #21 `4e87e72` | `browser.e2e.mjs` | 6/0/0 | 6/0/0 |
+| #21 `4e87e72` | busca e `/setup` no navegador | 30/0 (+2 n/a: não há `ClientSearch` sem o #12) | 30/0 (+2 n/a) |
+| #23 `fa79f24` = `1bc4440` | build, typecheck, lint, `drizzle-kit check` | sem erro | — |
+| #23 `fa79f24` = `1bc4440` | unitários | 165/0/0 | — |
+| #23 `fa79f24` = `1bc4440` | E2E, 18 arquivos | **145/0/0** | **145/0/0** |
+| #23 `fa79f24` = `1bc4440` | `browser.e2e.mjs` | 6/0/0 | 6/0/0 |
+| #23 `fa79f24` = `1bc4440` | busca e `/setup` no navegador | **34/0** | **34/0** |
+
+Sobre os commits do #21:
+- Entre `4e87e72` e `24488b9` muda só o teste A5, e por isso o navegador e o `browser.e2e` do `4e87e72` valem para
+  `24488b9`.
+- Não existe `faketime` neste ambiente, e o app formata datas sempre no fuso de São Paulo, então mudar o fuso não serve.
+  A "data simulada" foi a criação do tenant `ten_thais` em 2026-10-01 12:00 UTC, feita como superusuário, porque o RLS
+  esconde a linha do dono. Cada um dos 14 bancos registrou `UPDATE 1`.
+- Uma primeira tentativa avulsa da simulação, como dono, atingiu 0 linhas e foi descartada.
+
+Comandos:
+- `testes/validacao-completa.sh <tag>`;
+- `testes/run-all.sh <perfil>`;
+- `testes/run-all-simulada.sh` com `SIMULAR_CRIACAO`;
+- `testes/navegador-run.sh <tag> <perfil>`;
+- `testes/pr21-24488b9.sh`.
+
+Logs:
+- `/mnt/project-files/auditoria-geral/testes/pr21-final/`;
+- `pr21-24488b9/`;
+- `pr21-24488b9-simulada/`;
+- `a5-pr21/`;
+- `integracao/`.
+
+**Navegador no #23.** Chromium com Playwright, desktop 1440×900 e celular 390×844. Login real como Fernando, Robério e
+MASTER, só com dados fictícios. O roteiro está em `navegador-busca-setup.mjs`, as capturas em `testes/integracao/telas/`.
+Itens verificados:
+- **Busca do topo:** nome sem acento e sem maiúsculas, CPF por dígitos e com máscara, telefone, e-mail, código da
+  operação com e sem `#`, e nome do cliente na operação.
+- **Abrir resultados:** o cliente abre a ficha em Clientes; Enter na operação abre Operações.
+- **Comportamento do campo:** Esc fecha e limpa; mensagem "Nenhum… encontrado"; 1 letra não busca; limite de 80
+  caracteres; painel dentro da tela; linhas sem corte; sem rolagem horizontal; console sem erro.
+- **Duas buscas juntas em Clientes:** a `ClientSearch` (#12) acha por CPF e abre a ficha; com texto nela, a busca do
+  topo abre outro cliente.
+- **Isolamento:** Robério e MASTER não acham nada do Fernando (nome, CPF, código).
+- **`/setup` sem login:** responde **307 → `/`** e termina em `/login`.
+
+**Previews da Vercel.** Todos READY, então o build na Vercel passou:
+- #21: `dpl_F1a5WmiC…` (`474aa7e`), `dpl_9mAYxvtB…` (`4e87e72`) e `dpl_8QHZ2kxK…` (`24488b9`);
+- #22: `dpl_9F759UpE…` (`5af9d32`);
+- #23: `dpl_DjNNQWsf…` (`fa79f24`) e `dpl_HFWh2hYA…` (`1bc4440`).
+
+Mesmo assim, o ambiente Preview **não tem `DATABASE_URL`**: as variáveis existem só em Production. O `/setup` do
+preview do #21 mostra "Conecte o PostgreSQL gerenciado", conferido por você no Chrome e por mim via Vercel. Login, busca
+e isolamento **não** foram validados em preview. O único check do GitHub nos PRs é o da Vercel; o repositório não tem
+outra CI.
+
+**Claude in Chrome.** Esta sessão não tem as ferramentas do Claude in Chrome. O navegador usado foi o Chromium da nuvem
+contra o servidor local acima.
+
+**Estado por item.**
+
+| Item | Implementado | Teste automatizado | Navegador local | Preview (sem banco) | Produção |
+|---|---|---|---|---|---|
+| Busca global do topo | Sim (#21; #23 com a pilha) | unit 8/8 (inclui o escopo da carteira da sessão); isolamento no roteiro do navegador | Sim, desktop e celular, 2 perfis | build OK; sem login | **não publicado** |
+| CSS da lista de resultados | Sim (`474aa7e`) | verificação de layout no roteiro | Sim | build OK | **não publicado** |
+| `/setup` redireciona em produção | Sim | estrutural + DB1–DB5 | Sim (307 → `/`) | mostra "Conecte o PostgreSQL" (sem banco) | **não publicado** |
+| Busca do topo + `ClientSearch` juntas | Sim (#23) | E2E 145/145 ×2 | Sim | build OK; sem login | **não publicado** |
+| Teste A5 sem depender da data | Sim (#20, `1420999`) | 62/62 no #21 com data simulada; 145/145 no #23 | — | — | não se aplica (teste) |
+
+**O que continua bloqueado, e por quê:**
+1. **Publicação** (merge, deploy, migrations da pilha): depende do seu OK, etapa por etapa (seção 10).
+2. **Validação com login em produção**: só depois de publicar, e com a sua sessão.
+3. **Preview com banco**: exigiria dar ao Preview um banco **descartável**, nunca o de produção. A decisão é sua, e o
+   Neon está no limite de 10 branches.
+
+**Confirmação.** Nenhum merge, deploy, migration, variável de ambiente ou dado real foi alterado. Não houve force push.
+Todos os PRs estão em draft.
+
+## 14. Publicação em produção (15/10/2026)
+
+Executado por Claude com a autorização de 14/10 20:09 e as instruções de 15/10. Evidências em `/mnt/project-files/publicacao-2026-10-15/` (`EVIDENCIAS-MIGRACOES.md`, `teste-pg18/`, `producao/`).
+
+| Etapa | Estado | Evidência |
+|---|---|---|
+| Estado inicial | CONCLUÍDA | Produção `5c55e47` (`dpl_HDVbhoZMqWSmGXpxHzSaFuW9ugZE`), 17 migrações, PostgreSQL 18.6, esquema igual ao da 0017 |
+| Causa da falha anterior | CONCLUÍDA (inferida) | Inserção sem `id` com a sequência atrasada (16) devolvia 17. Reproduzida no PostgreSQL 18.6 (cenário B) |
+| Script v2 | CONCLUÍDA | Gerado dos arquivos oficiais (`gerar-script-v2.py`), ids 18–23 explícitos, `setval` 23, pré-condições e conferência do esquema dentro da transação |
+| Teste do script em PostgreSQL 18.6 descartável | CONCLUÍDA | 39/39 verificações: sequência 17 e 16, segunda execução recusada, falha forçada no meio sem resto, cópia alterada desfeita pela conferência do esquema |
+| Atomicidade no Neon | CONCLUÍDA | `run_sql_transaction`: mesmo `pg_backend_pid`, mesmo início de transação e `set_config` local visível entre comandos |
+| Backup | CONCLUÍDA com limitação | Plano gratuito: 1 snapshot e 10 branches, ambos ocupados (`HTTP 422 snapshots limit exceeded`). Nenhum backup apagado. O snapshot `snap-restless-sound-b46p17x4` (14/10 20:12:46Z) tem os mesmos dados de antes da migração (md5 por tabela idêntico). Restaurá-lo, ou usar a restauração por instante (janela de 6 h), exige uma vaga de branch livre |
+| Migrações 0018–0023 | CONCLUÍDA | Uma transação de 149 comandos. Registros 18–23 com hash e data do journal, sequência 23, esquema = referência do Drizzle (col 388, con 145, fn 12, idx 93, pol 102, rls 29, trg 18) |
+| Preservação dos dados | CONCLUÍDA | 24 tabelas com md5 idêntico antes e depois. Tabelas novas vazias. Contrato existente com `capital_entry_rule` NULL (não classificado) |
+| Testes da versão integrada (árvore `788e62f8`) | CONCLUÍDA | build, typecheck, lint e `drizzle-kit check` sem erro; unitários 165/165; E2E 145/145 com BYPASSRLS e 145/145 sem |
+| Integração | CONCLUÍDA | `main` `5c55e47` → `9e4beca` (avanço rápido, sem force push). Merges `--no-ff` de #12, #13, #14, #15, #16, #17, #18, #19, #20 e #23 (que traz o #21). GitHub fechou #12–#21 e #23 como integrados às 13:07:53Z |
+| Deploy | CONCLUÍDA | `dpl_DEZZkwindmbwV7Br8bkNxX17Uhvc`, commit `9e4beca`, READY, alias `crediai-sigma.vercel.app` |
+| Produção sem login | CONCLUÍDA | `/` e as rotas protegidas redirecionam para `/login`; `/setup` 307; cadastro público recusado (`EMAIL_PASSWORD_SIGN_UP_DISABLED`); login inválido 401; cabeçalhos anti-clickjacking presentes; tela de login sem erros de console no desktop (1366) e no celular (390), sem rolagem lateral; nenhum erro nos logs do deploy |
+| Isolamento (banco) | CONCLUÍDA | 0 pagamentos, operações, renovações ou investimentos com tenant diferente do registro pai |
+| Produção com login (dashboard, busca, admin, isolamento na tela) | PENDENTE | Precisa da senha de cada conta. Não foi contornado. A mesma tela e o isolamento foram testados nos E2E (perfil igual ao da produção) |
+
+Uso real durante a publicação: às 13:05–13:06 UTC o Fernando cadastrou um aporte e uma operação (com o código antigo, já sobre o esquema novo). Os registros que existiam antes continuam idênticos.
