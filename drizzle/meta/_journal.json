@@ -141,6 +141,13 @@
       "when": 1791930027364,
       "tag": "0020_investor_bank_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791930678167,
+      "tag": "0021_operation_revision",
+      "breakpoints": true
     }
   ]
 }

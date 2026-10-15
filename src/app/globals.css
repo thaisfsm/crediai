@@ -1111,3 +1111,5 @@ button { color:inherit; }
 .schedule-preview li strong { color:#eef6fb; font-weight:600; }
 .schedule-form { border:1px solid rgba(112,145,170,.18); border-radius:12px; padding:14px; margin:0 0 14px; background:rgba(7,17,31,.35); }
 .revision-changes { margin:6px 0 0; padding-left:16px; color:#8296a7; font-size:12px; display:grid; gap:2px; }
+.edit-review { grid-column:1 / -1; display:grid; gap:10px; min-width:0; overflow-x:auto; }
+.edit-review .data-table td, .edit-review .data-table th { padding:8px 10px; }

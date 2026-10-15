@@ -1,10 +1,10 @@
 import "server-only";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { withTenantContext } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
-import { buildPortfolio, summarizeOperations, type ClientRecord, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
+import { buildPortfolio, summarizeOperations, type ClientRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
 import { toMovementRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
@@ -38,6 +38,12 @@ export async function loadTenantPortfolio() {
       .innerJoin(loanOperations, eq(loanOperations.id, loanRenewals.operationId))
       .where(and(eq(loanRenewals.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
       .orderBy(asc(loanRenewals.periodNumber));
+    // Correções de operação (Etapa G): motivo, campos alterados e quem corrigiu (usuário do mesmo tenant).
+    const correctionRows = await tx.select({ revision: loanOperationRevisions, editorName: users.name }).from(loanOperationRevisions)
+      .innerJoin(loanOperations, eq(loanOperations.id, loanOperationRevisions.operationId))
+      .leftJoin(users, and(eq(users.id, loanOperationRevisions.editedByUserId), eq(users.tenantId, tenantId)))
+      .where(and(eq(loanOperationRevisions.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .orderBy(asc(loanOperationRevisions.createdAt));
     // Documentos: só os dados do arquivo; o conteúdo é baixado sob demanda pela rota de download.
     const documentRows = await tx.select({
       id: clientDocuments.id, clientId: clientDocuments.clientId, label: clientDocuments.label, fileName: clientDocuments.fileName,
@@ -53,7 +59,7 @@ export async function loadTenantPortfolio() {
       paymentCount: sql<string>`(select count(*) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
       receivedCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
     }).from(walletCycles).where(eq(walletCycles.tenantId, tenantId)).orderBy(desc(walletCycles.cycleNumber));
-    return { wallet, cycleNumber, movementRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, movementRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, correctionRows, documentRows, historyRows, closedCycles };
   });
 
   const revisionsByPayment = new Map<string, PaymentRevisionRecord[]>();
@@ -66,6 +72,12 @@ export async function loadTenantPortfolio() {
   const renewalsByOperation = new Map<string, RenewalRecord[]>();
   for (const { renewal } of data.renewalRows) {
     renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), toRenewalRecord(renewal)]);
+  }
+  const correctionsByOperation = new Map<string, OperationCorrection[]>();
+  for (const { revision, editorName } of data.correctionRows) {
+    correctionsByOperation.set(revision.operationId, [...(correctionsByOperation.get(revision.operationId) ?? []), {
+      id: revision.id, reason: revision.reason, changes: revision.changes, editedAt: revision.createdAt.toISOString(), editedBy: editorName ?? null,
+    }]);
   }
   const documentsByClient = new Map<string, ClientDocumentInfo[]>();
   for (const document of data.documentRows) {
@@ -82,7 +94,7 @@ export async function loadTenantPortfolio() {
     cycleNumber: data.cycleNumber,
     capitalMovements: data.movementRows.map(toMovementRecord),
     today: todayIso(),
-    operations: data.operationRows.map(({ operation, clientName }) => toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [])),
+    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? []), corrections: correctionsByOperation.get(operation.id) ?? [] })),
     payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, revisionsByPayment.get(payment.id) ?? [])),
   });
   // Contagens por cliente para a exclusão: operações visíveis, em aberto e qualquer histórico (inclusive excluídas).
