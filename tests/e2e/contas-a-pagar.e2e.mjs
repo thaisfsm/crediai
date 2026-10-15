@@ -97,17 +97,68 @@ test("preparação: carteira A com R$ 10.000 há 40 dias, contrato de R$ 20.000 
   assert.equal(await count("capital_movement", "ten_roberio"), 0);
 });
 
-test("CP1. tela: menu, seções vencidas/hoje/próximas/pagas e totais derivados do cronograma", async () => {
+const brl = (cents) => money(cents).replace("$", "\\$");
+// Resumo do dia esperado, calculado direto do banco (cronograma e baixas), para comparar com o Dashboard e a tela.
+async function expectedDay(tenantId) {
+  const lines = await admin(`select s.due_date::text due, s.yield_cents y, s.principal_cents p,
+      coalesce((select sum(amount_cents) from investment_payment x where x.schedule_item_id = s.id and x.kind = 'YIELD'), 0)::int py,
+      coalesce((select sum(amount_cents) from investment_payment x where x.schedule_item_id = s.id and x.kind = 'PRINCIPAL'), 0)::int pp
+    from investment_schedule_item s join investment i on i.id = s.investment_id where i.tenant_id = '${tenantId}'`);
+  const obligations = lines.flatMap((line) => [[line.due, Number(line.y), line.py], [line.due, Number(line.p ?? 0), line.pp]]).filter(([, expected]) => expected > 0)
+    .map(([due, expected, paid]) => ({ due, expected, balance: expected - paid }));
+  const sum = (list, key) => list.reduce((total, item) => total + item[key], 0);
+  const today = obligations.filter((o) => o.due === TODAY), overdue = obligations.filter((o) => o.due < TODAY && o.balance > 0);
+  return {
+    expectedToday: sum(today, "expected"), dueToday: sum(today, "balance"), pendingToday: today.filter((o) => o.balance > 0).length,
+    overdue: sum(overdue, "balance"), overdueCount: overdue.length,
+    paidToday: Number(await one(`select coalesce(sum(amount_cents), 0)::int from investment_payment where tenant_id = '${tenantId}' and paid_on = '${TODAY}'`)),
+  };
+}
+async function assertDaySummary(cookie, tenantId) {
+  const day = await expectedDay(tenantId);
+  const capital = await available(tenantId);
+  const dashboard = await page(cookie, "/");
+  assert.equal(dashboard.status, 200);
+  assert.match(dashboard.html, new RegExp(`A pagar hoje ${brl(day.dueToday)} Previsto hoje ${brl(day.expectedToday)}`), "Dashboard: a pagar e previsto hoje");
+  assert.match(dashboard.html, new RegExp(`Pendentes hoje ${day.pendingToday} de`), "Dashboard: pendentes hoje");
+  assert.match(dashboard.html, new RegExp(`Vencidas ${brl(day.overdue)}`), "Dashboard: vencidas");
+  assert.match(dashboard.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), "Dashboard: pago hoje");
+  assert.match(dashboard.html, new RegExp(`Capital disponível ${brl(capital)} Só a baixa`), "Dashboard: capital");
+  const payables = await page(cookie, "/contas-a-pagar");
+  assert.match(payables.html, new RegExp(`Previsto hoje ${brl(day.expectedToday)}`), "tela: previsto hoje");
+  assert.match(payables.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), "tela: pago hoje");
+  assert.match(payables.html, new RegExp(`Restante hoje ${brl(day.dueToday)} ${day.pendingToday} pendente`), "tela: restante hoje");
+  assert.match(payables.html, new RegExp(`Total vencido ${brl(day.overdue)} ${day.overdueCount} em atraso`), "tela: vencido");
+  assert.match(payables.html, new RegExp(`Capital disponível ${brl(capital)}`), "tela: capital");
+  return day;
+}
+
+test("CP1. tela: menu dentro do Financeiro, abas (Hoje por padrão), resumo do dia e Dashboard com os mesmos números", async () => {
   const dashboard = await fetch(`${BASE}/`, { headers: { cookie: robério } }).then((response) => response.text());
   assert.match(dashboard, /href="\/contas-a-pagar"/, "item Contas a pagar no menu");
   const { status, html } = await page(robério, "/contas-a-pagar");
   assert.equal(status, 200);
-  for (const label of ["Contas a pagar", "Vence hoje", "Total vencido", "Pago no período", "Vencidas", "Vencem hoje", "Próximas", "Pagas", "Paula Pagamentos", "Contrato CP-A"]) assert.ok(html.includes(label), label);
-  assert.match(html, new RegExp(`Vence hoje ${money(50_000).replace("$", "\\$")}`));
-  assert.match(html, new RegExp(`Total vencido ${money(50_000).replace("$", "\\$")}`));
-  assert.ok(html.includes("Vencida") && html.includes("Prevista"));
+  for (const label of ["Contas a pagar", "Movimentações", "Previsto hoje", "Pago hoje", "Restante hoje", "Total vencido", "Hoje 1", "Vencidos 1", "Próximos 2", "Pagos 0", "Todos 4", "Obrigações de hoje", "Descrição", "Rendimento · parcela 2", "Paula Pagamentos", "Contrato CP-A"]) assert.ok(html.includes(label), label);
+  // A aba Hoje mostra só a obrigação de hoje (pendente); as vencidas ficam num aviso com link, não na lista.
+  assert.ok(html.includes("Pendente") && !html.includes("Rendimento · parcela 1 "), "só a de hoje na aba Hoje");
+  assert.match(html, /1 obrigação vencida continua em aberto/);
+  const day = await assertDaySummary(robério, "ten_roberio");
+  assert.deepEqual([day.expectedToday, day.dueToday, day.pendingToday, day.overdue, day.paidToday], [50_000, 50_000, 1, 50_000, 0]);
+  // Dashboard: lista de hoje e próximos compromissos, com link para a tela.
+  const home = await page(robério, "/");
+  assert.ok(home.html.includes("Vencem hoje Paula Pagamentos Rendimento · parcela 2") && home.html.includes("Próximos compromissos") && home.html.includes("Abrir Contas a pagar"));
+  // Abas: cada uma com a sua lista; Todos mostra as quatro seções.
+  const todos = (await page(robério, "/contas-a-pagar?aba=todos")).html;
+  for (const label of ["Vencidas", "Vencem hoje", "Próximas", "Pagas"]) assert.ok(todos.includes(label), label);
+  assert.ok(todos.includes("Vencida") && todos.includes("Pendente"));
+  assert.ok((await page(robério, "/contas-a-pagar?aba=vencidos")).html.includes("Rendimento · parcela 1"));
+  assert.ok((await page(robério, "/contas-a-pagar?aba=proximos")).html.includes("Devolução de principal · parcela 3"));
+  assert.ok((await page(robério, "/contas-a-pagar?aba=pagos")).html.includes("Nenhuma obrigação paga ainda."));
+  assert.ok((await page(robério, "/contas-a-pagar?aba=qualquer")).html.includes("Obrigações de hoje"), "aba inválida volta para Hoje");
+  // Financeiro → Contas a pagar.
+  assert.match((await fetch(`${BASE}/financeiro`, { headers: { cookie: robério } }).then((response) => response.text())), /aria-label="Seções do Financeiro"[\s\S]*href="\/contas-a-pagar"/);
   // Busca por investidor e filtro por tipo.
-  assert.ok((await page(robério, "/contas-a-pagar?q=paula&tipo=principal")).html.includes(money(2_000_000)));
+  assert.ok((await page(robério, "/contas-a-pagar?aba=todos&q=paula&tipo=principal")).html.includes(money(2_000_000)));
   assert.ok((await page(robério, "/contas-a-pagar?q=ninguem")).html.includes("0 de 4 obrigações"));
   const anonymous = await page(null, "/contas-a-pagar");
   assert.ok([303, 307, 308].includes(anonymous.status) && anonymous.location?.startsWith("/login"), `${anonymous.status} ${anonymous.location}`);
@@ -164,7 +215,7 @@ test("CP3. baixa parcial: uma saída de capital, ligada à obrigação; vencida 
   assert.equal(audit.after.reference, "Pix •••8901");
   const auditText = JSON.stringify(audit);
   assert.ok(!auditText.includes("12345678901") && !auditText.includes("99887") && !auditText.includes("41179705858") && !auditText.includes("transferência"), "sem dados bancários, referência completa ou observações");
-  const { html } = await page(robério, "/contas-a-pagar?situacao=vencida");
+  const { html } = await page(robério, "/contas-a-pagar?aba=vencidos&situacao=vencida");
   assert.ok(html.includes(money(30_000)) && html.includes("Vencida"));
 });
 
@@ -175,7 +226,7 @@ test("CP4. baixa total quita; acima do saldo e obrigação paga são recusadas",
   assert.match(full.message, /Obrigação paga/);
   assert.match((await pay(robério, { scheduleItemId: ids.item1, amount: "0,01" })).error, /já está paga/);
   assert.match((await pay(robério, { scheduleItemId: ids.item2, kind: "PRINCIPAL", amount: "1,00" })).error, /não tem devolução de principal/);
-  const paid = await page(robério, "/contas-a-pagar?situacao=paga");
+  const paid = await page(robério, "/contas-a-pagar?aba=pagos&situacao=paga");
   assert.ok(paid.html.includes("Paga") && paid.html.includes("1 de 4 obrigações"));
   assert.equal(await one(`select sum(amount_cents)::int from investment_payment where schedule_item_id = '${ids.item1}'`), 50_000);
 });
@@ -210,6 +261,27 @@ test("CP6. envio duplicado e concorrência: uma baixa e uma saída por envio; nu
     where p.amount_cents <> m.amount_cents or p.paid_on <> m.occurred_at or m.kind <> 'WITHDRAWAL'`), 0);
   assert.equal(await one(`select count(*)::int from capital_movement m where m.source = 'INVESTOR'
     and not exists (select 1 from investment_payment p where p.capital_movement_id = m.id) and not exists (select 1 from investment_capital_entry e where e.capital_movement_id = m.id)`), 0);
+});
+
+test("CP6b. Dashboard e Contas a pagar atualizados depois das baixas, com os mesmos números; baixas = saídas do capital", async () => {
+  const day = await assertDaySummary(robério, "ten_roberio");
+  // Item 1 quitado (R$ 200 há 5 dias + R$ 300 hoje), item 2 quitado hoje (R$ 500), item 3 com R$ 100 hoje.
+  assert.deepEqual([day.expectedToday, day.dueToday, day.pendingToday, day.overdue, day.paidToday], [50_000, 0, 0, 0, 90_000]);
+  const hoje = (await page(robério, "/contas-a-pagar")).html;
+  assert.ok(hoje.includes("Rendimento · parcela 2") && hoje.includes("Paga") && hoje.includes("Hoje 1") && hoje.includes("Vencidos 0"));
+  assert.ok(!hoje.includes("obrigação vencida continua"), "sem aviso de vencidas");
+  // Nada pago é contado como pendente, e nenhuma obrigação aparece duas vezes.
+  const todos = (await page(robério, "/contas-a-pagar?aba=todos")).html;
+  assert.equal(todos.split("Rendimento · parcela 2").length - 1, 1, "obrigação de hoje uma única vez em Todos");
+  // Consistência: soma das baixas = soma das saídas de investidor no capital; o capital caiu exatamente isso.
+  assert.equal(await one(`select coalesce(sum(amount_cents), 0)::int from investment_payment where tenant_id = 'ten_roberio'`),
+    await one(`select coalesce(sum(amount_cents), 0)::int from capital_movement where tenant_id = 'ten_roberio' and category in ('INVESTOR_YIELD_PAYMENT', 'INVESTOR_PRINCIPAL_RETURN')`));
+  // Isolamento: as outras carteiras (inclusive a carteira própria do MASTER) não veem nada do A no Dashboard.
+  for (const cookie of [fernando, thais]) {
+    const other = await page(cookie, "/");
+    assert.equal(other.status, 200);
+    assert.ok(!other.html.includes("Paula Pagamentos") && !other.html.includes("CP-A"), "Dashboard de outra carteira sem dados do A");
+  }
 });
 
 test("CP7. capital insuficiente (hoje e retroativo) bloqueia a baixa sem gravar nada", async () => {
@@ -329,9 +401,17 @@ test("CP13. telas no desktop e no celular: contas a pagar, detalhe, formulário 
     const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
     await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
     const browserPage = await context.newPage();
-    await browserPage.goto(`${BASE}/contas-a-pagar`);
+    await browserPage.goto(`${BASE}/`);
+    const panel = browserPage.getByRole("region", { name: "Contas a pagar" });
+    await panel.getByText("A pagar hoje").waitFor();
+    if (SHOTS) await panel.screenshot({ path: `${SHOTS}/dashboard-contas-a-pagar-${label}.png` });
+    assert.equal(await browserPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal no Dashboard (${label})`);
+    await panel.getByRole("link", { name: "Abrir Contas a pagar" }).click();
+    await browserPage.getByRole("navigation", { name: "Filtro das contas a pagar" }).getByRole("link", { name: /Hoje/ }).waitFor();
+    assert.equal(await browserPage.locator('.payables-tabs a[aria-current="page"]').innerText().then((value) => value.startsWith("Hoje")), true, "Hoje selecionado");
     await browserPage.getByRole("heading", { name: "Contas a pagar" }).waitFor();
     if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/contas-a-pagar-${label}.png`, fullPage: true });
+    await browserPage.goto(`${BASE}/contas-a-pagar?aba=proximos`);
     const upcoming = browserPage.getByRole("region", { name: "Próximas" });
     await upcoming.getByRole("button", { name: "Registrar baixa" }).first().click();
     const form = upcoming.locator('[aria-label="Registrar baixa"]');

@@ -3,6 +3,7 @@ import Dashboard from "./dashboard";
 import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { requireActiveAccount } from "@/lib/auth/guards";
 import { loadTenantPortfolio } from "@/lib/finance/queries";
+import { loadDashboardPayables } from "@/lib/investors/payables-queries";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
   if (!session.user.tenantId) redirect(isSuperAdmin ? "/admin" : "/account-disabled");
   // loadTenantPortfolio passa por requireTenantUser: confere tenant ativo e assinatura válida antes de ler a carteira.
   const portfolio = await loadTenantPortfolio();
+  // Contas a pagar do dia: a mesma fonte e o mesmo resumo da tela Financeiro → Contas a pagar.
+  const payables = await loadDashboardPayables();
   const { tela } = await searchParams;
-  return <Dashboard userName={session.user.name} portfolio={portfolio} isSuperAdmin={isSuperAdmin} initialSection={tela} />;
+  return <Dashboard userName={session.user.name} portfolio={portfolio} payables={payables} isSuperAdmin={isSuperAdmin} initialSection={tela} />;
 }

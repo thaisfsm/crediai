@@ -11,7 +11,8 @@ export const OBLIGATION_KINDS = { YIELD: "Rendimento", PRINCIPAL: "Devolução d
 export type ObligationKind = keyof typeof OBLIGATION_KINDS;
 export const isObligationKind = (value: string): value is ObligationKind => Object.hasOwn(OBLIGATION_KINDS, value);
 
-export const OBLIGATION_STATUS = { PREVISTA: "Prevista", PARCIAL: "Parcialmente paga", PAGA: "Paga", VENCIDA: "Vencida" } as const;
+// "Pendente" na tela (a chave PREVISTA continua a mesma nos filtros e no endereço: ?situacao=prevista).
+export const OBLIGATION_STATUS = { PREVISTA: "Pendente", PARCIAL: "Parcialmente paga", PAGA: "Paga", VENCIDA: "Vencida" } as const;
 export type ObligationStatus = keyof typeof OBLIGATION_STATUS;
 export const isObligationStatus = (value: string): value is ObligationStatus => Object.hasOwn(OBLIGATION_STATUS, value);
 
@@ -46,8 +47,14 @@ export type PayablePayment = {
   id: string; scheduleItemId: string; kind: ObligationKind; amountCents: number; paidOn: string; method: PaymentMethod; reference: string | null;
   notes: string | null; createdAt: string; createdBy: string | null; capitalMovementId: string;
 };
+// Origem da obrigação. Nesta entrega só existem as dos contratos de investidores (cronograma do contrato). Outras
+// despesas entram depois com a própria origem e o próprio registro, sem passar pelo cronograma nem pela baixa do
+// contrato: a tela e os totais já trabalham por obrigação, independentemente da origem.
+export const OBLIGATION_SOURCES = { INVESTOR: "Contrato de investidor" } as const;
+export type ObligationSource = keyof typeof OBLIGATION_SOURCES;
+
 export type Obligation = {
-  key: string; scheduleItemId: string; investmentId: string; investorId: string; investorName: string; contractNumber: string | null; contractLabel: string;
+  key: string; source: ObligationSource; scheduleItemId: string; investmentId: string; investorId: string; investorName: string; contractNumber: string | null; contractLabel: string;
   investmentStatus: string; startDate: string; number: number; dueDate: string; description: string | null; kind: ObligationKind;
   expectedCents: number; paidCents: number; balanceCents: number; status: ObligationStatus; payments: PayablePayment[];
   // Por que a baixa ainda não pode ser registrada (regra da entrada); null quando pode.
@@ -88,7 +95,7 @@ export function buildObligations({ investments, items, payments, today }: { inve
       if (expectedCents <= 0) continue;
       if (investment.status === "CANCELED" && paidCents === 0) continue;
       result.push({
-        key, scheduleItemId: item.id, investmentId: investment.id, investorId: investment.investorId, investorName: investment.investorName,
+        key, source: "INVESTOR", scheduleItemId: item.id, investmentId: investment.id, investorId: investment.investorId, investorName: investment.investorName,
         contractNumber: investment.contractNumber, contractLabel: contractLabel(investment), investmentStatus: investment.status, startDate: investment.startDate,
         number: item.number, dueDate: item.dueDate, description: item.description, kind, expectedCents, paidCents,
         balanceCents: Math.max(expectedCents - paidCents, 0), status: obligationStatus({ expectedCents, paidCents, dueDate: item.dueDate }, today), payments: list,
@@ -98,6 +105,50 @@ export function buildObligations({ investments, items, payments, today }: { inve
   }
   return result.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.investorName.localeCompare(b.investorName, "pt-BR") || a.number - b.number || (a.kind === b.kind ? 0 : a.kind === "YIELD" ? -1 : 1));
 }
+
+// Descrição exibida: o tipo e a observação da linha do cronograma ou, sem ela, a parcela.
+export const obligationDescription = (obligation: Pick<Obligation, "description" | "kind" | "number">) =>
+  `${OBLIGATION_KINDS[obligation.kind]} · ${obligation.description?.trim() || `parcela ${obligation.number}`}`;
+
+// ── Resumo do dia (Dashboard e Contas a Pagar usam esta mesma função) ───────────────────────────────────────────────
+// Previsto hoje: o valor das obrigações que vencem hoje (pagas ou não). Pago hoje: as baixas com data de hoje, de
+// qualquer obrigação. A pagar hoje: o saldo das que vencem hoje. Vencido: o saldo das que venceram antes de hoje e
+// continuam em aberto. Cada obrigação entra uma vez; nada pago entra no pendente.
+export function payablesOverview(obligations: Obligation[], today: string, { upcomingDays = 7, listLimit = 6 }: { upcomingDays?: number; listLimit?: number } = {}) {
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const limit = new Date(`${today}T00:00:00Z`);
+  limit.setUTCDate(limit.getUTCDate() + upcomingDays);
+  const until = limit.toISOString().slice(0, 10);
+  const dueToday = obligations.filter((obligation) => obligation.dueDate === today);
+  const pendingToday = dueToday.filter((obligation) => obligation.balanceCents > 0);
+  const overdue = obligations.filter((obligation) => obligation.dueDate < today && obligation.balanceCents > 0);
+  const upcoming = obligations.filter((obligation) => obligation.dueDate > today && obligation.dueDate <= until && obligation.balanceCents > 0);
+  const paidToday = obligations.flatMap((obligation) => obligation.payments).filter((payment) => payment.paidOn === today);
+  // Lista do dia: pendentes primeiro (maior saldo antes), depois as já pagas.
+  const todayList = [...dueToday].sort((a, b) => Number(a.balanceCents === 0) - Number(b.balanceCents === 0) || b.balanceCents - a.balanceCents || a.investorName.localeCompare(b.investorName, "pt-BR"));
+  return {
+    today, upcomingUntil: until,
+    expectedTodayCents: sum(dueToday.map((obligation) => obligation.expectedCents)),
+    dueTodayCents: sum(pendingToday.map((obligation) => obligation.balanceCents)),
+    pendingTodayCount: pendingToday.length,
+    dueTodayCount: dueToday.length,
+    paidTodayCents: sum(paidToday.map((payment) => payment.amountCents)),
+    paidTodayCount: paidToday.length,
+    overdueCents: sum(overdue.map((obligation) => obligation.balanceCents)),
+    overdueCount: overdue.length,
+    upcomingCents: sum(upcoming.map((obligation) => obligation.balanceCents)),
+    upcomingCount: upcoming.length,
+    todayList: todayList.slice(0, listLimit),
+    upcomingList: upcoming.slice(0, listLimit),
+    overdueList: overdue.slice(0, listLimit),
+  };
+}
+export type PayablesOverview = ReturnType<typeof payablesOverview>;
+
+// ── Abas da tela ─────────────────────────────────────────────────────────────────────────────────────────────────────
+export const PAYABLE_TABS = { hoje: "Hoje", vencidos: "Vencidos", proximos: "Próximos", pagos: "Pagos", todos: "Todos" } as const;
+export type PayableTab = keyof typeof PAYABLE_TABS;
+export const parsePayableTab = (value: string | undefined): PayableTab => (value && Object.hasOwn(PAYABLE_TABS, value) ? value as PayableTab : "hoje");
 
 // ── Filtros e totais da tela ─────────────────────────────────────────────────────────────────────────────────────────
 export type PayablesFilters = { q: string; from: string | null; to: string | null; status: ObligationStatus | null; kind: ObligationKind | null };
@@ -133,6 +184,8 @@ export function payablesSections(obligations: Obligation[], today: string) {
   return {
     overdue: open.filter((obligation) => obligation.dueDate < today),
     dueToday: open.filter((obligation) => obligation.dueDate === today),
+    // Aba Hoje: tudo o que vence hoje, inclusive o já pago no dia, com as pendentes primeiro.
+    today: obligations.filter((obligation) => obligation.dueDate === today).sort((a, b) => Number(a.balanceCents === 0) - Number(b.balanceCents === 0) || b.balanceCents - a.balanceCents),
     upcoming: open.filter((obligation) => obligation.dueDate > today),
     paid: obligations.filter((obligation) => obligation.balanceCents === 0).sort((a, b) => (b.payments.at(-1)?.paidOn ?? b.dueDate).localeCompare(a.payments.at(-1)?.paidOn ?? a.dueDate)),
   };

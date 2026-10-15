@@ -12,6 +12,8 @@ import { searchPortfolio, type SearchResult } from "@/lib/finance/search";
 import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { RenegotiationPage } from "./renegotiation-page";
+import { PayablesDashboard } from "./payables-dashboard";
+import type { PayablesOverview } from "@/lib/investors/payables";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
@@ -131,7 +133,7 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 }
 
 
-export default function Dashboard({ userName, portfolio, isSuperAdmin = false, initialSection }: { userName: string; portfolio: TenantPortfolio; isSuperAdmin?: boolean; initialSection?: string }) {
+export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview; isSuperAdmin?: boolean; initialSection?: string }) {
   const router = useRouter();
   const initials = initialsOfUser(userName);
   const [active, setActive] = useState<NavKey>(() => navKeyFromSlug(initialSection));
@@ -241,6 +243,8 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
                 <Link prefetch={false} href="/?tela=cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></Link>
                 <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></Link>
               </section>
+
+              <PayablesDashboard overview={payables} availableCents={summary.availableCents} />
 
               <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
                 <div className="intelligence-orb"><Icon name="sparkles" size={21} /></div>
