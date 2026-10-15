@@ -89,9 +89,10 @@ test("U5. Investidores pelo menu: cadastro pelo formulário, ficha, novo investi
   await page.locator("aside").getByRole("link", { name: "Investidores", exact: true }).click();
   await page.waitForURL(/\/investidores$/);
   await page.locator(".breadcrumbs strong", { hasText: "Investidores" }).waitFor();
-  for (const card of ["Capital investido", "Investimentos ativos", "Rendimentos previstos", "Rendimentos pagos", "Total a devolver", "Próximos vencimentos"]) await page.locator(".metric-card", { hasText: card }).waitFor();
+  for (const card of ["Capital investido", "Investimentos ativos", "Rendimentos previstos", "Rendimentos pagos", "Principal a devolver", "Próximos vencimentos"]) await page.locator(".metric-card", { hasText: card }).waitFor();
   await page.getByRole("button", { name: /Novo investidor/ }).click();
   const form = page.locator("form", { has: page.locator('input[name="name"]') }).first();
+  await form.locator('select[name="personType"]').selectOption("PF");
   await form.locator('input[name="name"]').fill("Investidor pelo Navegador");
   await form.locator('input[name="document"]').fill("52998224725");
   assert.equal(await form.locator('input[name="document"]').inputValue(), "529.982.247-25", "máscara de CPF");
