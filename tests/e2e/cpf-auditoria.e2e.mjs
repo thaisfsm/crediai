@@ -124,11 +124,11 @@ test("CPF-API4. avalista, empresa, titular da conta e chave Pix com documento in
 
 test("CPF-API5. investidor: CPF/CNPJ inválido ou malformado recusado no servidor", async () => {
   for (const [index, document] of [wrongLast(CPF_OK), wrongLast(CNPJ_OK), "abc", "11111111111", "1234"].entries()) {
-    const result = await action(robério, "createInvestorAction", { name: `Investidor Ruim ${index}`, document }, "/investidores");
+    const result = await action(robério, "createInvestorAction", { personType: String(document).replace(/\D/g, "").length === 14 ? "PJ" : "PF", name: `Investidor Ruim ${index}`, document }, "/investidores");
     assert.equal(result?.ok, false, `${document} → ${JSON.stringify(result)}`);
   }
   assert.equal(await one("select count(*)::int from investor where name like 'Investidor Ruim %'"), 0);
-  assert.equal((await action(robério, "createInvestorAction", { name: "Investidor CPF Bom", document: mask(CPF_OK) }, "/investidores"))?.ok, true);
+  assert.equal((await action(robério, "createInvestorAction", { personType: String(CPF_OK).replace(/\D/g, "").length === 14 ? "PJ" : "PF", name: "Investidor CPF Bom", document: mask(CPF_OK) }, "/investidores"))?.ok, true);
 });
 
 test("CPF-API6. nada financeiro mudou e só os cadastros válidos foram gravados", async () => {

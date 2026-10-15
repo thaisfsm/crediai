@@ -539,10 +539,18 @@ export const investors = pgTable("investor", {
   pixKeyType: text("pix_key_type"),
   pixKey: text("pix_key"),
   status: investorStatus("status").notNull().default("ACTIVE"),
+  // Migração 0024: tipo de pessoa (PF/PJ), nome fantasia (PJ) e data de nascimento (PF) ou de abertura (PJ). NULL no
+  // tipo = investidor cadastrado antes da 0024 (nada foi preenchido por suposição); toda gravação nova exige o tipo.
+  personType: text("person_type"),
+  tradeName: text("trade_name"),
+  birthDate: date("birth_date", { mode: "string" }),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
+  check("investor_person_type_valid", sql`${table.personType} is null or ${table.personType} in ('PF', 'PJ')`),
+  // CPF (11 dígitos) só para PF e CNPJ (14) só para PJ.
+  check("investor_person_type_document", sql`${table.personType} is null or ${table.document} is null or (${table.personType} = 'PF' and length(${table.document}) = 11) or (${table.personType} = 'PJ' and length(${table.document}) = 14)`),
   index("investor_tenant_id_idx").on(table.tenantId),
   unique("investor_tenant_id_id_unique").on(table.tenantId, table.id),
   // O mesmo CPF/CNPJ não aparece duas vezes na mesma carteira.
@@ -551,6 +559,73 @@ export const investors = pgTable("investor", {
   check("investor_bank_account_type_valid", sql`${table.bankAccountType} is null or ${table.bankAccountType} in ('CHECKING', 'SAVINGS', 'PAYMENT', 'SALARY')`),
   check("investor_pix_key_pair", sql`(${table.pixKey} is null) = (${table.pixKeyType} is null) and (${table.pixKeyType} is null or ${table.pixKeyType} in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM'))`),
   ...tenantPolicies("investor", table.tenantId),
+]).enableRLS();
+
+// Contas bancárias do investidor para os pagamentos (migração 0024): várias por investidor, no máximo uma preferencial.
+// Cada conta tem os dados de banco (código e/ou nome, agência, conta, dígitos, tipo) e/ou uma chave Pix: o que não se
+// aplica fica vazio. Nunca entram na auditoria nem em logs; a ficha mostra a conta e a chave mascaradas. Retirar uma
+// conta não apaga: ela fica arquivada (archived_at), e a conta ligada a um contrato não pode ser arquivada.
+export const investorBankAccounts = pgTable("investor_bank_account", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investorId: text("investor_id").notNull(),
+  bankCode: text("bank_code"),
+  bankName: text("bank_name"),
+  branch: text("branch"),
+  branchDigit: text("branch_digit"),
+  account: text("account"),
+  accountDigit: text("account_digit"),
+  accountType: text("account_type"),
+  holderName: text("holder_name"),
+  holderDocument: text("holder_document"),
+  pixKeyType: text("pix_key_type"),
+  pixKey: text("pix_key"),
+  isPreferred: boolean("is_preferred").notNull().default(false),
+  notes: text("notes"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investor_bank_account_investor_idx").on(table.tenantId, table.investorId),
+  unique("investor_bank_account_tenant_investor_id_unique").on(table.tenantId, table.investorId, table.id),
+  uniqueIndex("investor_bank_account_preferred_unique").on(table.investorId).where(sql`${table.isPreferred} and ${table.archivedAt} is null`),
+  foreignKey({ name: "investor_bank_account_investor_same_tenant_fk", columns: [table.tenantId, table.investorId], foreignColumns: [investors.tenantId, investors.id] }).onDelete("restrict"),
+  check("investor_bank_account_code_valid", sql`${table.bankCode} is null or ${table.bankCode} ~ '^[0-9]{3}$'`),
+  check("investor_bank_account_branch_valid", sql`${table.branch} is null or ${table.branch} ~ '^[0-9]{1,5}$'`),
+  check("investor_bank_account_digits_valid", sql`(${table.branchDigit} is null or ${table.branchDigit} ~ '^[0-9X]$') and (${table.accountDigit} is null or ${table.accountDigit} ~ '^[0-9X]$')`),
+  check("investor_bank_account_account_valid", sql`${table.account} is null or ${table.account} ~ '^[0-9]{1,20}$'`),
+  check("investor_bank_account_type_valid", sql`${table.accountType} is null or ${table.accountType} in ('CHECKING', 'SAVINGS', 'PAYMENT', 'SALARY')`),
+  check("investor_bank_account_pix_pair", sql`(${table.pixKey} is null) = (${table.pixKeyType} is null) and (${table.pixKeyType} is null or ${table.pixKeyType} in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM'))`),
+  // Conta bancária completa (banco, agência e conta) ou chave Pix: pelo menos um dos dois.
+  check("investor_bank_account_has_destination", sql`(${table.branch} is not null and ${table.account} is not null and (${table.bankCode} is not null or ${table.bankName} is not null)) or ${table.pixKey} is not null`),
+  check("investor_bank_account_preferred_active", sql`not (${table.isPreferred} and ${table.archivedAt} is not null)`),
+  ...tenantPolicies("investor_bank_account", table.tenantId),
+]).enableRLS();
+
+// Documentos do INVESTIDOR (identidade, comprovante de endereço, contrato social…), separados dos documentos de cada
+// investimento. O arquivo fica no banco. Retirar não apaga: removed_at guarda quando, e o arquivo continua no histórico.
+export const investorDocuments = pgTable("investor_document", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investorId: text("investor_id").notNull(),
+  kind: text("kind").notNull(),
+  label: text("label"),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  content: bytea("content").notNull(),
+  uploadedByUserId: text("uploaded_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+  removedByUserId: text("removed_by_user_id"),
+}, (table) => [
+  index("investor_document_investor_idx").on(table.tenantId, table.investorId),
+  foreignKey({ name: "investor_document_investor_same_tenant_fk", columns: [table.tenantId, table.investorId], foreignColumns: [investors.tenantId, investors.id] }).onDelete("restrict"),
+  check("investor_document_kind_valid", sql`${table.kind} in ('IDENTITY', 'PROOF_OF_ADDRESS', 'COMPANY_RECORDS', 'BANK_PROOF', 'OTHER')`),
+  check("investor_document_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
+  check("investor_document_removed_link", sql`(${table.removedAt} is null) = (${table.removedByUserId} is null)`),
+  ...tenantPolicies("investor_document", table.tenantId),
 ]).enableRLS();
 
 // Contrato de investimento: um investidor pode ter vários. Guarda só o combinado; os cálculos (rendimento, saldo, total
@@ -578,6 +653,19 @@ export const investments = pgTable("investment", {
   notes: text("notes"),
   status: investmentStatus("status").notNull().default("ACTIVE"),
   calculationRule: text("calculation_rule"),
+  // Migração 0024: data da contratação, prazo com a unidade (dias, meses ou anos; term_months fica só nos contratos
+  // gravados antes), forma de pagamento ao investidor, conta bancária do próprio investidor para os pagamentos e as
+  // condições combinadas de rendimento e de devolução do principal (texto do contrato; nada é calculado com elas).
+  contractedOn: date("contracted_on", { mode: "string" }),
+  termCount: integer("term_count"),
+  termUnit: text("term_unit"),
+  paymentMethod: text("payment_method"),
+  bankAccountId: text("bank_account_id"),
+  yieldTerms: text("yield_terms"),
+  principalTerms: text("principal_terms"),
+  // Renovação (migração 0024): o contrato novo aponta para o anterior. O principal ainda não devolvido do anterior passa
+  // para o novo sem nova entrada no capital; o anterior fica encerrado com todo o histórico. Uma renovação por contrato.
+  renewedFromInvestmentId: text("renewed_from_investment_id"),
   // Regra da entrada no capital (migração 0023). 'REQUIRED': contrato cadastrado com a regra; a baixa só passa com a
   // entrada do contrato registrada. NULL: contrato que já existia quando a migração 0023 rodou (a coluna nasceu vazia,
   // sem backfill); a baixa passa com a entrada OU com o aporte anterior indicado pelo usuário (investment_prior_contribution).
@@ -600,6 +688,14 @@ export const investments = pgTable("investment", {
   check("investment_term_months_valid", sql`${table.termMonths} is null or ${table.termMonths} between 1 and 600`),
   check("investment_installment_count_valid", sql`${table.installmentCount} is null or ${table.installmentCount} between 1 and 600`),
   check("investment_payment_frequency_valid", sql`${table.paymentFrequency} is null or ${table.paymentFrequency} in ('MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'YEARLY', 'AT_MATURITY', 'OTHER')`),
+  check("investment_term_pair", sql`(${table.termCount} is null) = (${table.termUnit} is null) and (${table.termUnit} is null or ${table.termUnit} in ('DAYS', 'MONTHS', 'YEARS'))`),
+  check("investment_term_count_valid", sql`${table.termCount} is null or ${table.termCount} between 1 and 18250`),
+  check("investment_payment_method_valid", sql`${table.paymentMethod} is null or ${table.paymentMethod} in ('PIX', 'TRANSFER', 'CASH', 'OTHER')`),
+  // A conta vinculada é sempre do próprio investidor do contrato, na mesma carteira.
+  foreignKey({ name: "investment_renewed_from_same_tenant_fk", columns: [table.tenantId, table.renewedFromInvestmentId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
+  uniqueIndex("investment_renewed_from_unique").on(table.renewedFromInvestmentId).where(sql`${table.renewedFromInvestmentId} is not null`),
+  check("investment_renewed_from_not_self", sql`${table.renewedFromInvestmentId} is null or ${table.renewedFromInvestmentId} <> ${table.id}`),
+  foreignKey({ name: "investment_bank_account_same_investor_fk", columns: [table.tenantId, table.investorId, table.bankAccountId], foreignColumns: [investorBankAccounts.tenantId, investorBankAccounts.investorId, investorBankAccounts.id] }).onDelete("restrict"),
   ...tenantPolicies("investment", table.tenantId),
 ]).enableRLS();
 
@@ -871,6 +967,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_payables", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'investment_payment'` }),
   // E as correções de operação (Etapa G), também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
+  // Contas bancárias e documentos do investidor (migração 0024), também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
 export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

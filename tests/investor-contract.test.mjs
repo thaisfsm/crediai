@@ -124,9 +124,10 @@ test("CT6. dados da empresa contratante: rascunho permitido, confirmação só c
   assert.equal(contractorFields(form({ ...complete, addressCep: "123" })).ok, false);
   assert.equal(contractorFields(form({ ...complete, representativeDocument: "411.797.058-58" })).ok, false, "CPF do representante sem nome");
   // Endereço do investidor: opcional no cadastro, normalizado quando informado.
-  const investor = investorFields(form({ name: "Ana", addressCep: "01310-100", addressCity: "São Paulo", addressState: "SP" }));
+  const person = { personType: "PF", name: "Ana", document: "411.797.058-58" };
+  const investor = investorFields(form({ ...person, addressCep: "01310-100", addressCity: "São Paulo", addressState: "SP" }), "2026-10-15");
   assert.equal(investor.values.addressCep, "01310100");
-  assert.equal(investorFields(form({ name: "Ana", addressState: "ZZ" })).ok, false);
+  assert.equal(investorFields(form({ ...person, addressState: "ZZ" }), "2026-10-15").ok, false);
   assert.equal(addressLine(addressFields(form({ aCep: "01310100", aStreet: "Rua A", aNumber: "s/n", aCity: "Campinas", aState: "SP" }), "a").value), "Rua A, s/n, Campinas/SP, CEP 01310-100");
 });
 

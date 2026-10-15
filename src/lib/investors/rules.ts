@@ -4,11 +4,17 @@
 import { normalizeEmail, normalizeSocial } from "../contacts";
 import { addressFields, type Address } from "./address";
 import { addressParts, type AddressPart } from "../finance/client-profile";
-import { bankFields, type BankValues } from "../bank-account";
-import { addDays, formatDate, formatMoney, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
+import type { BankValues } from "../bank-account";
+import { addDays, centsToInput, cnpjProblem, cpfProblem, formatDate, formatMoney, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
 import { dueDates } from "../finance/rules";
 
 export const INVESTOR_STATUS = { ACTIVE: "Ativo", INACTIVE: "Inativo" } as const;
+export type PersonType = keyof typeof PERSON_TYPES;
+export const PERSON_TYPES = { PF: "Pessoa física", PJ: "Pessoa jurídica" } as const;
+// Tipo de pessoa para exibir: o gravado ou, para investidor cadastrado antes da migração 0024 (sem tipo), o que o
+// documento indica (11 dígitos = PF, 14 = PJ). Nada é gravado a partir dessa leitura.
+export const personTypeOf = (row: { personType: string | null; document: string | null }): PersonType | null =>
+  row.personType === "PF" || row.personType === "PJ" ? row.personType : row.document?.length === 11 ? "PF" : row.document?.length === 14 ? "PJ" : null;
 export type InvestorStatus = keyof typeof INVESTOR_STATUS;
 
 export const INVESTMENT_STATUS = { PENDING_SIGNATURE: "Aguardando assinatura", ACTIVE: "Ativo", CLOSED: "Encerrado", CANCELED: "Cancelado" } as const;
@@ -20,6 +26,9 @@ export type RatePeriod = keyof typeof RATE_PERIODS;
 
 export const DOCUMENT_KINDS = { SIGNED_CONTRACT: "Contrato assinado", ADDENDUM: "Aditivo", TRANSFER_RECEIPT: "Comprovante de transferência", OTHER: "Outro documento" } as const;
 export type DocumentKind = keyof typeof DOCUMENT_KINDS;
+// Documentos do próprio investidor (migração 0024), separados dos documentos de cada investimento.
+export const INVESTOR_DOCUMENT_KINDS = { IDENTITY: "Documento de identificação", PROOF_OF_ADDRESS: "Comprovante de endereço", COMPANY_RECORDS: "Contrato social / documentos da empresa", BANK_PROOF: "Comprovante bancário", OTHER: "Outro documento" } as const;
+export type InvestorDocumentKind = keyof typeof INVESTOR_DOCUMENT_KINDS;
 
 // Periodicidade combinada dos pagamentos ao investidor (informativa; o cronograma usa as datas para sugerir a agenda).
 export const PAYMENT_FREQUENCIES = {
@@ -38,6 +47,7 @@ export const parseInvestorStatus = (value: string) => pick(INVESTOR_STATUS, valu
 export const parseInvestmentStatus = (value: string) => pick(INVESTMENT_STATUS, value);
 export const parseRatePeriod = (value: string) => pick(RATE_PERIODS, value);
 export const parseDocumentKind = (value: string) => pick(DOCUMENT_KINDS, value);
+export const parseInvestorDocumentKind = (value: string) => pick(INVESTOR_DOCUMENT_KINDS, value);
 export const parsePaymentFrequency = (value: string) => pick(PAYMENT_FREQUENCIES, value);
 
 type Failure = { ok: false; error: string };
@@ -49,21 +59,36 @@ export type InvestorAddressKey = `address${AddressPart}`;
 export const investorAddressKeys = addressParts.map((part) => `address${part}` as InvestorAddressKey);
 export type InvestorAddress = Record<InvestorAddressKey, string | null>;
 
+// Campos do cadastro do investidor (sem os dados bancários, que ficam em investor_bank_account desde a migração 0024).
 export type InvestorValues = {
-  name: string; document: string | null; phone: string | null; whatsapp: string | null; email: string | null;
+  personType: PersonType; name: string; tradeName: string | null; document: string; birthDate: string | null;
+  phone: string | null; whatsapp: string | null; email: string | null;
   instagram: string | null; facebook: string | null; notes: string | null; status: InvestorStatus;
-} & InvestorAddress & BankValues;
+} & InvestorAddress;
+// Colunas bancárias antigas do investidor (formato anterior à 0024): continuam gravadas e visíveis, nunca são apagadas.
+export type LegacyInvestorBank = BankValues;
 
 // Endereço como objeto { Cep, Street, … } a partir das colunas do investidor.
 export const investorAddress = (row: InvestorAddress): Address => Object.fromEntries(addressParts.map((part) => [part, row[`address${part}`] ?? null])) as Address;
 
-// Campos do investidor. Só o nome é obrigatório; o endereço é opcional, mas é exigido para gerar o contrato; telefone, WhatsApp e e-mail têm o formato conferido; redes sociais
-// aceitam @usuário ou endereço sem outra validação.
-export function investorFields(read: Read): { ok: true; values: InvestorValues } | Failure {
+// Campos do investidor. Obrigatórios: tipo de pessoa, nome (ou razão social) e o CPF (PF) ou CNPJ (PJ) com os dígitos
+// verificadores. O resto é opcional e tem o formato conferido. O endereço é exigido só para gerar o contrato.
+export function investorFields(read: Read, today: string): { ok: true; values: InvestorValues } | Failure {
+  const personType = pick(PERSON_TYPES, read("personType", 4));
+  if (!personType) return { ok: false, error: "Escolha se o investidor é pessoa física ou pessoa jurídica." };
   const name = read("name", 160);
-  if (!name) return { ok: false, error: "Informe o nome ou a razão social do investidor." };
-  const document = normalizeCpfCnpj(read("document", 40));
+  if (!name) return { ok: false, error: personType === "PF" ? "Informe o nome completo do investidor." : "Informe a razão social do investidor." };
+  const documentInput = read("document", 40);
+  const problem = personType === "PF" ? cpfProblem(documentInput) : cnpjProblem(documentInput);
+  if (problem) return { ok: false, error: problem };
+  const document = normalizeCpfCnpj(documentInput);
   if (!document.ok) return document;
+  if (!document.value) return { ok: false, error: personType === "PF" ? "Informe o CPF do investidor." : "Informe o CNPJ do investidor." };
+  const tradeName = personType === "PJ" ? optional(read("tradeName", 160)) : null;
+  const birthDate = read("birthDate", 10);
+  const dateLabel = personType === "PF" ? "Data de nascimento" : "Data de abertura";
+  if (birthDate && !isIsoDate(birthDate)) return { ok: false, error: `${dateLabel} inválida.` };
+  if (birthDate && (birthDate > today || birthDate < "1900-01-01")) return { ok: false, error: `${dateLabel}: informe uma data entre 01/01/1900 e hoje.` };
   const phone = normalizePhone(read("phone", 40));
   if (!phone.ok) return { ok: false, error: `Telefone: ${phone.error}` };
   const whatsapp = normalizePhone(read("whatsapp", 40));
@@ -78,26 +103,42 @@ export function investorFields(read: Read): { ok: true; values: InvestorValues }
   if (!status) return { ok: false, error: "Escolha o status do investidor." };
   const address = addressFields(read, "address");
   if (!address.ok) return { ok: false, error: `Endereço: ${address.error}` };
-  const bank = bankFields(read);
-  if (!bank.ok) return bank;
   return {
     ok: true,
     values: {
-      name, document: document.value, phone: phone.value, whatsapp: whatsapp.value, email: email.value, instagram: instagram.value, facebook: facebook.value, notes: optional(read("notes", 1000)), status,
+      personType, name, tradeName, document: document.value, birthDate: optional(birthDate),
+      phone: phone.value, whatsapp: whatsapp.value, email: email.value, instagram: instagram.value, facebook: facebook.value, notes: optional(read("notes", 1000)), status,
       ...(Object.fromEntries(addressParts.map((part) => [`address${part}`, address.value[part]])) as InvestorAddress),
-      ...bank.values,
     },
   };
+}
+
+// Unidade do prazo (migração 0024). Contratos gravados antes têm só term_months (meses), mostrado como está.
+export const TERM_UNITS = { DAYS: ["dia", "dias"], MONTHS: ["mês", "meses"], YEARS: ["ano", "anos"] } as const;
+export type TermUnit = keyof typeof TERM_UNITS;
+export const TERM_UNIT_LABELS: Record<TermUnit, string> = { DAYS: "Dias", MONTHS: "Meses", YEARS: "Anos" };
+// Forma de pagamento ao investidor combinada no contrato (as mesmas opções da baixa em Contas a Pagar).
+export const INVESTMENT_PAYMENT_METHODS = { PIX: "Pix", TRANSFER: "Transferência (TED/DOC)", CASH: "Dinheiro", OTHER: "Outra" } as const;
+export type InvestmentPaymentMethod = keyof typeof INVESTMENT_PAYMENT_METHODS;
+const TERM_MAX: Record<TermUnit, number> = { DAYS: 18250, MONTHS: 600, YEARS: 50 };
+
+export function termLabel(values: { termCount: number | null; termUnit: string | null; termMonths: number | null }) {
+  const unit = values.termUnit as TermUnit | null;
+  if (values.termCount && unit && TERM_UNITS[unit]) return `${values.termCount} ${TERM_UNITS[unit][values.termCount === 1 ? 0 : 1]}`;
+  if (values.termMonths) return `${values.termMonths} ${values.termMonths === 1 ? "mês" : "meses"}`;
+  return null;
 }
 
 export type InvestmentValues = {
   amountCents: number; agreedRateBps: number; ratePeriod: RatePeriod; startDate: string; maturityDate: string | null;
   dueDay: number | null; notes: string | null; status: InvestmentStatus;
   contractNumber: string | null; investedOn: string | null; termMonths: number | null; paymentFrequency: PaymentFrequency | null; installmentCount: number | null;
+  contractedOn: string | null; termCount: number | null; termUnit: TermUnit | null; paymentMethod: InvestmentPaymentMethod | null; bankAccountId: string | null;
+  yieldTerms: string | null; principalTerms: string | null;
 };
 
 // Número inteiro opcional entre min e max ("" = null; NaN = inválido).
-const optionalInteger = (value: string, min: number, max: number) => (value ? (/^\d{1,4}$/.test(value) && Number(value) >= min && Number(value) <= max ? Number(value) : NaN) : null);
+const optionalInteger = (value: string, min: number, max: number) => (value ? (/^\d{1,5}$/.test(value) && Number(value) >= min && Number(value) <= max ? Number(value) : NaN) : null);
 // Identificação do contrato: letras, números, espaço, ponto, barra, hífen e sublinhado (ex.: INV-2026/001).
 const CONTRACT_NUMBER = /^[0-9A-Za-z][0-9A-Za-z ./_-]{0,39}$/;
 
@@ -122,10 +163,20 @@ export function investmentFields(read: Read): { ok: true; values: InvestmentValu
   if (!status) return { ok: false, error: "Escolha o status do investimento." };
   const contractNumber = read("contractNumber", 60).replace(/\s+/g, " ");
   if (contractNumber && !CONTRACT_NUMBER.test(contractNumber)) return { ok: false, error: "Identificação do contrato: até 40 letras, números, espaço, ponto, barra ou hífen, por exemplo INV-2026/001." };
+  const contractedOn = read("contractedOn", 10);
+  if (contractedOn && !isIsoDate(contractedOn)) return { ok: false, error: "Data da contratação inválida." };
   const investedOn = read("investedOn", 10);
-  if (investedOn && !isIsoDate(investedOn)) return { ok: false, error: "Data do investimento inválida." };
-  const termMonths = optionalInteger(read("termMonths", 6), 1, 600);
-  if (Number.isNaN(termMonths)) return { ok: false, error: "O prazo vai de 1 a 600 meses." };
+  if (investedOn && !isIsoDate(investedOn)) return { ok: false, error: "Data do recebimento do dinheiro inválida." };
+  // Prazo: quantidade e unidade juntas (dias, meses ou anos). Nada é convertido de uma unidade para outra.
+  const termInput = read("termCount", 6);
+  const termUnitInput = read("termUnit", 10);
+  const termUnit = termInput ? pick(TERM_UNIT_LABELS, termUnitInput) : null;
+  if (termInput && !termUnit) return { ok: false, error: "Escolha a unidade do prazo (dias, meses ou anos)." };
+  const termCount = termUnit ? optionalInteger(termInput, 1, TERM_MAX[termUnit]) : null;
+  if (termUnit && (termCount === null || Number.isNaN(termCount))) return { ok: false, error: `O prazo vai de 1 a ${TERM_MAX[termUnit]} ${TERM_UNITS[termUnit][1]}.` };
+  const methodInput = read("paymentMethod", 20);
+  const paymentMethod = methodInput ? pick(INVESTMENT_PAYMENT_METHODS, methodInput) : null;
+  if (methodInput && !paymentMethod) return { ok: false, error: "Escolha a forma de pagamento na lista." };
   const frequencyInput = read("paymentFrequency", 20);
   const paymentFrequency = frequencyInput ? parsePaymentFrequency(frequencyInput) : null;
   if (frequencyInput && !paymentFrequency) return { ok: false, error: "Escolha a periodicidade dos pagamentos na lista." };
@@ -135,15 +186,19 @@ export function investmentFields(read: Read): { ok: true; values: InvestmentValu
     ok: true,
     values: {
       amountCents, agreedRateBps, ratePeriod, startDate, maturityDate: optional(maturityInput), dueDay, notes: optional(read("notes", 1000)), status,
-      contractNumber: optional(contractNumber), investedOn: optional(investedOn), termMonths, paymentFrequency, installmentCount,
+      contractNumber: optional(contractNumber), investedOn: optional(investedOn), termMonths: null, paymentFrequency, installmentCount,
+      contractedOn: optional(contractedOn), termCount, termUnit, paymentMethod, bankAccountId: optional(read("bankAccountId", 80)),
+      yieldTerms: optional(read("yieldTerms", 1000)), principalTerms: optional(read("principalTerms", 1000)),
     },
   };
 }
 
-export type InvestmentSummaryRow = { status: InvestmentStatus; amountCents: number; maturityDate: string | null };
+// Totais por contrato, somados dos registros: rendimento informado no cronograma, rendimento pago e principal devolvido
+// (baixas). Nenhum é calculado por taxa.
+export type InvestmentSummaryRow = { status: InvestmentStatus; amountCents: number; maturityDate: string | null; scheduledYieldCents: number; paidYieldCents: number; paidPrincipalCents: number };
 
-// Painel: capital dos contratos ativos, quantidade e os vencimentos de contrato cadastrados. Rendimentos previstos,
-// rendimentos pagos e total a devolver ficam null: dependem das regras de investimento ainda não definidas.
+// Painel da lista: capital dos contratos ativos, quantidade, vencimentos de contrato e as somas dos registros
+// (rendimentos informados nos cronogramas, rendimentos pagos e principal ainda não devolvido dos contratos em vigor).
 export function summarizeInvestments(rows: InvestmentSummaryRow[], today: string, horizonDays = 30) {
   const active = rows.filter((row) => row.status === "ACTIVE");
   const upcoming = active.filter((row) => row.maturityDate !== null && row.maturityDate >= today).map((row) => row.maturityDate as string).sort();
@@ -155,9 +210,9 @@ export function summarizeInvestments(rows: InvestmentSummaryRow[], today: string
     nextMaturityDate: upcoming[0] ?? null,
     maturingSoonCount: upcoming.filter((date) => date <= limit).length,
     overdueMaturityCount: active.filter((row) => row.maturityDate !== null && row.maturityDate < today).length,
-    expectedYieldCents: null,
-    paidYieldCents: null,
-    totalToReturnCents: null,
+    expectedYieldCents: rows.filter((row) => row.status !== "CANCELED").reduce((total, row) => total + row.scheduledYieldCents, 0),
+    paidYieldCents: rows.reduce((total, row) => total + row.paidYieldCents, 0),
+    principalToReturnCents: rows.filter((row) => row.status === "ACTIVE" || row.status === "PENDING_SIGNATURE").reduce((total, row) => total + Math.max(row.amountCents - row.paidPrincipalCents, 0), 0),
   };
 }
 
@@ -193,38 +248,108 @@ export function scheduleDates(firstDueDate: string, count: number, frequency: Pa
 
 const amount = (value: string) => (value ? parseMoneyToCents(value) : 0);
 
-// Uma linha do cronograma (inclusão ou edição).
-export function scheduleItemFields(read: Read): { ok: true; values: ScheduleItemValues } | Failure {
-  const dueDate = read("dueDate", 10);
+// Tipo da obrigação de uma linha: só rendimento, só devolução de principal ou as duas (combinada). Na combinada os dois
+// valores continuam separados (cada um tem a sua baixa e a sua saída de capital).
+export const LINE_KINDS = { YIELD: "Rendimento", PRINCIPAL: "Devolução de principal", COMBINED: "Rendimento + principal" } as const;
+export type LineKind = keyof typeof LINE_KINDS;
+export const lineKind = (item: { yieldCents: number; principalCents: number }): LineKind => (item.yieldCents > 0 && item.principalCents > 0 ? "COMBINED" : item.yieldCents > 0 ? "YIELD" : "PRINCIPAL");
+
+// Uma linha do cronograma (inclusão, edição ou linha de um lote revisado). O tipo escolhido precisa bater com os valores:
+// rendimento só com rendimento, principal só com principal, combinada com os dois. O total, quando enviado, precisa ser
+// a soma exata dos dois.
+export function scheduleLineValues(input: { kind?: string; dueDate: string; yieldAmount: string; principalAmount: string; total?: string; description?: string }): { ok: true; values: ScheduleItemValues } | Failure {
+  const dueDate = input.dueDate.trim();
   if (!isIsoDate(dueDate)) return { ok: false, error: "Informe a data do pagamento." };
-  const yieldCents = amount(read("yieldAmount", 40));
-  const principalCents = amount(read("principalAmount", 40));
+  const yieldCents = amount(input.yieldAmount.trim());
+  const principalCents = amount(input.principalAmount.trim());
   if (yieldCents === null || yieldCents < 0 || yieldCents > MAX_CENTS) return { ok: false, error: "Rendimento: informe o valor em reais, por exemplo 1.000,00 (ou deixe em branco)." };
   if (principalCents === null || principalCents < 0 || principalCents > MAX_CENTS) return { ok: false, error: "Devolução do principal: informe o valor em reais, por exemplo 50.000,00 (ou deixe em branco)." };
   if (yieldCents + principalCents <= 0) return { ok: false, error: "Informe o rendimento, a devolução do principal ou os dois." };
-  return { ok: true, values: { dueDate, yieldCents, principalCents, description: optional(read("description", 200)) } };
+  const kind = input.kind ? pick(LINE_KINDS, input.kind) : null;
+  if (input.kind && !kind) return { ok: false, error: "Escolha o tipo: rendimento, devolução de principal ou os dois." };
+  if (kind === "YIELD" && (yieldCents <= 0 || principalCents > 0)) return { ok: false, error: "Linha de rendimento: informe só o valor do rendimento (principal em branco)." };
+  if (kind === "PRINCIPAL" && (principalCents <= 0 || yieldCents > 0)) return { ok: false, error: "Linha de devolução de principal: informe só o valor do principal (rendimento em branco)." };
+  if (kind === "COMBINED" && (yieldCents <= 0 || principalCents <= 0)) return { ok: false, error: "Linha combinada: informe o rendimento e o principal, separados." };
+  if (input.total?.trim()) {
+    const totalCents = parseMoneyToCents(input.total.trim());
+    if (totalCents !== yieldCents + principalCents) return { ok: false, error: `O total da linha (${input.total.trim()}) não é a soma do rendimento com o principal (${formatMoney(yieldCents + principalCents)}).` };
+  }
+  const description = (input.description ?? "").trim().slice(0, 200);
+  return { ok: true, values: { dueDate, yieldCents, principalCents, description: description || null } };
 }
 
-// Montagem do cronograma inteiro: primeira data, quantidade, periodicidade, rendimento de cada data e devolução do
-// principal na última data (os dois digitados). Depois de gravado, cada linha pode ser editada.
-export function scheduleBuildFields(read: Read): { ok: true; frequency: PaymentFrequency; items: ScheduleItemValues[] } | Failure {
-  const frequency = parsePaymentFrequency(read("frequency", 20));
-  if (!frequency || frequency === "OTHER") return { ok: false, error: "Escolha uma periodicidade (mensal, trimestral, semestral, anual ou pagamento único). Para datas irregulares, inclua as linhas uma a uma." };
-  const firstDueDate = read("firstDueDate", 10);
-  if (!isIsoDate(firstDueDate)) return { ok: false, error: "Informe a data do primeiro pagamento." };
-  const count = frequency === "AT_MATURITY" ? 1 : optionalInteger(read("count", 6), 1, MAX_SCHEDULE_ITEMS);
-  if (count === null || Number.isNaN(count)) return { ok: false, error: `Informe a quantidade de pagamentos (1 a ${MAX_SCHEDULE_ITEMS}).` };
-  const yieldCents = amount(read("yieldAmount", 40));
-  const principalCents = amount(read("principalAmount", 40));
-  if (yieldCents === null || yieldCents < 0 || yieldCents > MAX_CENTS) return { ok: false, error: "Rendimento de cada pagamento: informe o valor em reais (ou deixe em branco)." };
-  if (principalCents === null || principalCents < 0 || principalCents > MAX_CENTS) return { ok: false, error: "Devolução do principal: informe o valor em reais (ou deixe em branco)." };
-  if (yieldCents <= 0 && (count > 1 || principalCents <= 0)) return { ok: false, error: count > 1 ? "Informe o rendimento de cada pagamento (só a última data pode ter apenas a devolução do principal)." : "Informe o rendimento, a devolução do principal ou os dois." };
-  const description = optional(read("description", 200));
-  const dates = scheduleDates(firstDueDate, count, frequency);
-  return {
-    ok: true, frequency,
-    items: dates.map((dueDate, index) => ({ dueDate, yieldCents, principalCents: index === dates.length - 1 ? principalCents : 0, description })),
-  };
+// Uma linha vinda de um formulário (inclusão ou edição).
+export function scheduleItemFields(read: Read): { ok: true; values: ScheduleItemValues } | Failure {
+  return scheduleLineValues({ kind: read("kind", 20), dueDate: read("dueDate", 10), yieldAmount: read("yieldAmount", 40), principalAmount: read("principalAmount", 40), total: read("total", 40), description: read("description", 200) });
+}
+
+// Lote de linhas revisado na tela (JSON enviado pelo formulário). Cada linha passa pela mesma conferência da inclusão.
+export type ScheduleLineInput = { kind?: string; dueDate: string; yieldAmount: string; principalAmount: string; total?: string; description?: string };
+export function scheduleLinesFields(raw: string): { ok: true; items: ScheduleItemValues[] } | Failure {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return { ok: false, error: "Lista de pagamentos inválida. Recarregue a página e tente de novo." }; }
+  if (!Array.isArray(parsed) || parsed.length === 0) return { ok: false, error: "Inclua pelo menos um pagamento na lista." };
+  if (parsed.length > MAX_SCHEDULE_ITEMS) return { ok: false, error: `O cronograma pode ter no máximo ${MAX_SCHEDULE_ITEMS} pagamentos.` };
+  const items: ScheduleItemValues[] = [];
+  for (const [index, line] of parsed.entries()) {
+    const value = (key: string) => (line && typeof line === "object" && typeof (line as Record<string, unknown>)[key] === "string" ? String((line as Record<string, unknown>)[key]).slice(0, 200) : "");
+    const result = scheduleLineValues({ kind: value("kind"), dueDate: value("dueDate"), yieldAmount: value("yieldAmount"), principalAmount: value("principalAmount"), total: value("total"), description: value("description") });
+    if (!result.ok) return { ok: false, error: `Linha ${index + 1}: ${result.error}` };
+    items.push(result.values);
+  }
+  return { ok: true, items };
+}
+
+// Sugestão de linhas para o usuário revisar ANTES de gravar (nada é gravado por aqui): as datas pela periodicidade, o
+// rendimento digitado repetido em cada data e a devolução do principal digitada na última data. Os valores não são
+// divididos nem calculados; cada linha pode ser alterada, retirada ou acrescentada na revisão.
+export function suggestScheduleLines({ frequency, firstDueDate, count, yieldAmount, principalAmount, description }: {
+  frequency: PaymentFrequency; firstDueDate: string; count: number; yieldAmount: string; principalAmount: string; description: string;
+}): ScheduleLineInput[] {
+  if (!isIsoDate(firstDueDate) || !Number.isInteger(count) || count < 1 || count > MAX_SCHEDULE_ITEMS) return [];
+  const dates = scheduleDates(firstDueDate, frequency === "AT_MATURITY" ? 1 : count, frequency);
+  return dates.map((dueDate, index) => {
+    const last = index === dates.length - 1;
+    const principal = last ? principalAmount : "";
+    const kind = yieldAmount && principal ? "COMBINED" : principal ? "PRINCIPAL" : "YIELD";
+    return { kind, dueDate, yieldAmount, principalAmount: principal, description };
+  });
+}
+
+// Modelo padrão (conveniência, nunca obrigatório): pagamentos periódicos de rendimento (a periodicidade do contrato, ou
+// mensal se não houver uma regular), o primeiro um período depois do início, a quantidade pelo prazo (ou até o vencimento)
+// e o principal integral na última data. Só preenche os parâmetros da sugestão; o rendimento é o valor combinado,
+// digitado pelo usuário, e as linhas ainda passam pela revisão antes de gravar.
+export function defaultModelPlan(investment: {
+  startDate: string; maturityDate: string | null; termCount: number | null; termUnit: string | null; termMonths: number | null; paymentFrequency: string | null; amountCents: number;
+}) {
+  const own = investment.paymentFrequency as PaymentFrequency | null;
+  const frequency: PaymentFrequency = own && FREQUENCY_MONTHS[own] ? own : "MONTHLY";
+  const step = FREQUENCY_MONTHS[frequency] as number;
+  const firstDueDate = dueDates("MONTHLY", investment.startDate, step + 1)[step];
+  const months = investment.termCount && investment.termUnit === "MONTHS" ? investment.termCount
+    : investment.termCount && investment.termUnit === "YEARS" ? investment.termCount * 12
+    : !investment.termCount ? investment.termMonths : null;
+  let count: number | null = months && months % step === 0 ? months / step : null;
+  if (!count && investment.maturityDate && investment.maturityDate >= firstDueDate) {
+    count = scheduleDates(firstDueDate, MAX_SCHEDULE_ITEMS, frequency).filter((date) => date <= (investment.maturityDate as string)).length || null;
+  }
+  return { frequency, firstDueDate, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount: centsToInput(investment.amountCents) };
+}
+
+// Datas das linhas comparadas com o contrato: antes do início é recusado na gravação; depois do vencimento do contrato
+// é apenas apontado (pode ser combinado assim), nunca corrigido.
+export function scheduleDateProblem(dueDate: string, investment: { startDate: string }) {
+  return dueDate < investment.startDate ? `A data do pagamento (${formatDate(dueDate)}) é anterior ao início do contrato (${formatDate(investment.startDate)}).` : null;
+}
+
+// Versão do cronograma gravado: muda quando qualquer linha é incluída, alterada, retirada ou substituída. A tela envia a
+// versão que viu; se o cronograma mudou desde então (outro envio, outra aba, clique repetido), nada é gravado.
+export function scheduleVersion(items: { id: string; updatedAt: Date | string }[]) {
+  const text = items.map((item) => `${item.id}@${typeof item.updatedAt === "string" ? item.updatedAt : item.updatedAt.toISOString()}`).sort().join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  return `${items.length}-${hash.toString(36)}`;
 }
 
 // Totais do cronograma (só soma o que foi digitado).
@@ -240,22 +365,31 @@ const investmentFieldLabels: [keyof InvestmentValues, string, (value: Investment
   ["amountCents", "Valor investido", (v) => formatMoney(v.amountCents)],
   ["agreedRateBps", "Taxa combinada", (v) => rateLabel(v.agreedRateBps, v.ratePeriod)],
   ["ratePeriod", "Período da taxa", (v) => RATE_PERIODS[v.ratePeriod]],
-  ["investedOn", "Data do investimento", (v) => v.investedOn && formatDate(v.investedOn)],
+  ["contractedOn", "Data da contratação", (v) => v.contractedOn && formatDate(v.contractedOn)],
+  ["investedOn", "Data do recebimento do dinheiro", (v) => v.investedOn && formatDate(v.investedOn)],
   ["startDate", "Data de início", (v) => formatDate(v.startDate)],
-  ["termMonths", "Prazo", (v) => (v.termMonths ? `${v.termMonths} ${v.termMonths === 1 ? "mês" : "meses"}` : null)],
+  ["termCount", "Prazo", (v) => termLabel(v)],
   ["maturityDate", "Vencimento do contrato", (v) => v.maturityDate && formatDate(v.maturityDate)],
   ["dueDay", "Dia de vencimento", (v) => (v.dueDay ? `Dia ${v.dueDay}` : null)],
   ["paymentFrequency", "Periodicidade dos pagamentos", (v) => v.paymentFrequency && PAYMENT_FREQUENCIES[v.paymentFrequency]],
   ["installmentCount", "Quantidade de parcelas", (v) => (v.installmentCount ? String(v.installmentCount) : null)],
+  ["paymentMethod", "Forma de pagamento", (v) => v.paymentMethod && INVESTMENT_PAYMENT_METHODS[v.paymentMethod]],
+  ["bankAccountId", "Conta bancária para os pagamentos", (v) => (v.bankAccountId ? "conta do investidor" : null)],
+  ["yieldTerms", "Condições do rendimento", (v) => v.yieldTerms],
+  ["principalTerms", "Regras de devolução do principal", (v) => v.principalTerms],
   ["status", "Status", (v) => INVESTMENT_STATUS[v.status]],
   ["notes", "Observações", (v) => v.notes],
 ];
-export function investmentChanges(before: InvestmentValues, after: InvestmentValues) {
+export function investmentChanges(before: InvestmentValues, after: InvestmentValues, accountLabel: (id: string) => string = () => "conta do investidor") {
   const changes: { field: string; before: string | null; after: string | null }[] = [];
-  for (const [key, label, show] of investmentFieldLabels) {
+  for (const [key, label, baseShow] of investmentFieldLabels) {
+    const show = key === "bankAccountId" ? (v: InvestmentValues) => (v.bankAccountId ? accountLabel(v.bankAccountId) : null) : baseShow;
     // A taxa aparece uma vez só ("2% ao mês"), mesmo quando só o período muda.
     if (key === "ratePeriod") continue;
-    const changed = key === "agreedRateBps" ? before.agreedRateBps !== after.agreedRateBps || before.ratePeriod !== after.ratePeriod : before[key] !== after[key];
+    // O prazo é comparado pelo texto ("12 meses"), para que o formato anterior (term_months) igual ao novo não conte como mudança;
+    // a conta bancária, pelo id (o texto não diz qual conta).
+    const changed = key === "agreedRateBps" ? before.agreedRateBps !== after.agreedRateBps || before.ratePeriod !== after.ratePeriod
+      : key === "termCount" ? termLabel(before) !== termLabel(after) : before[key] !== after[key];
     if (changed) changes.push({ field: label, before: show(before) || null, after: show(after) || null });
   }
   return changes;

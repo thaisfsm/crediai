@@ -7,25 +7,35 @@ import { formatCpfCnpj, maskCpfCnpj, normalizeCpfCnpj } from "../src/lib/finance
 
 const form = (values) => (key, max) => String(values[key] ?? "").trim().slice(0, max);
 
-test("IV1. investidor: só o nome é obrigatório; CPF/CNPJ, telefones e e-mail normalizados", () => {
-  assert.equal(investorFields(form({})).ok, false);
-  const minimal = investorFields(form({ name: "Ana Investidora" }));
+test("IV1. investidor: tipo de pessoa, nome e CPF/CNPJ conferido pelo tipo; contatos normalizados", () => {
+  const today = "2026-10-15";
+  assert.equal(investorFields(form({}), today).ok, false);
+  assert.equal(investorFields(form({ name: "Ana Investidora" }), today).ok, false, "sem tipo de pessoa e documento não grava");
+  const minimal = investorFields(form({ personType: "PF", name: "Ana Investidora", document: "411.797.058-58" }), today);
   assert.equal(minimal.ok, true);
   assert.deepEqual(minimal.values, {
-    name: "Ana Investidora", document: null, phone: null, whatsapp: null, email: null, instagram: null, facebook: null, notes: null, status: "ACTIVE",
+    personType: "PF", name: "Ana Investidora", tradeName: null, document: "41179705858", birthDate: null, phone: null, whatsapp: null, email: null, instagram: null, facebook: null, notes: null, status: "ACTIVE",
     addressCep: null, addressStreet: null, addressNumber: null, addressComplement: null, addressDistrict: null, addressCity: null, addressState: null,
-    bankHolderName: null, bankHolderDocument: null, bankName: null, bankBranch: null, bankAccount: null, bankAccountType: null, pixKeyType: null, pixKey: null,
   });
-  const full = investorFields(form({ name: "Empresa X Ltda", document: "11.222.333/0001-81", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321", email: " Contato@Empresa.COM ", instagram: "@empresax", facebook: "https://facebook.com/empresax", notes: "obs", status: "INACTIVE" }));
+  assert.ok(!Object.keys(minimal.values).some((key) => /bank|pix/i.test(key)), "dados bancários ficam nas contas do investidor");
+  const full = investorFields(form({ personType: "PJ", name: "Empresa X Ltda", tradeName: " Empresa X ", document: "11.222.333/0001-81", birthDate: "2010-05-20", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321", email: " Contato@Empresa.COM ", instagram: "@empresax", facebook: "https://facebook.com/empresax", notes: "obs", status: "INACTIVE" }), today);
   assert.equal(full.ok, true);
   assert.equal(full.values.document, "11222333000181");
+  assert.equal(full.values.tradeName, "Empresa X");
+  assert.equal(full.values.birthDate, "2010-05-20");
   assert.equal(full.values.whatsapp, "11987654321");
   assert.equal(full.values.email, "contato@empresa.com");
   assert.equal(full.values.status, "INACTIVE");
-  assert.equal(investorFields(form({ name: "A", document: "123" })).ok, false);
-  assert.equal(investorFields(form({ name: "A", email: "sem-arroba" })).ok, false);
-  assert.equal(investorFields(form({ name: "A", whatsapp: "123" })).ok, false);
-  assert.equal(investorFields(form({ name: "A", status: "ADMIN" })).ok, false);
+  const pf = { personType: "PF", name: "A", document: "411.797.058-58" };
+  assert.equal(investorFields(form({ ...pf, personType: "PJ" }), today).ok, false, "CPF com tipo PJ é recusado");
+  assert.equal(investorFields(form({ ...pf, document: "11.222.333/0001-81" }), today).ok, false, "CNPJ com tipo PF é recusado");
+  assert.equal(investorFields(form({ ...pf, document: "411.797.058-59" }), today).ok, false, "dígito verificador errado");
+  assert.equal(investorFields(form({ ...pf, personType: "XX" }), today).ok, false);
+  assert.equal(investorFields(form({ ...pf, birthDate: "2026-10-16" }), today).ok, false, "nascimento no futuro");
+  assert.equal(investorFields(form({ ...pf, birthDate: "1899-12-31" }), today).ok, false);
+  assert.equal(investorFields(form({ ...pf, email: "sem-arroba" }), today).ok, false);
+  assert.equal(investorFields(form({ ...pf, whatsapp: "123" }), today).ok, false);
+  assert.equal(investorFields(form({ ...pf, status: "ADMIN" }), today).ok, false);
 });
 
 test("IV2. redes sociais: @usuário ou URL, sem validação restritiva; link só para o próprio Instagram/Facebook", () => {
@@ -58,7 +68,19 @@ test("IV4. investimento: taxa e período obrigatórios, período nunca presumido
   assert.deepEqual(ok.values, {
     amountCents: 5_000_000, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-01", maturityDate: null, dueDay: null, notes: null, status: "ACTIVE",
     contractNumber: null, investedOn: null, termMonths: null, paymentFrequency: null, installmentCount: null,
+    contractedOn: null, termCount: null, termUnit: null, paymentMethod: null, bankAccountId: null, yieldTerms: null, principalTerms: null,
   });
+  const custom = investmentFields(form({ ...base, contractedOn: "2026-09-28", investedOn: "2026-09-30", termCount: "12", termUnit: "MONTHS", paymentMethod: "PIX", bankAccountId: "conta-1", yieldTerms: "mensal até o dia 10", principalTerms: "50% no 6º mês e 50% no 12º" }));
+  assert.equal(custom.ok, true);
+  assert.equal(custom.values.termCount, 12);
+  assert.equal(custom.values.termUnit, "MONTHS");
+  assert.equal(custom.values.termMonths, null, "o prazo novo não é convertido para o campo antigo");
+  assert.equal(custom.values.paymentMethod, "PIX");
+  assert.equal(custom.values.principalTerms, "50% no 6º mês e 50% no 12º");
+  assert.equal(investmentFields(form({ ...base, termCount: "12" })).ok, false, "prazo sem unidade");
+  assert.equal(investmentFields(form({ ...base, termCount: "0", termUnit: "MONTHS" })).ok, false);
+  assert.equal(investmentFields(form({ ...base, paymentMethod: "BOLETO" })).ok, false);
+  assert.equal(investmentFields(form({ ...base, contractedOn: "2026-13-01" })).ok, false);
   assert.equal(investmentFields(form({ ...base, ratePeriod: "" })).ok, false, "sem período escolhido não grava");
   assert.equal(investmentFields(form({ ...base, rate: "" })).ok, false);
   assert.equal(investmentFields(form({ ...base, amount: "0" })).ok, false);
@@ -66,18 +88,21 @@ test("IV4. investimento: taxa e período obrigatórios, período nunca presumido
   assert.equal(investmentFields(form({ ...base, dueDay: "32" })).ok, false);
   assert.equal(investmentFields(form({ ...base, dueDay: "10", maturityDate: "2027-10-01", status: "PENDING_SIGNATURE" })).values.dueDay, 10);
   // Nenhum campo de rendimento, saldo ou total a devolver é produzido.
-  assert.ok(!Object.keys(ok.values).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
+  // Nenhum campo de rendimento calculado, saldo ou total a devolver é produzido (as condições são texto livre).
+  assert.ok(!Object.keys(ok.values).filter((key) => !/Terms$/.test(key)).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
   assert.equal(rateLabel(150, "YEARLY"), "1,5% ao ano");
   assert.deepEqual(Object.keys(RATE_PERIODS), ["MONTHLY", "YEARLY", "CONTRACT_TERM", "OTHER"]);
 });
 
-test("IV5. painel: soma e conta só o cadastrado; rendimentos e total a devolver ficam sem cálculo", () => {
+test("IV5. painel: soma só o cadastrado; rendimentos vêm do cronograma e das baixas, nunca da taxa", () => {
+  const row = (values) => ({ scheduledYieldCents: 0, paidYieldCents: 0, paidPrincipalCents: 0, ...values });
   const rows = [
-    { status: "ACTIVE", amountCents: 100_000, maturityDate: "2026-10-20" },
-    { status: "ACTIVE", amountCents: 50_000, maturityDate: "2027-05-01" },
-    { status: "ACTIVE", amountCents: 10_000, maturityDate: "2026-09-01" },
-    { status: "PENDING_SIGNATURE", amountCents: 999_999, maturityDate: "2026-10-12" },
-    { status: "CLOSED", amountCents: 999_999, maturityDate: null },
+    row({ status: "ACTIVE", amountCents: 100_000, maturityDate: "2026-10-20", scheduledYieldCents: 12_000, paidYieldCents: 3_000, paidPrincipalCents: 40_000 }),
+    row({ status: "ACTIVE", amountCents: 50_000, maturityDate: "2027-05-01" }),
+    row({ status: "ACTIVE", amountCents: 10_000, maturityDate: "2026-09-01" }),
+    row({ status: "PENDING_SIGNATURE", amountCents: 999_999, maturityDate: "2026-10-12" }),
+    row({ status: "CLOSED", amountCents: 999_999, maturityDate: null, scheduledYieldCents: 5_000, paidYieldCents: 5_000 }),
+    row({ status: "CANCELED", amountCents: 7_777, maturityDate: null, scheduledYieldCents: 9_999 }),
   ];
   const summary = summarizeInvestments(rows, "2026-10-10");
   assert.equal(summary.investedCents, 160_000);
@@ -86,9 +111,9 @@ test("IV5. painel: soma e conta só o cadastrado; rendimentos e total a devolver
   assert.equal(summary.nextMaturityDate, "2026-10-20");
   assert.equal(summary.maturingSoonCount, 1);
   assert.equal(summary.overdueMaturityCount, 1);
-  assert.equal(summary.expectedYieldCents, null);
-  assert.equal(summary.paidYieldCents, null);
-  assert.equal(summary.totalToReturnCents, null);
+  assert.equal(summary.expectedYieldCents, 17_000, "linhas de rendimento digitadas, sem contrato cancelado");
+  assert.equal(summary.paidYieldCents, 8_000);
+  assert.equal(summary.principalToReturnCents, 60_000 + 50_000 + 10_000 + 999_999, "ativos e aguardando assinatura menos o principal devolvido");
   assert.deepEqual(summarizeInvestments([], "2026-10-10").investedCents, 0);
 });
 

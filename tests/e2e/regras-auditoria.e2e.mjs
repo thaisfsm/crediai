@@ -96,7 +96,7 @@ test("REG3. corrigir o pagamento para uma data mais tarde que descobre uma retir
 });
 
 test("REG4. cronograma: devolução de principal acima do valor investido é recusada (montagem, inclusão e edição)", async () => {
-  const investor = await action(robério, "createInvestorAction", { name: "Investidor Regras Auditoria" }, "/investidores");
+  const investor = await action(robério, "createInvestorAction", { personType: "PF", document: "31972257323", name: "Investidor Regras Auditoria" }, "/investidores");
   const investment = await action(robério, "createInvestmentAction", { investorId: investor.id, amount: "20.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: shift(-1), contractNumber: "AUD-1" }, "/investidores");
   assert.equal(investment?.ok, true, JSON.stringify(investment));
   const add = (principalAmount, yieldAmount = "") => action(robério, "addInvestmentScheduleItemAction", { investmentId: investment.id, dueDate: shift(60), principalAmount, yieldAmount }, "/investidores");
@@ -108,7 +108,8 @@ test("REG4. cronograma: devolução de principal acima do valor investido é rec
   const item = await one(`select id from investment_schedule_item where investment_id = '${investment.id}' and principal_cents > 0`);
   const edit = await action(robério, "updateInvestmentScheduleItemAction", { investmentId: investment.id, itemId: item, dueDate: shift(60), principalAmount: "20.000,01" }, "/investidores");
   assert.equal(edit?.ok, false);
-  const build = await action(robério, "buildInvestmentScheduleAction", { investmentId: investment.id, replace: "1", frequency: "MONTHLY", firstDueDate: shift(30), count: "3", yieldAmount: "200,00", principalAmount: "25.000,00" }, "/investidores");
+  const reviewed = [{ kind: "YIELD", dueDate: shift(30), yieldAmount: "200,00", principalAmount: "" }, { kind: "YIELD", dueDate: shift(60), yieldAmount: "200,00", principalAmount: "" }, { kind: "COMBINED", dueDate: shift(90), yieldAmount: "200,00", principalAmount: "25.000,00" }];
+  const build = await action(robério, "saveInvestmentScheduleLinesAction", { investmentId: investment.id, mode: "replace", replace: "1", lines: JSON.stringify(reviewed) }, "/investidores");
   assert.equal(build?.ok, false);
   assert.match(build.error, /mais que o valor investido/);
   assert.equal(await one(`select sum(principal_cents)::int from investment_schedule_item where investment_id = '${investment.id}'`), 2_000_000);

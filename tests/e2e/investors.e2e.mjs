@@ -62,7 +62,7 @@ test("preparação", async () => {
 });
 
 test("V1. criar investidor (TENANT_USER grava na própria carteira, mesmo forjando outra)", async () => {
-  const created = await action(robério, "createInvestorAction", {
+  const created = await action(robério, "createInvestorAction", { personType: "PF",
     tenantId: "ten_fernando", name: "Investidora do Robério", document: "411.797.058-58", phone: "(11) 3456-7890", whatsapp: "(11) 98765-4321",
     email: "Investidora@Teste.Local", instagram: "@investidora", facebook: "https://facebook.com/investidora", notes: "conta bancária 123-4",
   });
@@ -76,26 +76,26 @@ test("V1. criar investidor (TENANT_USER grava na própria carteira, mesmo forjan
   assert.equal(row.instagram, "@investidora");
   assert.equal(row.status, "ACTIVE");
   // Mesmo CPF na mesma carteira: recusado com mensagem clara.
-  const duplicate = await action(robério, "createInvestorAction", { name: "Outro", document: "41179705858" });
+  const duplicate = await action(robério, "createInvestorAction", { personType: "PF", name: "Outro", document: "41179705858" });
   assert.equal(duplicate?.ok, false);
   assert.match(duplicate.error, /CPF\/CNPJ/);
   // Investidor do tenant B, para as tentativas de acesso cruzado.
-  const other = await action(fernando, "createInvestorAction", { name: "Investidor do Fernando", document: "11.222.333/0001-81" });
+  const other = await action(fernando, "createInvestorAction", { personType: "PJ", name: "Investidor do Fernando", document: "11.222.333/0001-81" });
   assert.equal(other?.ok, true);
   ids.investorB = other.id;
 });
 
 test("V2. editar investidor e alterar status", async () => {
-  const updated = await action(robério, "updateInvestorAction", { investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", phone: "", whatsapp: "(11) 98765-4321", email: "investidora@teste.local", instagram: "instagram.com/investidora", facebook: "", notes: "conta bancária 999-9", status: "ACTIVE" });
+  const updated = await action(robério, "updateInvestorAction", { personType: "PF", investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", phone: "", whatsapp: "(11) 98765-4321", email: "investidora@teste.local", instagram: "instagram.com/investidora", facebook: "", notes: "conta bancária 999-9", status: "ACTIVE" });
   assert.equal(updated?.ok, true, JSON.stringify(updated));
   const [row] = await admin(`select name, phone, instagram, facebook from investor where id = '${ids.investorA}'`);
   assert.deepEqual(row, { name: "Investidora do Robério Ltda", phone: null, instagram: "instagram.com/investidora", facebook: null });
-  const inactive = await action(robério, "updateInvestorAction", { investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", whatsapp: "11987654321", email: "investidora@teste.local", instagram: "instagram.com/investidora", notes: "conta bancária 999-9", status: "INACTIVE" });
+  const inactive = await action(robério, "updateInvestorAction", { personType: "PF", investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", whatsapp: "11987654321", email: "investidora@teste.local", instagram: "instagram.com/investidora", notes: "conta bancária 999-9", status: "INACTIVE" });
   assert.equal(inactive?.ok, true);
   // Inativo não recebe investimento novo; reativado, recebe.
   const blocked = await action(robério, "createInvestmentAction", { investorId: ids.investorA, amount: "1.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: "2026-10-01" });
   assert.equal(blocked?.ok, false);
-  assert.equal((await action(robério, "updateInvestorAction", { investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", whatsapp: "11987654321", email: "investidora@teste.local", instagram: "instagram.com/investidora", notes: "conta bancária 999-9", status: "ACTIVE" }))?.ok, true);
+  assert.equal((await action(robério, "updateInvestorAction", { personType: "PF", investorId: ids.investorA, name: "Investidora do Robério Ltda", document: "41179705858", whatsapp: "11987654321", email: "investidora@teste.local", instagram: "instagram.com/investidora", notes: "conta bancária 999-9", status: "ACTIVE" }))?.ok, true);
 });
 
 test("V3. criar e editar investimento (só o combinado; período da taxa explícito)", async () => {
@@ -119,7 +119,7 @@ test("V3. criar e editar investimento (só o combinado; período da taxa explíc
 test("V4. listar e acessar detalhes: painel, lista com busca/filtros, ficha e contrato", async () => {
   const list = await page(robério, "/investidores");
   assert.equal(list.status, 200);
-  for (const expected of ["Investidores", "Capital investido", "R$ 65.000,00", "Investimentos ativos", "Rendimentos previstos", "Aguardando regra", "Total a devolver", "Próximos vencimentos", "Investidora do Robério Ltda", "411.797.058-58", "investidora@teste.local", "Instagram", "Facebook"]) assert.ok(list.html.includes(expected), `lista sem "${expected}"`);
+  for (const expected of ["Investidores", "Capital investido", "R$ 65.000,00", "Investimentos ativos", "Rendimentos previstos", "Rendimentos pagos", "Principal a devolver", "Próximos vencimentos", "Investidora do Robério Ltda", "411.797.058-58", "investidora@teste.local", "Instagram", "Facebook"]) assert.ok(list.html.includes(expected), `lista sem "${expected}"`);
   assert.ok(!list.html.includes("Investidor do Fernando"));
   assert.ok((await page(robério, "/investidores?q=79705")).html.includes("Investidora do Robério Ltda"), "busca por CPF");
   assert.ok((await page(robério, "/investidores?q=zzz")).html.includes("Nenhum investidor com esses filtros"));
@@ -129,7 +129,7 @@ test("V4. listar e acessar detalhes: painel, lista com busca/filtros, ficha e co
   for (const expected of ["Dados e contatos", "WhatsApp", "(11) 98765-4321", "conta bancária 999-9", "Investimentos", "R$ 55.000,00", "1,5% ao mês", "R$ 10.000,00", "12% ao ano", "Pendente"]) assert.ok(detail.html.includes(expected), `ficha sem "${expected}"`);
   const contract = await page(robério, `/investidores/investimentos/${ids.investmentA}`);
   assert.equal(contract.status, 200);
-  for (const expected of ["Contrato", "Valor investido", "1,5% ao mês", "01/10/2027", "Dia 5", "Rendimento e devolução", "Aguardando regra", "Documentos", "Contrato assinado ainda não enviado"]) assert.ok(contract.html.includes(expected), `contrato sem "${expected}"`);
+  for (const expected of ["Contrato", "Valor investido", "1,5% ao mês", "01/10/2027", "Dia 5", "Posição do contrato", "Principal contratado", "Documentos", "Contrato assinado ainda não enviado"]) assert.ok(contract.html.includes(expected), `contrato sem "${expected}"`);
 });
 
 test("V5. vincular documento ao investimento: enviar, visualizar, baixar e substituir (histórico mantido)", async () => {
@@ -196,7 +196,7 @@ test("V7. TENANT_USER não acessa investidores, investimentos nem documentos de 
   // O filtro de carteira não vale para o usuário do tenant.
   assert.ok(!(await page(robério, "/investidores?carteira=ten_fernando")).html.includes("Investidor do Fernando"));
   const attempts = [
-    ["updateInvestorAction", { investorId: ids.investorB, name: "Invadido" }],
+    ["updateInvestorAction", { personType: "PF", document: "69232321203", investorId: ids.investorB, name: "Invadido" }],
     ["createInvestmentAction", { investorId: ids.investorB, amount: "1,00", rate: "1", ratePeriod: "MONTHLY", startDate: "2026-10-01" }],
     ["updateInvestmentAction", { investmentId: ids.investmentB, amount: "1,00", rate: "1", ratePeriod: "MONTHLY", startDate: "2026-10-01" }],
   ];
@@ -222,7 +222,7 @@ test("V8. MASTER vê e administra investidores, contratos e documentos de todas 
   assert.equal((await page(thais, `/investidores/${ids.investorB}`)).status, 200);
   assert.equal((await page(thais, `/investidores/investimentos/${ids.investmentA}`)).status, 200);
   assert.equal((await fetch(`${BASE}/investidores/documentos/${ids.documentB}`, { headers: { cookie: thais } })).status, 200);
-  const created = await action(thais, "createInvestorAction", { tenantId: "ten_fernando", name: "Investidor criado pelo MASTER" });
+  const created = await action(thais, "createInvestorAction", { personType: "PF", document: "40771082762", tenantId: "ten_fernando", name: "Investidor criado pelo MASTER" });
   assert.equal(created?.ok, true);
   assert.equal(await one(`select tenant_id from investor where id = '${created.id}'`), "ten_fernando");
   const edited = await action(thais, "updateInvestmentAction", { investmentId: ids.investmentB, amount: "7.000,00", rate: "2", ratePeriod: "CONTRACT_TERM", startDate: "2026-10-01", status: "CLOSED" });

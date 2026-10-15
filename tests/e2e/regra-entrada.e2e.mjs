@@ -93,7 +93,7 @@ test("preparação: carteira A com R$ 10.000, um aporte comum de R$ 5.000 e cont
   robério = await login("roberio@teste.local");
   fernando = await login("fernando@teste.local");
   thais = await login("thais@teste.local");
-  const investor = await investorAction(robério, "createInvestorAction", { name: "Rita Regra" });
+  const investor = await investorAction(robério, "createInvestorAction", { personType: "PF", document: "31972257323", name: "Rita Regra" });
   assert.equal(investor?.ok, true, JSON.stringify(investor));
   ids.investor = investor.id;
   const contribution = await action(robério, "registerContributionAction", { amount: "5.000,00", occurredAt: daysAgo(20), notes: "aporte comum" }, "/");
