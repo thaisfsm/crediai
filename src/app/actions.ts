@@ -13,7 +13,7 @@ import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalize
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -210,16 +210,18 @@ function operationTermsFromForm(data: FormData) {
     const termInput = text(data, "term", 10);
     const installmentCount = /^\d+$/.test(termInput) ? Number(termInput) : NaN;
     const firstDueDate = text(data, "firstDueDate", 10);
+    // Periodicidade das parcelas: mensal (padrão, como as operações antigas) ou quinzenal.
+    const installmentFrequency: InstallmentFrequency = text(data, "installmentFrequency", 20) === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
     if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor emprestado em reais, por exemplo 10.000,00." };
     if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor de cada parcela em reais, por exemplo 1.200,00." };
-    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: "Informe o prazo total em meses, de 1 a 360." };
+    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: installmentFrequency === "BIWEEKLY" ? "Informe a quantidade de parcelas quinzenais, de 1 a 360." : "Informe o prazo total em meses, de 1 a 360." };
     if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
     if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount });
+    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount, frequency: installmentFrequency });
     if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
     return {
-      ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount),
-      values: { modality: "INSTALLMENT", frequency: "MONTHLY", installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
+      ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount, installmentFrequency),
+      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
     };
   }
   const frequencyInput = text(data, "frequency", 20);

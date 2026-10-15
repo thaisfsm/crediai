@@ -127,6 +127,13 @@
       "when": 1791928589301,
       "tag": "0018_client_search_bank_data",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791929553447,
+      "tag": "0019_installment_biweekly",
+      "breakpoints": true
     }
   ]
 }

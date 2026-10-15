@@ -5,6 +5,7 @@ export const CALCULATION_RULE = "RATE_PER_OPERATION_SINGLE_PAYMENT_V1";
 export const calculationRuleLabels: Record<string, string> = {
   [CALCULATION_RULE]: "Taxa sobre o principal, pagamento único no vencimento",
   FIXED_MONTHLY_INSTALLMENTS_V1: "Parcelado: parcelas mensais fixas, juros simples",
+  FIXED_BIWEEKLY_INSTALLMENTS_V1: "Parcelado: parcelas quinzenais fixas, juros simples",
 };
 
 export function calculateOperation({ principalCents, interestRateBps }: { principalCents: number; interestRateBps: number }) {
@@ -27,26 +28,32 @@ export function simpleInterest({ principalCents, rateBps, periods = 1 }: { princ
 }
 
 // ── Modalidade parcelada ──────────────────────────────────────────────────────────────────────────────────────────
-// O usuário informa o valor emprestado (principal), o valor de cada parcela, o primeiro vencimento e o prazo em meses.
-// Uma parcela por mês: total = parcela × parcelas; juros = total − principal.
-// Taxa contratada = juros simples ao mês = juros ÷ principal ÷ meses. Ex.: 6.000 ÷ 10.000 ÷ 10 = 6% ao mês, e de volta
-// J = 10.000 × 0,06 × 10 = 6.000, M = 16.000 = 10 × 1.600. Cada parcela leva juros e principal na mesma proporção.
+// O usuário informa o valor emprestado (principal), o valor de cada parcela, o primeiro vencimento, a quantidade de
+// parcelas e a periodicidade (mensal ou quinzenal). Total = parcela × parcelas; juros = total − principal.
+// Taxa contratada = juros simples por período = juros ÷ principal ÷ parcelas. Ex. mensal: 6.000 ÷ 10.000 ÷ 10 = 6% ao
+// mês, e de volta J = 10.000 × 0,06 × 10 = 6.000, M = 16.000 = 10 × 1.600. Ex. quinzenal: R$ 600 em 3 × R$ 300 →
+// juros 300, 300 ÷ 600 ÷ 3 = 16,67% por quinzena. Cada parcela leva juros e principal na mesma proporção.
 export const INSTALLMENT_RULE = "FIXED_MONTHLY_INSTALLMENTS_V1";
+export const BIWEEKLY_INSTALLMENT_RULE = "FIXED_BIWEEKLY_INSTALLMENTS_V1";
+export type InstallmentFrequency = "MONTHLY" | "BIWEEKLY";
 
-export function calculateInstallments({ principalCents, installmentCents, count }: { principalCents: number; installmentCents: number; count: number }) {
+export function calculateInstallments({ principalCents, installmentCents, count, frequency = "MONTHLY" }: { principalCents: number; installmentCents: number; count: number; frequency?: InstallmentFrequency }) {
   const totalCents = installmentCents * count;
   const interestCents = totalCents - principalCents;
+  // Taxa simples por período (ao mês no mensal, por quinzena no quinzenal). "monthlyRate" mantém o nome antigo.
   const monthlyRate = simpleMonthlyRate({ principalCents, interestCents: Math.max(interestCents, 0), months: count });
   return {
-    interestCents, totalCents, calculationRule: INSTALLMENT_RULE,
-    // Taxa simples mensal em pontos-base (1% = 100), arredondada; a exata fica em monthlyRate.
+    interestCents, totalCents, calculationRule: frequency === "BIWEEKLY" ? BIWEEKLY_INSTALLMENT_RULE : INSTALLMENT_RULE,
+    // Taxa simples do período em pontos-base (1% = 100), arredondada; a exata fica em monthlyRate (no quinzenal, é a
+    // taxa por quinzena; a mensal equivalente, só para exibição, é monthlyEquivalentRate(taxa, 15)).
     interestRateBps: Math.round(monthlyRate * 10_000), monthlyRate,
   };
 }
 
-// Vencimento da parcela k (1 = primeiro vencimento), mês a mês, pela função única de vencimentos (dueDates).
-export function installmentDueDate(firstDueDate: string, number: number) {
-  return dueDates("MONTHLY", firstDueDate, number)[number - 1];
+// Vencimento da parcela k (1 = primeiro vencimento), pela função única de vencimentos (dueDates): mês a mês no mensal e
+// pelos pares fixos de dias do quinzenal (dia X e X + 15, a mesma regra do pagamento único quinzenal).
+export function installmentDueDate(firstDueDate: string, number: number, frequency: InstallmentFrequency = "MONTHLY") {
+  return dueDates(frequency, firstDueDate, number)[number - 1];
 }
 
 export type InstallmentState = "PAID" | "PARTIAL" | "OPEN";
@@ -241,7 +248,8 @@ export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "princi
 export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality">, paidCents: number): ScheduleItem[] {
   const count = terms.installmentCount ?? 0, base = terms.installmentCents ?? 0;
   const totalCents = terms.principalCents + terms.interestCents;
-  const frequency: Frequency = terms.modality === "INSTALLMENT" ? "MONTHLY" : terms.frequency;
+  // Parcelado: mensal ou quinzenal (operações antigas são todas mensais); diário: um vencimento por dia.
+  const frequency: Frequency = terms.modality === "INSTALLMENT" ? (terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") : terms.frequency;
   const dates = dueDates(frequency, terms.firstDueDate, count);
   let covered = 0;
   return dates.map((dueDate, index) => {
