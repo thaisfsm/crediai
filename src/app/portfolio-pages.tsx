@@ -709,10 +709,10 @@ function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-export function ClientsPage({ portfolio, onChanged, onNewOperation }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void }) {
+export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null }) {
   const [editing, setEditing] = useState<ClientRow | null>(null);
   const [deleting, setDeleting] = useState<ClientRow | null>(null);
-  const [viewingId, setViewingId] = useState<string | null>(null);
+  const [viewingId, setViewingId] = useState<string | null>(initialClientId);
   // Busca o cliente de novo a cada atualização para que a página mostre os valores mais recentes.
   const viewing = portfolio.clients.find((client) => client.id === viewingId);
   if (viewing) return <ClientDetail client={viewing} portfolio={portfolio} onBack={() => setViewingId(null)} onChanged={onChanged} />;
