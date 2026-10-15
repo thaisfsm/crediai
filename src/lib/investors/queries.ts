@@ -1,14 +1,19 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, ilike, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, tenants, users } from "@/lib/db/schema";
+import { investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investorBankAccounts, investorDocuments, investors, tenants, users } from "@/lib/db/schema";
+import { bankAccountLabel, maskAccountNumber, maskDocument, maskPixKey } from "./bank-accounts";
+import { investmentDivergences, investmentPosition, scheduleLines } from "./position";
 import { onlyDigits, todayIso } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext, type InvestorScope } from "./access";
 import { missingContractData } from "./contract";
 import { buildObligations, entryDateOf } from "./payables";
 import { loadInvestmentCash } from "./payables-queries";
 import { contractDataHash, contractSource, contractorData, loadContractor } from "./contract-source";
-import { INVESTORS_PAGE_SIZE, investorFilters, scheduleTotals, summarizeInvestments, type DocumentKind, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type RatePeriod } from "./rules";
+import {
+  INVESTORS_PAGE_SIZE, investorFilters, personTypeOf, scheduleTotals, summarizeInvestments,
+  type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorDocumentKind, type InvestorStatus, type PaymentFrequency, type RatePeriod, type TermUnit,
+} from "./rules";
 
 type Search = { q?: string; status?: string; carteira?: string; pagina?: string };
 
@@ -50,8 +55,13 @@ export async function loadInvestorsPage(search: Search) {
     }).from(investors).innerJoin(tenants, eq(tenants.id, investors.tenantId)).where(where)
       .orderBy(asc(investors.name), asc(investors.id)).limit(INVESTORS_PAGE_SIZE).offset((page - 1) * INVESTORS_PAGE_SIZE);
 
-    const summaryRows = await tx.select({ status: investments.status, amountCents: investments.amountCents, maturityDate: investments.maturityDate })
-      .from(investments).where(scopeOn(investments.tenantId));
+    // Somas dos registros por contrato (cronograma digitado e baixas); nada é calculado por taxa.
+    const summaryRows = await tx.select({
+      status: investments.status, amountCents: investments.amountCents, maturityDate: investments.maturityDate,
+      scheduledYieldCents: sql<string>`(select coalesce(sum(s.yield_cents), 0) from investment_schedule_item s where s.investment_id = investment.id and s.tenant_id = investment.tenant_id)`,
+      paidYieldCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from investment_payment p where p.investment_id = investment.id and p.tenant_id = investment.tenant_id and p.kind = 'YIELD')`,
+      paidPrincipalCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from investment_payment p where p.investment_id = investment.id and p.tenant_id = investment.tenant_id and p.kind = 'PRINCIPAL')`,
+    }).from(investments).where(scopeOn(investments.tenantId));
     const upcoming = await tx.select({ id: investments.id, investorId: investors.id, investorName: investors.name, amountCents: investments.amountCents, maturityDate: investments.maturityDate })
       .from(investments).innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
       .where(and(scopeOn(investments.tenantId), eq(investments.status, "ACTIVE"), gte(investments.maturityDate, today)))
@@ -63,9 +73,16 @@ export async function loadInvestorsPage(search: Search) {
       today,
       tenants: tenantsList,
       filters: { q: filters.q, status: filters.status, carteira },
-      summary: summarizeInvestments(summaryRows.map((row) => ({ ...row, status: row.status as InvestmentStatus })), today),
+      summary: summarizeInvestments(summaryRows.map((row) => ({
+        ...row, status: row.status as InvestmentStatus, scheduledYieldCents: Number(row.scheduledYieldCents), paidYieldCents: Number(row.paidYieldCents), paidPrincipalCents: Number(row.paidPrincipalCents),
+      })), today),
       upcoming: upcoming.map((row) => ({ ...row, maturityDate: row.maturityDate as string })),
-      investors: rows.map(({ investor, tenantName, investmentCount }) => ({ ...toInvestorView(investor), tenantName, investmentCount: Number(investmentCount) })),
+      // A lista não leva dados bancários nem data de nascimento: só o que aparece nela.
+      investors: rows.map(({ investor, tenantName, investmentCount }) => ({
+        id: investor.id, name: investor.name, tradeName: investor.tradeName, personType: personTypeOf(investor), document: investor.document, phone: investor.phone, whatsapp: investor.whatsapp,
+        email: investor.email, instagram: investor.instagram, facebook: investor.facebook, status: investor.status as InvestorStatus, createdAt: investor.createdAt.toISOString(),
+        tenantName, investmentCount: Number(investmentCount),
+      })),
       matched: total,
       page,
       pages,
@@ -76,11 +93,16 @@ export async function loadInvestorsPage(search: Search) {
 function toInvestorView(investor: typeof investors.$inferSelect) {
   return {
     id: investor.id, tenantId: investor.tenantId, name: investor.name, document: investor.document, phone: investor.phone, whatsapp: investor.whatsapp,
+    // Tipo gravado (null = cadastro anterior à 0024) e o que se lê do documento para exibir.
+    personTypeStored: investor.personType as "PF" | "PJ" | null, personType: personTypeOf(investor), tradeName: investor.tradeName, birthDate: investor.birthDate,
     email: investor.email, instagram: investor.instagram, facebook: investor.facebook, notes: investor.notes, status: investor.status as InvestorStatus,
     addressCep: investor.addressCep, addressStreet: investor.addressStreet, addressNumber: investor.addressNumber, addressComplement: investor.addressComplement,
     addressDistrict: investor.addressDistrict, addressCity: investor.addressCity, addressState: investor.addressState,
-    bankHolderName: investor.bankHolderName, bankHolderDocument: investor.bankHolderDocument, bankName: investor.bankName, bankBranch: investor.bankBranch,
-    bankAccount: investor.bankAccount, bankAccountType: investor.bankAccountType, pixKeyType: investor.pixKeyType, pixKey: investor.pixKey,
+    // Conta do formato anterior (colunas do investidor), só mascarada e só se existir.
+    legacyBank: investor.bankAccount || investor.pixKey || investor.bankName ? {
+      label: bankAccountLabel({ bankCode: null, bankName: investor.bankName, branch: investor.bankBranch, branchDigit: null, account: investor.bankAccount, accountDigit: null, pixKeyType: investor.pixKeyType, pixKey: investor.pixKey }),
+      holder: [investor.bankHolderName, maskDocument(investor.bankHolderDocument)].filter(Boolean).join(" · ") || null,
+    } : null,
     createdAt: investor.createdAt.toISOString(), updatedAt: investor.updatedAt.toISOString(),
   };
 }
@@ -92,8 +114,41 @@ function toInvestmentView(investment: typeof investments.$inferSelect) {
     maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status as InvestmentStatus,
     contractNumber: investment.contractNumber, investedOn: investment.investedOn, termMonths: investment.termMonths,
     paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, installmentCount: investment.installmentCount,
+    contractedOn: investment.contractedOn, termCount: investment.termCount, termUnit: investment.termUnit as TermUnit | null, paymentMethod: investment.paymentMethod as InvestmentPaymentMethod | null,
+    bankAccountId: investment.bankAccountId, yieldTerms: investment.yieldTerms, principalTerms: investment.principalTerms, renewedFromInvestmentId: investment.renewedFromInvestmentId,
     createdAt: investment.createdAt.toISOString(), updatedAt: investment.updatedAt.toISOString(),
   };
+}
+
+// Elos de renovação de um contrato e a conferência do banco de que o dinheiro da cadeia está no capital.
+async function loadRenewalLinks(tx: Parameters<Parameters<typeof withInvestorContext>[0]>[0], investment: typeof investments.$inferSelect) {
+  const [parent] = investment.renewedFromInvestmentId ? await tx.select({ id: investments.id, amountCents: investments.amountCents, startDate: investments.startDate, contractNumber: investments.contractNumber, maturityDate: investments.maturityDate })
+    .from(investments).where(and(eq(investments.id, investment.renewedFromInvestmentId), eq(investments.tenantId, investment.tenantId))) : [];
+  const [child] = await tx.select({ id: investments.id, amountCents: investments.amountCents, startDate: investments.startDate, contractNumber: investments.contractNumber, createdAt: investments.createdAt })
+    .from(investments).where(and(eq(investments.renewedFromInvestmentId, investment.id), eq(investments.tenantId, investment.tenantId)));
+  const [{ originHasCapital }] = await tx.select({ originHasCapital: sql<boolean>`crediai_investment_has_capital(${investment.tenantId}, ${investment.id})` }).from(investments)
+    .where(and(eq(investments.id, investment.id), eq(investments.tenantId, investment.tenantId)));
+  return { parent: parent ?? null, child: child ? { ...child, createdAt: child.createdAt.toISOString() } : null, originHasCapital: Boolean(originHasCapital) };
+}
+
+// Contas bancárias do investidor, só mascaradas (os números completos só vão para o formulário de edição, sob pedido).
+// Quantos contratos usam cada conta também vem, para a tela saber o que pode ser alterado ou retirado.
+export async function loadBankAccountViews(tx: Parameters<Parameters<typeof withInvestorContext>[0]>[0], tenantId: string, investorId: string) {
+  const rows = await tx.select({
+    account: investorBankAccounts,
+    linkedCount: sql<string>`(select count(*) from investment i where i.bank_account_id = investor_bank_account.id and i.tenant_id = investor_bank_account.tenant_id)`,
+    activeLinkedCount: sql<string>`(select count(*) from investment i where i.bank_account_id = investor_bank_account.id and i.tenant_id = investor_bank_account.tenant_id and i.status not in ('CLOSED', 'CANCELED'))`,
+  }).from(investorBankAccounts).where(and(eq(investorBankAccounts.investorId, investorId), eq(investorBankAccounts.tenantId, tenantId)))
+    .orderBy(desc(investorBankAccounts.isPreferred), asc(investorBankAccounts.createdAt), asc(investorBankAccounts.id));
+  return rows.map(({ account, linkedCount, activeLinkedCount }) => ({
+    id: account.id, label: bankAccountLabel(account), bankCode: account.bankCode, bankName: account.bankName,
+    branch: account.branch ? `${account.branch}${account.branchDigit ? `-${account.branchDigit}` : ""}` : null,
+    account: maskAccountNumber(account.account, account.accountDigit), accountType: account.accountType,
+    holderName: account.holderName, holderDocument: maskDocument(account.holderDocument), pixKeyType: account.pixKeyType, pixKey: maskPixKey(account.pixKeyType, account.pixKey),
+    hasPix: Boolean(account.pixKey), hasTransfer: Boolean(account.account && account.branch),
+    isPreferred: account.isPreferred, notes: account.notes, archivedAt: account.archivedAt?.toISOString() ?? null,
+    linkedCount: Number(linkedCount), activeLinkedCount: Number(activeLinkedCount),
+  }));
 }
 
 // Ficha do investidor com todos os contratos dele e quantos documentos cada um tem. null = não existe no escopo.
@@ -115,7 +170,21 @@ export async function loadInvestorDetail(investorId: string) {
     }).from(investmentDocuments).innerJoin(investments, and(eq(investments.id, investmentDocuments.investmentId), eq(investments.tenantId, investmentDocuments.tenantId)))
       .where(and(eq(investments.investorId, row.investor.id), eq(investmentDocuments.tenantId, row.investor.tenantId), isNull(investmentDocuments.replacedAt)))
       .orderBy(desc(investmentDocuments.createdAt), asc(investmentDocuments.id));
+    const bankAccounts = await loadBankAccountViews(tx, row.investor.tenantId, row.investor.id);
+    // Documentos do próprio investidor (vigentes e retirados; o conteúdo não vem).
+    const uploader = alias(users, "uploader");
+    const investorDocumentRows = await tx.select({
+      id: investorDocuments.id, kind: investorDocuments.kind, label: investorDocuments.label, fileName: investorDocuments.fileName, sizeBytes: investorDocuments.sizeBytes,
+      createdAt: investorDocuments.createdAt, removedAt: investorDocuments.removedAt, uploadedBy: uploader.name,
+    }).from(investorDocuments)
+      .leftJoin(uploader, and(eq(uploader.id, investorDocuments.uploadedByUserId), or(eq(uploader.tenantId, investorDocuments.tenantId), eq(uploader.role, "SUPER_ADMIN"))))
+      .where(and(eq(investorDocuments.investorId, row.investor.id), eq(investorDocuments.tenantId, row.investor.tenantId)))
+      .orderBy(desc(investorDocuments.createdAt), asc(investorDocuments.id));
     return {
+      bankAccounts,
+      investorDocuments: investorDocumentRows.map((document) => ({
+        ...document, kind: document.kind as InvestorDocumentKind, createdAt: document.createdAt.toISOString(), removedAt: document.removedAt?.toISOString() ?? null, uploadedBy: document.uploadedBy ?? null,
+      })),
       documents: documentRows.map((document) => ({ ...document, kind: document.kind as DocumentKind, createdAt: document.createdAt.toISOString() })),
       isMaster: scope.isMaster,
       investor: { ...toInvestorView(row.investor), tenantName: row.tenantName },
@@ -170,13 +239,22 @@ export async function loadInvestmentDetail(investmentId: string) {
       .where(and(eq(investmentRevisions.investmentId, row.investment.id), eq(investmentRevisions.tenantId, row.investment.tenantId)))
       .orderBy(desc(investmentRevisions.createdAt), desc(investmentRevisions.id));
 
+    // Renovação: o contrato de que este veio, o que veio deste e se o dinheiro da cadeia está no capital.
+    const renewal = await loadRenewalLinks(tx, row.investment);
     // Contas a Pagar: entrada no capital e baixas deste contrato, e as obrigações do cronograma com o que já foi pago.
     const cash = await loadInvestmentCash(tx, row.investment, scope.tenantId);
     const obligations = buildObligations({
       investments: [{ id: row.investment.id, investorId: row.investor.id, investorName: row.investor.name, contractNumber: row.investment.contractNumber, status: row.investment.status, startDate: row.investment.startDate, amountCents: row.investment.amountCents,
-        capitalEntryRule: row.investment.capitalEntryRule, hasEntry: Boolean(cash.entry), hasPriorContribution: Boolean(cash.prior) }],
+        capitalEntryRule: row.investment.capitalEntryRule, hasEntry: Boolean(cash.entry), hasPriorContribution: Boolean(cash.prior),
+        renewedFrom: row.investment.renewedFromInvestmentId, originHasCapital: renewal.originHasCapital, renewed: Boolean(renewal.child) }],
       items: scheduleRows.map((item) => ({ ...item, investmentId: row.investment.id })), payments: cash.payments, today: todayIso(),
     });
+    const today = todayIso();
+    const lines = scheduleLines(scheduleRows, cash.payments, row.investment.status, today, { renewed: Boolean(renewal.child) });
+    const position = investmentPosition({ investment: row.investment, lines, entryCents: cash.entry?.amountCents ?? null, priorContribution: Boolean(cash.prior), today, renewedFrom: Boolean(renewal.parent), renewed: Boolean(renewal.child) });
+    const divergences = investmentDivergences({ investment: row.investment, lines, entryCents: cash.entry?.amountCents ?? null, renewed: Boolean(renewal.child) });
+    // Contas do investidor para escolher no contrato: as em uso e a já escolhida (mesmo se retirada depois).
+    const bankAccounts = (await loadBankAccountViews(tx, row.investment.tenantId, row.investor.id)).filter((account) => !account.archivedAt || account.id === row.investment.bankAccountId);
     const contractorRow = await loadContractor(tx, row.investment.tenantId);
     const source = contractSource(row.investment, row.investor, contractorRow);
     const current = contracts.find((contract) => !contract.supersededAt) ?? null;
@@ -189,7 +267,11 @@ export async function loadInvestmentDetail(investmentId: string) {
       tenantName: row.tenantName,
       investment: toInvestmentView(row.investment),
       investor: { id: row.investor.id, name: row.investor.name, status: row.investor.status as InvestorStatus },
-      schedule: { items: scheduleRows, totals: scheduleTotals(scheduleRows) },
+      schedule: { items: scheduleRows, lines, totals: scheduleTotals(scheduleRows) },
+      position,
+      divergences,
+      renewal,
+      bankAccounts,
       cash: { ...cash, today: todayIso(), entryDate: entryDateOf(row.investment), obligations, paidItemIds: [...new Set(cash.payments.map((payment) => payment.scheduleItemId))] },
       revisions: revisionRows.map((revision) => ({ ...revision, kind: revision.kind as "CONTRACT" | "SCHEDULE", createdAt: revision.createdAt.toISOString(), changedBy: revision.changedBy ?? null })),
       documents: documents.map(({ contractId, ...document }) => ({
@@ -225,6 +307,14 @@ export async function loadInvestmentContractFile(contractId: string) {
   });
 }
 
+// Conteúdo de um documento do investidor (também os retirados, que ficam no histórico). undefined = fora do escopo.
+export async function loadInvestorDocumentFile(documentId: string) {
+  return withInvestorContext(async (tx, scope) => {
+    const [row] = await tx.select().from(investorDocuments).where(and(eq(investorDocuments.id, documentId), tenantFilter(scope, investorDocuments.tenantId)));
+    return row;
+  });
+}
+
 // Conteúdo de um documento para visualizar ou baixar. undefined = não existe no escopo da sessão.
 export async function loadInvestmentDocumentFile(documentId: string) {
   return withInvestorContext(async (tx, scope) => {
@@ -237,4 +327,5 @@ export type InvestorsPage = Awaited<ReturnType<typeof loadInvestorsPage>>;
 export type InvestorDetail = NonNullable<Awaited<ReturnType<typeof loadInvestorDetail>>>;
 export type InvestmentDetail = NonNullable<Awaited<ReturnType<typeof loadInvestmentDetail>>>;
 export type InvestorView = InvestorDetail["investor"];
+export type BankAccountView = InvestorDetail["bankAccounts"][number];
 export type InvestmentView = InvestorDetail["investments"][number];

@@ -1164,3 +1164,16 @@ button { color:inherit; }
   /* Célula vazia (ex.: total do Financeiro) não vira um rótulo sem valor no modo cartão */
   .data-table td:empty { display: none; }
 }
+
+/* Investidores (migração 0024): marcas na linha da conta, painel do contrato, divergências e revisão do cronograma. */
+.inline-chip { margin-left:8px; vertical-align:middle; }
+.position-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.position-grid > div { border:1px solid rgba(112,145,170,.18); border-radius:10px; padding:10px 12px; background:rgba(7,17,31,.35); }
+.position-grid dt { color:#8296a7; font-size:11px; margin-bottom:4px; }
+.position-grid dd { margin:0; color:#eef6fb; font-weight:650; font-size:14px; }
+.position-grid dd small { display:block; color:#8296a7; font-weight:400; font-size:11px; margin-top:2px; }
+.divergence-list { margin:10px 0 0; padding-left:18px; color:#ecc16b; font-size:12px; line-height:1.5; }
+.lines-editor { width:100%; }
+.lines-editor input, .lines-editor select { width:100%; min-width:0; }
+.lines-editor td { vertical-align:top; }
+@media (max-width: 900px) { .position-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }

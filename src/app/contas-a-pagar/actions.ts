@@ -73,7 +73,7 @@ export async function registerInvestmentEntryAction(data: FormData): Promise<Act
       const enteredOn = entryDateOf(investment);
       const check = checkCapitalEntry({
         enteredOn, today: todayIso(), cycleStartedOn: cycleStartedOn(wallet), investmentStatus: investment.status, hasWallet: Boolean(wallet), alreadyRegistered: Boolean(existing),
-        priorContributionDeclared: Boolean(declared),
+        priorContributionDeclared: Boolean(declared), isRenewal: investment.renewedFromInvestmentId !== null,
       });
       if (!check.ok) return check;
       if (shownAmount !== investment.amountCents || shownDate !== enteredOn) {
@@ -148,8 +148,16 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
       if (!outflow.ok) return outflow;
       // Regra da entrada (migração 0023): contrato novo só com a entrada registrada; contrato antigo com a entrada ou com
       // o aporte anterior indicado. O banco confere de novo no gatilho da baixa.
+      // Renovação (migração 0024): contrato já renovado não recebe baixa de principal; a renovação usa a entrada do contrato
+      // de origem. O banco confere as duas coisas de novo.
+      const [chain] = await tx.select({
+        renewed: sql<boolean>`exists (select 1 from investment r where r.renewed_from_investment_id = ${investment.id} and r.tenant_id = ${tenantId})`,
+        originHasCapital: sql<boolean>`crediai_investment_has_capital(${tenantId}, ${investment.id})`,
+      }).from(investments).where(and(eq(investments.id, investment.id), eq(investments.tenantId, tenantId)));
+      if (payment.kind === "PRINCIPAL" && chain.renewed) return { ok: false, error: "Este contrato foi renovado: o principal que faltava devolver passou para a renovação. Registre a devolução no contrato novo. Nada foi registrado." };
       const evidence = await loadEntryEvidence(tx, tenantId, investment.id);
-      const allowed = entryEvidence({ capitalEntryRule: investment.capitalEntryRule, hasEntry: evidence.entries.has(investment.id), hasPriorContribution: evidence.priors.has(investment.id) });
+      const allowed = entryEvidence({ capitalEntryRule: investment.capitalEntryRule, hasEntry: evidence.entries.has(investment.id), hasPriorContribution: evidence.priors.has(investment.id),
+        renewedFrom: investment.renewedFromInvestmentId, originHasCapital: chain.originHasCapital });
       if (!allowed.ok) return { ok: false, error: `${allowed.error} Nada foi registrado.` };
       const label = contractLabel(investment);
       const category = paymentCategory(payment.kind);

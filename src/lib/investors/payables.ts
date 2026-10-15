@@ -37,6 +37,9 @@ export type PayableInvestment = {
   id: string; investorId: string; investorName: string; contractNumber: string | null; status: string; startDate: string; amountCents: number;
   // Regra da entrada (migração 0023) e o que o contrato já tem: a entrada registrada ou o aporte anterior indicado.
   capitalEntryRule: string | null; hasEntry: boolean; hasPriorContribution: boolean;
+  // Renovação (migração 0024): contrato que veio de outro (o dinheiro já está no capital pelo contrato de origem) e
+  // contrato que já foi renovado (o principal não devolvido passou para a renovação; não recebe mais baixa de principal).
+  renewedFrom?: string | null; originHasCapital?: boolean; renewed?: boolean;
 };
 export type PayableItem = { id: string; investmentId: string; number: number; dueDate: string; yieldCents: number; principalCents: number; description: string | null };
 export type PayablePayment = {
@@ -77,11 +80,12 @@ export function buildObligations({ investments, items, payments, today }: { inve
     if (!investment) continue;
     const evidence = entryEvidence(investment);
     for (const kind of ["YIELD", "PRINCIPAL"] as const) {
-      const expectedCents = kind === "YIELD" ? item.yieldCents : item.principalCents;
-      if (expectedCents <= 0) continue;
       const key = `${item.id}:${kind}`;
       const list = [...(paymentsOf.get(key) ?? [])].sort((a, b) => a.paidOn.localeCompare(b.paidOn) || a.createdAt.localeCompare(b.createdAt));
       const paidCents = list.reduce((total, payment) => total + payment.amountCents, 0);
+      // Contrato renovado: o principal que faltava devolver passou para a renovação; aqui fica só o que já foi pago.
+      const expectedCents = kind === "YIELD" ? item.yieldCents : investment.renewed ? Math.min(item.principalCents, paidCents) : item.principalCents;
+      if (expectedCents <= 0) continue;
       if (investment.status === "CANCELED" && paidCents === 0) continue;
       result.push({
         key, scheduleItemId: item.id, investmentId: investment.id, investorId: investment.investorId, investorName: investment.investorName,
@@ -190,9 +194,10 @@ export function checkPayment(payment: Pick<PaymentFields, "amountCents" | "paidO
 // Data da entrada: a data em que o dinheiro foi investido; sem ela, a data de início do contrato.
 export const entryDateOf = (investment: { investedOn: string | null; startDate: string }) => investment.investedOn ?? investment.startDate;
 
-export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered, priorContributionDeclared = false }: {
-  enteredOn: string; today: string; cycleStartedOn: string | null; investmentStatus: string; hasWallet: boolean; alreadyRegistered: boolean; priorContributionDeclared?: boolean;
+export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered, priorContributionDeclared = false, isRenewal = false }: {
+  enteredOn: string; today: string; cycleStartedOn: string | null; investmentStatus: string; hasWallet: boolean; alreadyRegistered: boolean; priorContributionDeclared?: boolean; isRenewal?: boolean;
 }): { ok: true } | { ok: false; error: string } {
+  if (isRenewal) return { ok: false, error: "Este contrato é uma renovação: o dinheiro já está no capital pelo contrato anterior. Nenhuma nova entrada é lançada." };
   if (alreadyRegistered) return { ok: false, error: "A entrada deste investimento já foi registrada no capital. Nada foi lançado em dobro." };
   if (priorContributionDeclared) return { ok: false, error: "O dinheiro deste contrato já foi indicado como um aporte anterior. Registrar a entrada contaria o valor em dobro. Nada foi lançado." };
   if (investmentStatus === "CANCELED") return { ok: false, error: "Este contrato está cancelado: a entrada não pode ser registrada." };
@@ -213,7 +218,9 @@ export const ENTRY_REQUIRED_ERROR = "Registre primeiro a entrada deste investime
 export const LEGACY_EVIDENCE_ERROR = "Contrato cadastrado antes da regra da entrada: antes da baixa, registre a entrada do investimento no capital ou indique, na página do contrato, o aporte pelo qual o dinheiro já entrou.";
 export const isLegacyContract = (investment: Pick<PayableInvestment, "capitalEntryRule">) => investment.capitalEntryRule === null;
 
-export function entryEvidence(investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "hasPriorContribution">): { ok: true } | { ok: false; error: string } {
+export const RENEWAL_ORIGIN_ERROR = "Este contrato é uma renovação, mas o contrato de origem não tem a entrada no capital registrada. Registre a entrada no contrato de origem.";
+export function entryEvidence(investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "hasPriorContribution" | "renewedFrom" | "originHasCapital">): { ok: true } | { ok: false; error: string } {
+  if (investment.renewedFrom) return investment.originHasCapital ? { ok: true } : { ok: false, error: RENEWAL_ORIGIN_ERROR };
   if (investment.hasEntry) return { ok: true };
   if (!isLegacyContract(investment)) return { ok: false, error: ENTRY_REQUIRED_ERROR };
   return investment.hasPriorContribution ? { ok: true } : { ok: false, error: LEGACY_EVIDENCE_ERROR };

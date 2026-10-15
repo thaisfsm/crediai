@@ -36,6 +36,12 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_PAYMENT_REGISTERED: "Pagamento a investidor registrado (baixa)",
   INVESTMENT_PRIOR_CONTRIBUTION_DECLARED: "Aporte anterior indicado para contrato de investidor",
   WALLET_INITIAL_CAPITAL_CHANGED: "Capital inicial da carteira definido ou alterado",
+  INVESTOR_BANK_ACCOUNT_CREATED: "Conta bancária do investidor cadastrada",
+  INVESTOR_BANK_ACCOUNT_UPDATED: "Conta bancária do investidor alterada",
+  INVESTOR_BANK_ACCOUNT_ARCHIVED: "Conta bancária do investidor retirada",
+  INVESTOR_DOCUMENT_UPLOADED: "Documento do investidor enviado",
+  INVESTOR_DOCUMENT_REMOVED: "Documento do investidor retirado",
+  INVESTMENT_RENEWED: "Contrato de investimento renovado",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 
@@ -44,6 +50,7 @@ export const AUDIT_ENTITIES: Record<string, string> = {
   investor: "Investidor", investment: "Investimento", investment_document: "Documento do investimento",
   investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
   capital_movement: "Movimentação financeira", wallet: "Carteira", investment_payment: "Pagamento a investidor",
+  investor_bank_account: "Conta bancária do investidor", investor_document: "Documento do investidor",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.

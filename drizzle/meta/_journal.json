@@ -162,6 +162,13 @@
       "when": 1791936745846,
       "tag": "0023_regra_entrada",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792082052367,
+      "tag": "0024_investidores_evolucao",
+      "breakpoints": true
     }
   ]
 }
