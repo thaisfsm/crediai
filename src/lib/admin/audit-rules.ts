@@ -32,6 +32,8 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_SCHEDULE_UPDATED: "Cronograma de pagamentos ao investidor alterado",
   OPERATION_UPDATED: "Operação corrigida (sem pagamentos)",
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
+  INVESTMENT_CAPITAL_ENTRY_REGISTERED: "Entrada do investimento registrada no capital",
+  INVESTMENT_PAYMENT_REGISTERED: "Pagamento a investidor registrado (baixa)",
   WALLET_INITIAL_CAPITAL_CHANGED: "Capital inicial da carteira definido ou alterado",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
@@ -40,7 +42,7 @@ export const AUDIT_ENTITIES: Record<string, string> = {
   tenant: "Cliente SaaS", subscription: "Assinatura", user: "Usuário", plan: "Plano", subscription_charge: "Mensalidade",
   investor: "Investidor", investment: "Investimento", investment_document: "Documento do investimento",
   investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
-  capital_movement: "Movimentação financeira", wallet: "Carteira",
+  capital_movement: "Movimentação financeira", wallet: "Carteira", investment_payment: "Pagamento a investidor",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.

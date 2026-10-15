@@ -423,6 +423,8 @@ export async function reverseContributionAction(data: FormData): Promise<ActionR
       where: and(eq(capitalMovements.id, movementId), eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.kind, "CONTRIBUTION"), eq(capitalMovements.cycleNumber, wallet.cycleNumber)),
     });
     if (!wallet || !contribution) return { ok: false, error: "Aporte não encontrado nesta carteira." };
+    // A entrada de um contrato de investimento não é um aporte comum: fica ligada ao contrato e não se estorna aqui.
+    if (contribution.source === "INVESTOR") return { ok: false, error: "Esta entrada pertence a um contrato de investimento e não pode ser estornada como aporte. Nada foi alterado." };
     const existing = await tx.query.capitalMovements.findFirst({ where: and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.reversedMovementId, contribution.id)) });
     if (existing) return { ok: false, error: "Este aporte já foi estornado." };
     const availableCents = await availableCapitalCents(tx, tenantId, wallet);

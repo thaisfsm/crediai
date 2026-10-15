@@ -148,6 +148,13 @@
       "when": 1791930678167,
       "tag": "0021_operation_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791934481763,
+      "tag": "0022_contas_a_pagar",
+      "breakpoints": true
     }
   ]
 }

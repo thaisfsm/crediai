@@ -490,14 +490,19 @@ export const capitalMovements = pgTable("capital_movement", {
   check("capital_movement_amount_positive", sql`${table.amountCents} > 0`),
   check("capital_movement_reversal_link", sql`(${table.kind}::text = 'CONTRIBUTION_REVERSAL') = (${table.reversedMovementId} is not null)`),
   uniqueIndex("capital_movement_tenant_idempotency_unique").on(table.tenantId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
-  check("capital_movement_source_valid", sql`${table.source} in ('CAPITAL', 'FINANCE')`),
-  // Categoria só com o tipo certo: entradas (aporte e outras entradas) e saídas (retiradas). Outras entradas sempre têm categoria.
+  // Origem: tela Capital, Financeiro ou Contas a Pagar / entrada de investimento (INVESTOR, migração 0022).
+  check("capital_movement_source_valid", sql`${table.source} in ('CAPITAL', 'FINANCE', 'INVESTOR')`),
+  // Categoria só com o tipo certo: entradas (aporte, entrada de investidor e outras entradas) e saídas (retiradas,
+  // rendimento pago e devolução de principal a investidor). Outras entradas sempre têm categoria.
   check("capital_movement_category_matches_kind", sql`(${table.category} is null and ${table.kind}::text <> 'OTHER_INCOME')
-    or (${table.kind}::text = 'CONTRIBUTION' and ${table.category} = 'CAPITAL_CONTRIBUTION')
+    or (${table.kind}::text = 'CONTRIBUTION' and ${table.category} in ('CAPITAL_CONTRIBUTION', 'INVESTOR_CONTRIBUTION'))
     or (${table.kind}::text = 'OTHER_INCOME' and ${table.category} = 'OTHER_INCOME')
-    or (${table.kind}::text = 'WITHDRAWAL' and ${table.category} in ('SALARY_WITHDRAWAL', 'PARTNER_WITHDRAWAL', 'OPERATING_EXPENSE', 'TAXES_AND_FEES', 'OTHER_OUTFLOW'))`),
+    or (${table.kind}::text = 'WITHDRAWAL' and ${table.category} in ('SALARY_WITHDRAWAL', 'PARTNER_WITHDRAWAL', 'OPERATING_EXPENSE', 'TAXES_AND_FEES', 'OTHER_OUTFLOW', 'INVESTOR_YIELD_PAYMENT', 'INVESTOR_PRINCIPAL_RETURN'))`),
   // Lançamento do Financeiro: sempre com categoria, descrição e a chave contra envio duplicado.
   check("capital_movement_finance_fields", sql`${table.source} <> 'FINANCE' or (${table.category} is not null and length(trim(coalesce(${table.description}, ''))) > 0 and ${table.idempotencyKey} is not null)`),
+  // As categorias de investidor só existem com a origem INVESTOR (e vice-versa), sempre com descrição e chave.
+  check("capital_movement_investor_fields", sql`(${table.source} = 'INVESTOR') = (coalesce(${table.category}, '') in ('INVESTOR_CONTRIBUTION', 'INVESTOR_YIELD_PAYMENT', 'INVESTOR_PRINCIPAL_RETURN'))
+    and (${table.source} <> 'INVESTOR' or (length(trim(coalesce(${table.description}, ''))) > 0 and ${table.idempotencyKey} is not null))`),
   ...tenantPolicies("capital_movement", table.tenantId),
 ]).enableRLS();
 
@@ -616,6 +621,70 @@ export const investmentScheduleItems = pgTable("investment_schedule_item", {
   check("investment_schedule_item_number_positive", sql`${table.number} > 0`),
   check("investment_schedule_item_amounts_valid", sql`${table.yieldCents} >= 0 and ${table.principalCents} >= 0 and ${table.yieldCents} + ${table.principalCents} > 0`),
   ...tenantPolicies("investment_schedule_item", table.tenantId, { tenantDelete: true }),
+]).enableRLS();
+
+// Entrada do dinheiro de um contrato de investimento no capital da carteira (Contas a Pagar, migração 0022). Só existe
+// quando o usuário confirma na página do contrato; nunca é automática. No máximo uma por contrato (índice único) e
+// sempre ligada a UMA linha de capital_movement (CONTRIBUTION, categoria INVESTOR_CONTRIBUTION) do mesmo valor e data.
+// Não se altera nem se apaga (gatilhos da migração 0022).
+export const investmentCapitalEntries = pgTable("investment_capital_entry", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  capitalMovementId: text("capital_movement_id").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  enteredOn: date("entered_on", { mode: "string" }).notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("investment_capital_entry_investment_unique").on(table.investmentId),
+  uniqueIndex("investment_capital_entry_movement_unique").on(table.capitalMovementId),
+  uniqueIndex("investment_capital_entry_tenant_idempotency_unique").on(table.tenantId, table.idempotencyKey),
+  foreignKey({ name: "investment_capital_entry_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  foreignKey({ name: "investment_capital_entry_movement_same_tenant_fk", columns: [table.tenantId, table.capitalMovementId], foreignColumns: [capitalMovements.tenantId, capitalMovements.id] }).onDelete("restrict"),
+  check("investment_capital_entry_amount_positive", sql`${table.amountCents} > 0`),
+  pgPolicy("investment_capital_entry_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("investment_capital_entry_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
+  pgPolicy("investment_capital_entry_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("investment_capital_entry_delete_admin_only", { for: "delete", using: adminScope }),
+]).enableRLS();
+
+// Baixa (pagamento efetivo) de uma obrigação do cronograma do investidor: rendimento (YIELD) ou devolução de principal
+// (PRINCIPAL) de uma linha de investment_schedule_item. Pode haver várias baixas parciais por linha e tipo; a soma nunca
+// passa do valor previsto (conferido na ação com a linha travada e de novo no gatilho da migração 0022). Cada baixa
+// tem exatamente UMA saída em capital_movement (WITHDRAWAL, categoria de investidor) do mesmo valor e data. Não se
+// altera nem se apaga: correção de baixa confirmada fica fora do escopo (documentado em etapa-C-contas-a-pagar.md).
+export const investmentPayments = pgTable("investment_payment", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  investmentId: text("investment_id").notNull(),
+  scheduleItemId: text("schedule_item_id").notNull(),
+  kind: text("kind").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  paidOn: date("paid_on", { mode: "string" }).notNull(),
+  method: text("method").notNull(),
+  reference: text("reference"),
+  notes: text("notes"),
+  capitalMovementId: text("capital_movement_id").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("investment_payment_tenant_item_idx").on(table.tenantId, table.scheduleItemId),
+  index("investment_payment_investment_idx").on(table.investmentId, table.paidOn),
+  uniqueIndex("investment_payment_movement_unique").on(table.capitalMovementId),
+  uniqueIndex("investment_payment_tenant_idempotency_unique").on(table.tenantId, table.idempotencyKey),
+  foreignKey({ name: "investment_payment_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
+  foreignKey({ name: "investment_payment_schedule_item_same_tenant_fk", columns: [table.tenantId, table.scheduleItemId], foreignColumns: [investmentScheduleItems.tenantId, investmentScheduleItems.id] }).onDelete("restrict"),
+  foreignKey({ name: "investment_payment_movement_same_tenant_fk", columns: [table.tenantId, table.capitalMovementId], foreignColumns: [capitalMovements.tenantId, capitalMovements.id] }).onDelete("restrict"),
+  check("investment_payment_amount_positive", sql`${table.amountCents} > 0`),
+  check("investment_payment_kind_valid", sql`${table.kind} in ('YIELD', 'PRINCIPAL')`),
+  check("investment_payment_method_valid", sql`${table.method} in ('PIX', 'TRANSFER', 'CASH', 'OTHER')`),
+  pgPolicy("investment_payment_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("investment_payment_insert_own_or_admin", { for: "insert", withCheck: tenantScope(table.tenantId) }),
+  pgPolicy("investment_payment_update_admin_only", { for: "update", using: adminScope, withCheck: adminScope }),
+  pgPolicy("investment_payment_delete_admin_only", { for: "delete", using: adminScope }),
 ]).enableRLS();
 
 // Histórico de alterações do contrato de investimento, visível para o próprio tenant (a auditoria completa continua em
@@ -767,6 +836,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investors", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor', 'investment', 'investment_document', 'investment_contract', 'investment_contractor')` }),
   // E os lançamentos do módulo Financeiro (entradas e saídas manuais) e a mudança do capital inicial, também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_finance", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('capital_movement', 'wallet')` }),
+  // Contas a Pagar: baixas de obrigações de investidores do próprio tenant (migração 0022).
+  pgPolicy("admin_audit_log_insert_tenant_payables", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'investment_payment'` }),
   // E as correções de operação (Etapa G), também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
 ]).enableRLS();

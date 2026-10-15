@@ -6,11 +6,11 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
-// Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro).
+// Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro, /contas-a-pagar).
 export type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
-export type NavLabel = NavKey | "Investidores" | "Financeiro";
+export type NavLabel = NavKey | "Investidores" | "Financeiro" | "Contas a pagar";
 // Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
-const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro" };
+const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro", "Contas a pagar": "/contas-a-pagar" };
 
 // Cada tela do menu tem um endereço (/?tela=…). Os itens do menu são links de verdade: um clique dado antes de o
 // JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
@@ -26,7 +26,7 @@ export const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?t
 const itemHref = (label: NavLabel) => PAGE_ROUTES[label] ?? navHref(label as NavKey);
 
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
-  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Investidores", icon: "briefcase" }] },
+  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "clock" }, { label: "Investidores", icon: "briefcase" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Renegociação", icon: "sparkles" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
 ];
