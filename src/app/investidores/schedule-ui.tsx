@@ -240,6 +240,7 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
         <form onSubmit={onSubmit} aria-label="Revisão das linhas">
           <input type="hidden" name="investmentId" value={investment.id} />
           <input type="hidden" name="mode" value={mode} />
+          <input type="hidden" name="seen" value={schedule.version} />
           <input type="hidden" name="lines" value={JSON.stringify(lines)} />
           <div className="table-scroll"><table className="data-table lines-editor" aria-label="Linhas para revisar">
             <thead><tr><th>#</th><th>Vencimento</th><th>Tipo</th><th>Rendimento (R$)</th><th>Principal (R$)</th><th>Observação</th><th /></tr></thead>

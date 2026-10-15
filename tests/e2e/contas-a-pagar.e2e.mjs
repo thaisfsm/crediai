@@ -80,7 +80,7 @@ test("preparação: carteira A com R$ 10.000 há 40 dias, contrato de R$ 20.000 
   robério = await login("roberio@teste.local");
   fernando = await login("fernando@teste.local");
   thais = await login("thais@teste.local");
-  const investor = await investorAction(robério, "createInvestorAction", { name: "Paula Pagamentos", document: "411.797.058-58", bankName: "001 Banco do Brasil", bankAccount: "99887-6", pixKeyType: "CPF", pixKey: "411.797.058-58" });
+  const investor = await investorAction(robério, "createInvestorAction", { personType: "PF", name: "Paula Pagamentos", document: "411.797.058-58", bankName: "001 Banco do Brasil", bankAccount: "99887-6", pixKeyType: "CPF", pixKey: "411.797.058-58" });
   assert.equal(investor?.ok, true, JSON.stringify(investor));
   ids.investor = investor.id;
   const investment = await investorAction(robério, "createInvestmentAction", { investorId: ids.investor, amount: "20.000,00", rate: "1,5", ratePeriod: "MONTHLY", startDate: daysAgo(30), investedOn: daysAgo(30), contractNumber: "CP-A" });
@@ -305,7 +305,7 @@ test("CP11. isolamento: o tenant B e o MASTER não veem nem mexem no capital do 
 
 test("CP12. MASTER na própria carteira: entrada e baixa só na carteira dele, sem misturar com a do A", async () => {
   const robérioMovements = await count("capital_movement", "ten_roberio");
-  const investor = await investorAction(thais, "createInvestorAction", { name: "Investidor da Thaís", tenantId: "ten_thais" });
+  const investor = await investorAction(thais, "createInvestorAction", { personType: "PF", document: "10156687984", name: "Investidor da Thaís", tenantId: "ten_thais" });
   const investment = await investorAction(thais, "createInvestmentAction", { investorId: investor.id, amount: "1.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: TODAY });
   await investorAction(thais, "addInvestmentScheduleItemAction", { investmentId: investment.id, dueDate: TODAY, yieldAmount: "10,00", principalAmount: "", description: "" });
   const before = await available("ten_thais");

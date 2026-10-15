@@ -16,7 +16,7 @@ import { renderContractPdf } from "@/lib/investors/contract-pdf";
 import { contractDataHash, contractSource, loadContractor } from "@/lib/investors/contract-source";
 import {
   DOCUMENT_KINDS, INVESTOR_DOCUMENT_KINDS, MAX_SCHEDULE_ITEMS, investmentChanges, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, parseInvestorDocumentKind,
-  scheduleDateProblem, scheduleItemFields, scheduleLinesFields, scheduleSummary,
+  scheduleDateProblem, scheduleItemFields, scheduleLinesFields, scheduleSummary, scheduleVersion,
   type InvestmentValues, type InvestorValues, type PersonType, type ScheduleItemValues, type TermUnit, type InvestmentPaymentMethod,
 } from "@/lib/investors/rules";
 
@@ -317,6 +317,10 @@ export async function saveInvestmentScheduleLinesAction(data: FormData): Promise
     const context = await lockSchedule(tx, scope, investmentId);
     if ("ok" in context) return context;
     const { investment } = context;
+    // A revisão foi montada vendo N linhas gravadas; se o cronograma mudou desde então (outro envio, outra aba), nada é
+    // gravado. Isso também impede que um clique repetido inclua as mesmas linhas duas vezes.
+    const seen = read("seen", 40);
+    if (seen !== "" && seen !== scheduleVersion(context.items)) return { ok: false, error: "O cronograma mudou desde que você abriu esta revisão (por exemplo, as linhas já foram gravadas). Nada foi gravado: atualize a página e confira." };
     const dates = datesProblem(investment, lines.items);
     if (dates) return dates;
     const replacing = mode === "replace";
@@ -794,7 +798,8 @@ export async function renewInvestmentAction(data: FormData): Promise<InvestorAct
   if (!previousId) return { ok: false, error: "Investimento inválido." };
   if (read("confirm", 4) !== "1") return { ok: false, error: "Confirme a renovação: o contrato atual será encerrado e o principal passará para o novo contrato." };
   const shownAmount = Number(read("principalCents", 20));
-  const fields = investmentFields(read);
+  // O valor do contrato novo não vem do formulário: é o principal ainda não devolvido, conferido abaixo.
+  const fields = investmentFields((key, max) => (key === "amount" ? "1" : read(key, max)));
   if (!fields.ok) return fields;
   const result = await withInvestorContext(async (tx, scope): Promise<InvestorActionResult> => {
     const [row] = await tx.select({ investment: investments, investorName: investors.name, investorStatus: investors.status }).from(investments)

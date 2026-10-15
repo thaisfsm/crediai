@@ -11,7 +11,7 @@ import { buildObligations, entryDateOf } from "./payables";
 import { loadInvestmentCash } from "./payables-queries";
 import { contractDataHash, contractSource, contractorData, loadContractor } from "./contract-source";
 import {
-  INVESTORS_PAGE_SIZE, investorFilters, personTypeOf, scheduleTotals, summarizeInvestments,
+  INVESTORS_PAGE_SIZE, investorFilters, personTypeOf, scheduleTotals, scheduleVersion, summarizeInvestments,
   type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorDocumentKind, type InvestorStatus, type PaymentFrequency, type RatePeriod, type TermUnit,
 } from "./rules";
 
@@ -226,7 +226,7 @@ export async function loadInvestmentDetail(investmentId: string) {
     // Cronograma digitado pelo usuário, em ordem de data, e o histórico de alterações do contrato (mais recente primeiro).
     const scheduleRows = await tx.select({
       id: investmentScheduleItems.id, number: investmentScheduleItems.number, dueDate: investmentScheduleItems.dueDate, yieldCents: investmentScheduleItems.yieldCents,
-      principalCents: investmentScheduleItems.principalCents, description: investmentScheduleItems.description,
+      principalCents: investmentScheduleItems.principalCents, description: investmentScheduleItems.description, updatedAt: investmentScheduleItems.updatedAt,
     }).from(investmentScheduleItems)
       .where(and(eq(investmentScheduleItems.investmentId, row.investment.id), eq(investmentScheduleItems.tenantId, row.investment.tenantId)))
       .orderBy(asc(investmentScheduleItems.dueDate), asc(investmentScheduleItems.number));
@@ -267,7 +267,7 @@ export async function loadInvestmentDetail(investmentId: string) {
       tenantName: row.tenantName,
       investment: toInvestmentView(row.investment),
       investor: { id: row.investor.id, name: row.investor.name, status: row.investor.status as InvestorStatus },
-      schedule: { items: scheduleRows, lines, totals: scheduleTotals(scheduleRows) },
+      schedule: { items: scheduleRows.map(({ updatedAt, ...item }) => ({ ...item, updatedAt: updatedAt.toISOString() })), lines, totals: scheduleTotals(scheduleRows), version: scheduleVersion(scheduleRows) },
       position,
       divergences,
       renewal,

@@ -343,6 +343,15 @@ export function scheduleDateProblem(dueDate: string, investment: { startDate: st
   return dueDate < investment.startDate ? `A data do pagamento (${formatDate(dueDate)}) é anterior ao início do contrato (${formatDate(investment.startDate)}).` : null;
 }
 
+// Versão do cronograma gravado: muda quando qualquer linha é incluída, alterada, retirada ou substituída. A tela envia a
+// versão que viu; se o cronograma mudou desde então (outro envio, outra aba, clique repetido), nada é gravado.
+export function scheduleVersion(items: { id: string; updatedAt: Date | string }[]) {
+  const text = items.map((item) => `${item.id}@${typeof item.updatedAt === "string" ? item.updatedAt : item.updatedAt.toISOString()}`).sort().join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  return `${items.length}-${hash.toString(36)}`;
+}
+
 // Totais do cronograma (só soma o que foi digitado).
 export function scheduleTotals(items: { yieldCents: number; principalCents: number }[]) {
   const yieldCents = items.reduce((total, item) => total + item.yieldCents, 0);

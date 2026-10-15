@@ -96,7 +96,7 @@ test("REG3. corrigir o pagamento para uma data mais tarde que descobre uma retir
 });
 
 test("REG4. cronograma: devolução de principal acima do valor investido é recusada (montagem, inclusão e edição)", async () => {
-  const investor = await action(robério, "createInvestorAction", { name: "Investidor Regras Auditoria" }, "/investidores");
+  const investor = await action(robério, "createInvestorAction", { personType: "PF", document: "31972257323", name: "Investidor Regras Auditoria" }, "/investidores");
   const investment = await action(robério, "createInvestmentAction", { investorId: investor.id, amount: "20.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: shift(-1), contractNumber: "AUD-1" }, "/investidores");
   assert.equal(investment?.ok, true, JSON.stringify(investment));
   const add = (principalAmount, yieldAmount = "") => action(robério, "addInvestmentScheduleItemAction", { investmentId: investment.id, dueDate: shift(60), principalAmount, yieldAmount }, "/investidores");

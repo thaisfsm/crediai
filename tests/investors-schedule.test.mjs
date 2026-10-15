@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  defaultModelPlan, investmentChanges, investmentFields, investorFields, scheduleDates, scheduleItemFields, scheduleLinesFields, scheduleSummary, scheduleTotals, suggestScheduleLines, PAYMENT_FREQUENCIES,
+  defaultModelPlan, investmentChanges, investmentFields, investorFields, scheduleDates, scheduleItemFields, scheduleLinesFields, scheduleSummary, scheduleTotals, scheduleVersion, suggestScheduleLines, PAYMENT_FREQUENCIES,
 } from "../src/lib/investors/rules.ts";
 import { cpfCnpjProblem, normalizeCpfCnpj } from "../src/lib/finance/format.ts";
 
@@ -130,4 +130,15 @@ test("IS6. linha do cronograma e histórico legível", () => {
   assert.deepEqual(investmentChanges({ ...before, termMonths: 12 }, { ...before, termCount: 12, termUnit: "MONTHS" }), []);
   assert.equal(scheduleSummary([]), null);
   assert.match(scheduleSummary([{ dueDate: "2027-01-10", yieldCents: 100, principalCents: 0 }, { dueDate: "2026-11-10", yieldCents: 100, principalCents: 500 }]), /^2 pagamentos de 10\/11\/2026 a 10\/01\/2027/);
+});
+
+test("IS7. versão do cronograma: muda com qualquer linha incluída, alterada ou substituída; ordem não importa", () => {
+  const a = { id: "ivs_a", updatedAt: "2026-10-15T12:00:00.000Z" };
+  const b = { id: "ivs_b", updatedAt: "2026-10-15T12:00:00.000Z" };
+  assert.equal(scheduleVersion([a, b]), scheduleVersion([b, a]));
+  assert.equal(scheduleVersion([a, b]), scheduleVersion([{ ...a, updatedAt: new Date(a.updatedAt) }, b]), "Date e texto dão a mesma versão");
+  assert.notEqual(scheduleVersion([a, b]), scheduleVersion([a]));
+  assert.notEqual(scheduleVersion([a, b]), scheduleVersion([a, { ...b, updatedAt: "2026-10-15T12:00:00.001Z" }]), "linha alterada");
+  assert.notEqual(scheduleVersion([a, b]), scheduleVersion([a, { ...b, id: "ivs_c" }]), "cronograma substituído com o mesmo tamanho");
+  assert.match(scheduleVersion([]), /^0-/);
 });

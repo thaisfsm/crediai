@@ -68,7 +68,7 @@ test("preparação: investidor e investimento do Robério, sem endereço e sem e
   robério = await login("roberio@teste.local");
   fernando = await login("fernando@teste.local");
   thais = await login("thais@teste.local");
-  const investor = await action(robério, "createInvestorAction", { name: "João Conceição Araújo", document: "411.797.058-58" });
+  const investor = await action(robério, "createInvestorAction", { personType: "PF", name: "João Conceição Araújo", document: "411.797.058-58" });
   assert.equal(investor?.ok, true, JSON.stringify(investor));
   ids.investor = investor.id;
   const investment = await action(robério, "createInvestmentAction", { investorId: ids.investor, amount: "50.000,50", rate: "1,5", ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: "10", notes: "Rendimentos por PIX até o dia 10.", status: "PENDING_SIGNATURE" });
@@ -107,7 +107,7 @@ test("K2. empresa contratante: rascunho não libera; confirmação exige dados c
   const blocked = await action(robério, "generateContractAction", { investmentId: ids.investment, includeNotes: "1" });
   assert.match(blocked.error, /Investidor: endereço completo/);
   assert.doesNotMatch(blocked.error, /Empresa contratante/);
-  const investor = await action(robério, "updateInvestorAction", { investorId: ids.investor, name: "João Conceição Araújo", document: "411.797.058-58", status: "ACTIVE", ...ADDRESS, addressStreet: "Rua São João", addressNumber: "45", addressComplement: "", addressDistrict: "Centro", addressCity: "Ribeirão Preto" });
+  const investor = await action(robério, "updateInvestorAction", { personType: "PF", investorId: ids.investor, name: "João Conceição Araújo", document: "411.797.058-58", status: "ACTIVE", ...ADDRESS, addressStreet: "Rua São João", addressNumber: "45", addressComplement: "", addressDistrict: "Centro", addressCity: "Ribeirão Preto" });
   assert.equal(investor?.ok, true, JSON.stringify(investor));
 });
 
