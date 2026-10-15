@@ -1,4 +1,6 @@
-// Campos do cadastro completo do cliente: contatos e redes sociais, endereços, referências e avalista. Usado pelo
+import { bankKeys, type BankKey } from "../bank-account";
+
+// Campos do cadastro completo do cliente: contatos e redes sociais, endereços, empresa, dados bancários, referências e avalista. Usado pelo
 // formulário, pela ação de gravação e pela ficha do cliente, para que os três tratem sempre os mesmos campos.
 export const addressKinds = { residential: "Endereço residencial", business: "Endereço comercial" } as const;
 export type AddressKind = keyof typeof addressKinds;
@@ -21,7 +23,10 @@ export type ContactKey = (typeof contactKeys)[number];
 type AddressKey = `${AddressKind}${AddressPart}`;
 type ReferenceKey = `reference${(typeof referenceSlots)[number]}${(typeof referenceParts)[number]}`;
 type GuarantorKey = `guarantor${(typeof guarantorParts)[number]}`;
-export type ClientProfileKey = ContactKey | AddressKey | ReferenceKey | GuarantorKey;
+// Empresa onde o cliente trabalha (junto do endereço comercial): nome e CNPJ (só dígitos, conferido).
+export const companyKeys = ["businessCompanyName", "businessCnpj"] as const;
+export type CompanyKey = (typeof companyKeys)[number];
+export type ClientProfileKey = ContactKey | AddressKey | ReferenceKey | GuarantorKey | CompanyKey | BankKey;
 export type ClientProfile = Record<ClientProfileKey, string | null>;
 
 export const addressKey = (kind: AddressKind, part: AddressPart) => `${kind}${part}` as AddressKey;
@@ -33,6 +38,8 @@ export const clientProfileKeys: ClientProfileKey[] = [
   ...(Object.keys(addressKinds) as AddressKind[]).flatMap((kind) => addressParts.map((part) => addressKey(kind, part))),
   ...referenceSlots.flatMap((slot) => referenceParts.map((part) => referenceKey(slot, part))),
   ...guarantorParts.map(guarantorKey),
+  ...companyKeys,
+  ...bankKeys,
 ];
 
 export const brazilianStates = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];

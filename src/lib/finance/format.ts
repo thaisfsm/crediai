@@ -121,12 +121,48 @@ export function formatPhone(stored: string | null) {
   return length === 10 || length === 11 ? maskPhone(stored) : stored;
 }
 
-// Validação mínima: bloqueia só formatos obviamente inválidos (tamanho errado, todos os dígitos iguais, DDD inexistente).
-export function normalizeCpf(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+// Dígitos verificadores (módulo 11). CPF: pesos 10..2 e 11..2. CNPJ: pesos 5..2,9..2 e 6..2,9..2.
+// Sequências de um dígito só (000.000.000-00, 11.111.111/1111-11…) passam na conta mas não existem: são recusadas.
+const checkDigit = (digits: string, weights: number[]) => {
+  const rest = weights.reduce((total, weight, index) => total + Number(digits[index]) * weight, 0) % 11;
+  return rest < 2 ? 0 : 11 - rest;
+};
+export function isValidCpf(value: string) {
   const digits = onlyDigits(value);
-  if (!digits) return { ok: true, value: null };
-  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return { ok: false, error: "O CPF precisa ter 11 dígitos, por exemplo 411.797.058-58." };
-  return { ok: true, value: digits };
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+  return checkDigit(digits, [10, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[9]) && checkDigit(digits, [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[10]);
+}
+export function isValidCnpj(value: string) {
+  const digits = onlyDigits(value);
+  if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
+  return checkDigit(digits, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[12]) && checkDigit(digits, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[13]);
+}
+
+// Mensagem de CPF inválido, também usada na tela enquanto o usuário digita (null = válido ou vazio).
+export function cpfProblem(value: string) {
+  const digits = onlyDigits(value);
+  if (!digits) return null;
+  if (digits.length !== 11) return "O CPF precisa ter 11 dígitos, por exemplo 411.797.058-58.";
+  return isValidCpf(digits) ? null : "CPF inválido: confira os números digitados.";
+}
+export function cnpjProblem(value: string) {
+  const digits = onlyDigits(value);
+  if (!digits) return null;
+  if (digits.length !== 14) return "O CNPJ precisa ter 14 dígitos, por exemplo 11.222.333/0001-81.";
+  return isValidCnpj(digits) ? null : "CNPJ inválido: confira os números digitados.";
+}
+
+// CPF gravado só com dígitos, depois de conferir os dígitos verificadores.
+export function normalizeCpf(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  const problem = cpfProblem(value);
+  if (problem) return { ok: false, error: problem };
+  return { ok: true, value: onlyDigits(value) || null };
+}
+
+export function normalizeCnpj(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  const problem = cnpjProblem(value);
+  if (problem) return { ok: false, error: problem };
+  return { ok: true, value: onlyDigits(value) || null };
 }
 
 export function normalizePhone(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
@@ -163,4 +199,14 @@ export function normalizeCpfCnpj(value: string): { ok: true; value: string | nul
     return { ok: false, error: "Informe o CPF (11 dígitos, 411.797.058-58) ou o CNPJ (14 dígitos, 12.345.678/0001-90)." };
   }
   return { ok: true, value: digits };
+}
+
+// Máscara progressiva do CNPJ: 11.222.333/0001-81.
+export function maskCnpj(value: string) {
+  const digits = onlyDigits(value).slice(0, 14);
+  return digits.replace(/^(\d{2})(\d)/, "$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3").replace(/\.(\d{3})(\d)/, ".$1/$2").replace(/(\d{4})(\d{1,2})$/, "$1-$2");
+}
+export function formatCnpj(stored: string | null) {
+  if (!stored) return null;
+  return onlyDigits(stored).length === 14 ? maskCnpj(stored) : stored;
 }

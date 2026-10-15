@@ -1085,3 +1085,20 @@ button { color:inherit; }
 .chart-tooltip-date { color:#8fa6b4; font-size:9px; }
 .chart-tooltip-value { color:#edf6fa; font-size:13px; font-weight:650; letter-spacing:-.2px; }
 .chart-tooltip small { color:#7f95a4; font-size:8px; }
+
+/* Erro de validação abaixo do campo (CPF/CNPJ inválido) */
+.field-error { color:#ff8589; font-size:10.5px; font-weight:500; }
+.field input[aria-invalid="true"] { border-color:rgba(255,133,137,.6); }
+.field input:disabled { opacity:.55; }
+
+/* Busca rápida de clientes */
+.client-search { display:flex; flex-direction:column; gap:10px; padding:14px 18px 4px; }
+.client-search-box { position:relative; display:flex; align-items:center; max-width:560px; }
+.client-search-box input { width:100%; min-height:42px; padding:0 40px 0 38px; border:1px solid rgba(112,145,170,.28); border-radius:10px; color:#eef6fb; background-color:#07111f; font:inherit; font-size:13px; outline:none; }
+.client-search-box input:focus { border-color:rgba(65,190,226,.68); box-shadow:0 0 0 3px rgba(65,190,226,.11); }
+.client-search-box .search-icon { position:absolute; left:12px; color:#6d8394; pointer-events:none; }
+.client-search-box .search-clear { position:absolute; right:8px; border:0; background:transparent; color:#8296a7; font-size:18px; cursor:pointer; padding:4px 6px; }
+.client-search-status { margin:0; color:#8296a7; font-size:11px; }
+@media (max-width: 720px) { .client-search { padding:12px 12px 2px; } .client-search-box { max-width:none; } }
+.client-search-box input::-webkit-search-cancel-button { display:none; }
+.client-search:only-child { padding-bottom:14px; }

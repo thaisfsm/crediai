@@ -120,6 +120,13 @@
       "when": 1791903721288,
       "tag": "0017_financial_movements",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791928589301,
+      "tag": "0018_client_search_bank_data",
+      "breakpoints": true
     }
   ]
 }

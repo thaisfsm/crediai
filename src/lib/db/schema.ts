@@ -269,6 +269,18 @@ export const clients = pgTable("client", {
   businessDistrict: text("business_district"),
   businessCity: text("business_city"),
   businessState: text("business_state"),
+  // Empresa do endereço comercial: nome e CNPJ (só dígitos, com dígitos verificadores conferidos; pode repetir entre clientes).
+  businessCompanyName: text("business_company_name"),
+  businessCnpj: text("business_cnpj"),
+  // Dados bancários e chave Pix (opcionais). Regras em src/lib/bank-account.ts.
+  bankHolderName: text("bank_holder_name"),
+  bankHolderDocument: text("bank_holder_document"),
+  bankName: text("bank_name"),
+  bankBranch: text("bank_branch"),
+  bankAccount: text("bank_account"),
+  bankAccountType: text("bank_account_type"),
+  pixKeyType: text("pix_key_type"),
+  pixKey: text("pix_key"),
   // Duas referências pessoais
   reference1Name: text("reference1_name"),
   reference1Phone: text("reference1_phone"),
@@ -289,6 +301,10 @@ export const clients = pgTable("client", {
   index("client_tenant_id_idx").on(table.tenantId),
   unique("client_tenant_id_id_unique").on(table.tenantId, table.id),
   check("client_name_not_blank", sql`length(trim(${table.name})) > 0`),
+  // O mesmo CPF não aparece duas vezes na mesma carteira (clientes arquivados contam). Outras carteiras não são afetadas.
+  uniqueIndex("client_tenant_document_unique").on(table.tenantId, table.document).where(sql`${table.document} is not null`),
+  check("client_bank_account_type_valid", sql`${table.bankAccountType} is null or ${table.bankAccountType} in ('CHECKING', 'SAVINGS', 'PAYMENT', 'SALARY')`),
+  check("client_pix_key_pair", sql`(${table.pixKey} is null) = (${table.pixKeyType} is null) and (${table.pixKeyType} is null or ${table.pixKeyType} in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM'))`),
   ...tenantPolicies("client", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
