@@ -10,6 +10,7 @@ import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
+import { RenegotiationPage } from "./renegotiation-page";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
@@ -290,6 +291,8 @@ export default function Dashboard({ userName, portfolio, isSuperAdmin = false, i
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
             <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} />
+          ) : active === "Renegociação" ? (
+            <RenegotiationPage portfolio={portfolio} />
           ) : active === "Relatórios" ? (
             <ReportsPage portfolio={portfolio} onChanged={refresh} />
           ) : (

@@ -7,7 +7,7 @@ import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
 // Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro).
-export type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Relatórios" | "Configurações";
+export type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
 export type NavLabel = NavKey | "Investidores" | "Financeiro";
 // Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
 const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro" };
@@ -17,7 +17,7 @@ const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investi
 // o clique troca a tela na hora, sem recarregar, e só atualiza o endereço.
 export const NAV_SLUGS: Record<NavKey, string> = {
   "Visão geral": "visao-geral", Capital: "capital", Clientes: "clientes", Operações: "operacoes",
-  Pagamentos: "pagamentos", Cobranças: "cobrancas", Relatórios: "relatorios", Configurações: "configuracoes",
+  Pagamentos: "pagamentos", Cobranças: "cobrancas", Renegociação: "renegociacao", Relatórios: "relatorios", Configurações: "configuracoes",
 };
 export function navKeyFromSlug(slug: string | undefined): NavKey {
   return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
@@ -27,7 +27,7 @@ const itemHref = (label: NavLabel) => PAGE_ROUTES[label] ?? navHref(label as Nav
 
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
   { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Investidores", icon: "briefcase" }] },
-  { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Relatórios", icon: "chart" }] },
+  { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Renegociação", icon: "sparkles" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
 ];
 
