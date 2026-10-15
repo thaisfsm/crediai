@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, previewOperationEditAction, searchClientsAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { Fragment, useEffect, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
+import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
 import type { ClientSearchResult } from "@/lib/finance/client-search";
 import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
+import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { DateField } from "./date-field";
@@ -933,10 +934,11 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
   );
 }
 
-function PaymentPanel({ operation, today, onClose, onChanged }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void }) {
+// readOnly: operação de ciclo encerrado aberta pelo relatório; só consulta (o servidor também recusa alterações).
+function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void; readOnly?: boolean }) {
   const [amount, setAmount] = useState("");
   const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { setAmount(""); onChanged(); });
-  const isOpen = operation.status === "OPEN";
+  const isOpen = operation.status === "OPEN" && !readOnly;
   const amountCents = parseMoneyToCents(amount);
   const check = amountCents !== null ? checkPayment({ amountCents, balanceCents: operation.balanceCents, formatMoney }) : null;
   // Prévia deste pagamento (hoje) pelo mesmo extrato usado no servidor: juros primeiro, depois principal.
@@ -1052,7 +1054,7 @@ function PaymentPanel({ operation, today, onClose, onChanged }: { operation: Ope
             <ul>{operation.payments.map((payment) => (
               <li key={payment.id}>
                 <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
-                {operation.status !== "CANCELED" && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
+                {operation.status !== "CANCELED" && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
                 {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
@@ -1384,10 +1386,34 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
 }
 
 // Rentabilidade da carteira inteira e por cliente, no ciclo atual. Juros previstos nunca são somados ao lucro realizado.
-export function ReportsPage({ portfolio }: { portfolio: TenantPortfolio }) {
+export function ReportsPage({ portfolio, onChanged = () => {} }: { portfolio: TenantPortfolio; onChanged?: () => void }) {
   const { profitability } = portfolio;
   const activeClients = portfolio.clients.filter((client) => client.profile.openCount > 0).length;
-  const rows = portfolio.clients.filter((client) => client.profile.operationCount > 0);
+  const [filters, setFilters] = useState<ReportFilters>({ period: "CYCLE", from: "", to: "", status: "ALL" });
+  const [scope, setScope] = useState<ReportScope>("CURRENT");
+  // Todos os ciclos: carregado do servidor só quando escolhido (só leitura).
+  const [allCycles, setAllCycles] = useState<{ operations: OperationView[] } | { error: string } | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  useEffect(() => {
+    if (scope !== "ALL" || allCycles) return;
+    let active = true;
+    loadAllCyclesReportAction()
+      .then((result) => { if (active) setAllCycles(result.ok ? { operations: result.operations } : { error: result.error }); })
+      .catch(() => { if (active) setAllCycles({ error: "Não foi possível carregar os ciclos encerrados. Tente de novo." }); });
+    return () => { active = false; };
+  }, [scope, allCycles]);
+  const loadingAll = scope === "ALL" && (!allCycles || "error" in allCycles);
+  const reportOperations = scope === "ALL" && allCycles && "operations" in allCycles ? allCycles.operations : portfolio.operations;
+  const report = profitabilityReport(loadingAll ? [] : reportOperations, filters, portfolio.today);
+  const filtered = filters.period !== "CYCLE" || filters.status !== "ALL" || scope !== "CURRENT";
+  const origin = scope === "ALL" ? "o primeiro ciclo" : "o início do ciclo";
+  const rangeLabel = report.range.from || report.range.to
+    ? `De ${report.range.from ? formatDate(report.range.from) : origin} a ${report.range.to ? formatDate(report.range.to) : "hoje"}`
+    : scope === "ALL" ? "Todos os ciclos da carteira" : "Todo o ciclo atual";
+  // Operações de ciclos encerrados abrem só para consulta (o servidor também recusa pagamento fora do ciclo atual).
+  const openedOperation = reportOperations.find((operation) => operation.id === opened) ?? null;
+  const set = (patch: Partial<ReportFilters>) => { setFilters((current) => ({ ...current, ...patch })); setExpanded(null); };
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · RELATÓRIOS" title="Rentabilidade da carteira" description="Calculada só com os pagamentos registrados. Juros previstos ainda não são lucro; só os juros recebidos são." />
@@ -1406,17 +1432,48 @@ export function ReportsPage({ portfolio }: { portfolio: TenantPortfolio }) {
         </dl>
       </section>
       <section className="panel table-panel" aria-label="Rentabilidade por cliente">
-        <div className="panel-header"><div><div className="panel-title-row"><h2>Por cliente</h2><span className="today-count">{rows.length}</span></div><p>Abra o cliente em Clientes para ver cada operação.</p></div></div>
-        {rows.length === 0 ? <EmptyPanel icon="chart" text="Nenhuma operação no ciclo atual." /> : (
-          <div className="table-scroll"><table className="data-table">
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Por cliente</h2><span className="today-count">{report.clients.length}</span></div>
+          <p>{`${rangeLabel}. Recebidos contam pela data do pagamento e emprestado pela data do empréstimo; saldo e juros previstos são os de hoje. Clique no cliente para ver cada operação.`}</p></div></div>
+        <form className="report-filters" role="search" aria-label="Filtros do relatório" onSubmit={(event) => event.preventDefault()}>
+          <label className="field"><span>Período</span><select value={filters.period} onChange={(event) => set({ period: event.target.value as ReportPeriod })}>
+            {(Object.keys(REPORT_PERIODS) as ReportPeriod[]).map((period) => <option key={period} value={period}>{REPORT_PERIODS[period]}</option>)}
+          </select></label>
+          {filters.period === "CUSTOM" && (
+            <>
+              <DateField label="De" name="reportFrom" defaultValue={filters.from} onChange={(from) => set({ from })} />
+              <DateField label="Até" name="reportTo" defaultValue={filters.to} onChange={(to) => set({ to })} />
+            </>
+          )}
+          <label className="field"><span>Ciclos</span><select value={scope} onChange={(event) => { setScope(event.target.value as ReportScope); setExpanded(null); }}>
+            {(Object.keys(REPORT_SCOPES) as ReportScope[]).map((key) => <option key={key} value={key}>{REPORT_SCOPES[key]}</option>)}
+          </select></label>
+          <label className="field"><span>Situação</span><select value={filters.status} onChange={(event) => set({ status: event.target.value as ReportStatus })}>
+            {(Object.keys(REPORT_STATUSES) as ReportStatus[]).map((status) => <option key={status} value={status}>{REPORT_STATUSES[status]}</option>)}
+          </select></label>
+          {filtered && <button type="button" className="text-link" onClick={() => { set({ period: "CYCLE", from: "", to: "", status: "ALL" }); setScope("CURRENT"); }}>Limpar filtros</button>}
+        </form>
+        {loadingAll ? <EmptyPanel icon="chart" text={allCycles && "error" in allCycles ? allCycles.error : "Carregando os ciclos encerrados…"} /> : report.clients.length === 0 ? <EmptyPanel icon="chart" text={filtered ? "Nenhuma operação com esses filtros." : "Nenhuma operação no ciclo atual."} /> : (
+          <div className="table-scroll"><table className="data-table report-table">
             <thead><tr><th>Cliente</th><th>Operações</th><th>Principal emprestado</th><th>Principal recuperado</th><th>Juros recebidos</th><th>Juros previstos</th><th>Saldo</th><th>Pagamentos</th></tr></thead>
-            <tbody>{rows.map((client) => (
-              <tr key={client.id}><td><strong>{client.name}</strong></td><td>{client.profile.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.principalPaidCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.interestRemainingCents)}</td><td><strong>{formatMoney(client.profile.balanceCents)}</strong></td><td>{client.profile.paymentCount}</td></tr>
+            <tbody>{report.clients.map((client) => (
+              <Fragment key={client.clientId}>
+                <tr className="report-client-row">
+                  <td><button type="button" className="text-link client-link" aria-expanded={expanded === client.clientId} onClick={() => setExpanded(expanded === client.clientId ? null : client.clientId)}><strong>{client.clientName}</strong></button></td>
+                  <td>{client.totals.operationCount}</td><td>{formatMoney(client.totals.principalLentCents)}</td><td>{formatMoney(client.totals.principalReceivedCents)}</td><td>{formatMoney(client.totals.interestReceivedCents)}</td><td>{formatMoney(client.totals.interestRemainingCents)}</td><td><strong>{formatMoney(client.totals.balanceCents)}</strong></td><td>{client.totals.paymentCount}</td>
+                </tr>
+                {expanded === client.clientId && client.operations.map(({ operation, row }) => (
+                  <tr key={operation.id} className="report-operation-row">
+                    <td><span className="row-actions"><button type="button" className="outline-button" onClick={() => setOpened(operation.id)}>{`Abrir #${operation.code}`}</button></span><small>{`${modalityLabel(operation)} · empréstimo ${formatDate(operation.loanDate)}${scope === "ALL" && operation.cycleNumber ? ` · ciclo ${operation.cycleNumber}${operation.cycleNumber === portfolio.summary.cycleNumber ? " (atual)" : ""}` : ""}`}</small></td>
+                    <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td>{formatMoney(row.principalLentCents)}</td><td>{formatMoney(row.principalReceivedCents)}</td><td>{formatMoney(row.interestReceivedCents)}</td><td>{formatMoney(row.interestRemainingCents)}</td><td>{formatMoney(row.balanceCents)}</td><td>{row.paymentCount}</td>
+                  </tr>
+                ))}
+              </Fragment>
             ))}</tbody>
-            <tfoot><tr><td><strong>Total</strong></td><td>{profitability.operationCount}</td><td>{formatMoney(profitability.principalCents)}</td><td>{formatMoney(profitability.principalPaidCents)}</td><td>{formatMoney(profitability.interestPaidCents)}</td><td>{formatMoney(profitability.interestRemainingCents)}</td><td><strong>{formatMoney(profitability.balanceCents)}</strong></td><td>{profitability.paymentCount}</td></tr></tfoot>
+            <tfoot><tr><td><strong>Total</strong></td><td>{report.totals.operationCount}</td><td>{formatMoney(report.totals.principalLentCents)}</td><td>{formatMoney(report.totals.principalReceivedCents)}</td><td>{formatMoney(report.totals.interestReceivedCents)}</td><td>{formatMoney(report.totals.interestRemainingCents)}</td><td><strong>{formatMoney(report.totals.balanceCents)}</strong></td><td>{report.totals.paymentCount}</td></tr></tfoot>
           </table></div>
         )}
       </section>
+      {openedOperation && <PaymentPanel operation={openedOperation} today={portfolio.today} onClose={() => setOpened(null)} onChanged={() => { setAllCycles(null); onChanged(); }} readOnly={openedOperation.cycleNumber !== undefined && openedOperation.cycleNumber !== portfolio.summary.cycleNumber} />}
     </div>
   );
 }

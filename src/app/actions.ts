@@ -11,6 +11,8 @@ import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/fi
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
 import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { recordAdminAudit } from "@/lib/admin/audit";
+import { loadAllCyclesOperations } from "@/lib/finance/queries";
+import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
@@ -178,6 +180,11 @@ export async function updateClientAction(data: FormData): Promise<ActionResult> 
   });
   if (result.ok) revalidatePath("/");
   return result;
+}
+
+// Relatório "Todos os ciclos": operações de todos os ciclos da carteira da sessão, já calculadas. Só leitura.
+export async function loadAllCyclesReportAction(): Promise<{ ok: true; operations: OperationView[] } | { ok: false; error: string }> {
+  return { ok: true, operations: await loadAllCyclesOperations() };
 }
 
 // Busca rápida de clientes por nome (sem acentos, partes do nome), CPF ou telefone, formatados ou não. Roda no servidor e
