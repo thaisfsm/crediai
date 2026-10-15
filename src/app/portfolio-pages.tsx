@@ -1307,6 +1307,7 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
   const withdrawal = useFormAction(registerWithdrawalAction, onChanged);
   const initial = useFormAction(saveWalletAction, onChanged);
   const [reversing, setReversing] = useState<TenantPortfolio["capitalLedger"][number] | null>(null);
+  const linkedToInvestor = new Set(portfolio.investorLinkedContributionIds);
   const { summary } = portfolio;
   return (
     <div className="workspace-page">
@@ -1370,7 +1371,9 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
                 <td>{entry.description}</td>
                 <td><strong>{entry.amountCents < 0 ? "− " : "+ "}{formatMoney(Math.abs(entry.amountCents))}</strong></td>
                 <td>{formatMoney(entry.balanceCents)}</td>
-                <td className="actions-cell">{entry.kind === "CONTRIBUTION" && entry.source !== "INVESTOR" && (entry.reversed ? <span className="status-chip status-muted"><i />Estornado</span> : <button className="outline-button danger-outline" onClick={() => setReversing(entry)}>Estornar aporte</button>)}</td>
+                <td className="actions-cell">{entry.kind === "CONTRIBUTION" && entry.source !== "INVESTOR" && (entry.reversed ? <span className="status-chip status-muted"><i />Estornado</span>
+                  : linkedToInvestor.has(entry.movementId ?? "") ? <small className="admin-cell-note">Ligado a contrato de investidor: não se estorna</small>
+                  : <button className="outline-button danger-outline" onClick={() => setReversing(entry)}>Estornar aporte</button>)}</td>
               </tr>
             ))}</tbody>
           </table></div>

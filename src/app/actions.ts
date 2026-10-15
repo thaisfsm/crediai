@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, investmentPriorContributions, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -427,6 +427,10 @@ export async function reverseContributionAction(data: FormData): Promise<ActionR
     if (contribution.source === "INVESTOR") return { ok: false, error: "Esta entrada pertence a um contrato de investimento e não pode ser estornada como aporte. Nada foi alterado." };
     const existing = await tx.query.capitalMovements.findFirst({ where: and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.reversedMovementId, contribution.id)) });
     if (existing) return { ok: false, error: "Este aporte já foi estornado." };
+    // Aporte indicado como a entrada do dinheiro de um contrato antigo de investidor: as baixas do contrato dependem dele.
+    const [linked] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
+      .where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.capitalMovementId, contribution.id)));
+    if (linked) return { ok: false, error: "Este aporte foi indicado como a entrada do dinheiro de um contrato de investidor e não pode ser estornado. Nada foi alterado." };
     const availableCents = await availableCapitalCents(tx, tenantId, wallet);
     if (contribution.amountCents > availableCents) {
       return { ok: false, error: `Não é possível estornar ${formatMoney(contribution.amountCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };

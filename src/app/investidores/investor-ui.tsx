@@ -15,7 +15,7 @@ import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/inve
 import { DateField } from "../date-field";
 import { AddressFieldset, BankFieldset, BankSummaryRows, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
-import { registerInvestmentEntryAction } from "../contas-a-pagar/actions";
+import { declarePriorContributionAction, registerInvestmentEntryAction } from "../contas-a-pagar/actions";
 import { ObligationsTable } from "../contas-a-pagar/payables-ui";
 import {
   addInvestmentScheduleItemAction, buildInvestmentScheduleAction, createInvestmentAction, createInvestorAction, deleteInvestmentScheduleItemAction, generateContractAction,
@@ -575,19 +575,60 @@ function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => v
   const paidYield = cash.payments.filter((payment) => payment.kind === "YIELD").reduce((total, payment) => total + payment.amountCents, 0);
   const paidPrincipal = cash.payments.filter((payment) => payment.kind === "PRINCIPAL").reduce((total, payment) => total + payment.amountCents, 0);
   const open = cash.obligations.reduce((total, obligation) => total + obligation.balanceCents, 0);
-  const canRegister = cash.ownWallet && !cash.entry && investment.status !== "CANCELED";
+  const canRegister = cash.ownWallet && !cash.entry && !cash.prior && investment.status !== "CANCELED";
+  const [declaring, setDeclaring] = useState(false);
+  const declareRequest = useRef<string | null>(null);
+  const declare = useFormAction(declarePriorContributionAction, () => { declareRequest.current = null; setDeclaring(false); onDone(); });
+  const submitDeclare = (event: FormEvent<HTMLFormElement>) => {
+    const input = event.currentTarget.elements.namedItem("requestId") as HTMLInputElement;
+    declareRequest.current ??= newRequestId();
+    input.value = declareRequest.current;
+    declare.onSubmit(event);
+  };
+  const canDeclare = canRegister && cash.legacy;
+  const hasOpen = cash.obligations.some((obligation) => obligation.balanceCents > 0);
   return (
     <section className="panel form-panel" aria-label="Capital e pagamentos do investimento">
       <div className="panel-header"><div><h2>Capital e pagamentos</h2><p>A entrada do dinheiro no capital só é registrada quando você confirma. Os pagamentos ao investidor são as baixas feitas em Contas a Pagar.</p></div>
-        {canRegister && !confirming && <span className="row-actions"><button type="button" className="primary-button" onClick={() => setConfirming(true)}>Registrar a entrada deste investimento no capital</button></span>}
+        {canRegister && !confirming && !declaring && <span className="row-actions">
+          {canDeclare && <button type="button" className="outline-button" onClick={() => setDeclaring(true)}>Indicar aporte anterior</button>}
+          <button type="button" className="primary-button" onClick={() => setConfirming(true)}>Registrar a entrada deste investimento no capital</button>
+        </span>}
       </div>
       <dl className="payment-summary">
-        <div><dt>Entrada no capital</dt><dd>{cash.entry ? <>{formatMoney(cash.entry.amountCents)} em {formatDate(cash.entry.enteredOn)}<small className="admin-cell-note">Registrada em {dateOf(cash.entry.createdAt)}{cash.entry.createdBy ? ` por ${cash.entry.createdBy}` : ""}</small></> : <span className="muted-value">Não registrada</span>}</dd></div>
+        <div><dt>Entrada no capital</dt><dd>{cash.entry ? <>{formatMoney(cash.entry.amountCents)} em {formatDate(cash.entry.enteredOn)}<small className="admin-cell-note">Registrada em {dateOf(cash.entry.createdAt)}{cash.entry.createdBy ? ` por ${cash.entry.createdBy}` : ""}</small></>
+          : cash.prior ? <>Por aporte anterior: {formatMoney(cash.prior.amountCents)} em {formatDate(cash.prior.occurredAt)}<small className="admin-cell-note">Indicado em {dateOf(cash.prior.createdAt)}{cash.prior.createdBy ? ` por ${cash.prior.createdBy}` : ""}</small></>
+          : <span className="muted-value">Não registrada</span>}</dd></div>
         <div><dt>Rendimentos pagos</dt><dd>{formatMoney(paidYield)}</dd></div>
         <div><dt>Principal devolvido</dt><dd>{formatMoney(paidPrincipal)}</dd></div>
         <div><dt>Em aberto no cronograma</dt><dd>{formatMoney(open)}</dd></div>
       </dl>
       {!cash.ownWallet && <p className="capital-note">Este contrato é de outra carteira: a entrada no capital e as baixas só podem ser registradas pela própria carteira.</p>}
+      {cash.ownWallet && !cash.entry && !cash.prior && investment.status !== "CANCELED" && (cash.legacy
+        ? <p className="capital-note" role="note">Contrato cadastrado antes da regra da entrada no capital. As baixas ficam bloqueadas até você dizer como o dinheiro entrou: registre a entrada (se o valor ainda não está no capital) ou indique o aporte comum pelo qual ele já entrou. O sistema não decide isso sozinho.</p>
+        : <p className="capital-note" role="note">{hasOpen ? "As baixas deste contrato ficam bloqueadas até a entrada do investimento ser registrada no capital." : "A baixa dos pagamentos deste contrato exige a entrada do investimento registrada no capital."}</p>)}
+      <p className="capital-note">Baixas, entradas e aportes indicados não se alteram, não se estornam e não se apagam por aqui. Contrato que já movimentou o capital não pode ser cancelado. Essas correções aguardam uma regra própria.</p>
+      {declaring && canDeclare && (
+        <form className="schedule-form" onSubmit={submitDeclare} aria-label="Indicar aporte anterior">
+          <input type="hidden" name="investmentId" value={investment.id} />
+          <input type="hidden" name="requestId" defaultValue="" />
+          <p>Escolha o aporte da tela Capital pelo qual os {formatMoney(investment.amountCents)} deste contrato já entraram na carteira. Nada é lançado no capital; o contrato só fica ligado a esse aporte, que deixa de poder ser estornado. Não dá para desfazer por aqui.</p>
+          {cash.candidates.length === 0 ? <p className="capital-note">Não há aporte comum do ciclo atual disponível. Se o dinheiro ainda não entrou no capital, registre a entrada do investimento.</p> : (
+            <label className="field"><span>Aporte</span>
+              <select name="movementId" required defaultValue="">
+                <option value="" disabled>Escolha o aporte</option>
+                {cash.candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{formatDate(candidate.occurredAt)} · {formatMoney(candidate.amountCents)}{candidate.description ? ` · ${candidate.description}` : ""}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="check-field"><input type="checkbox" name="confirm" value="1" required /><span>Confirmo que o dinheiro deste contrato entrou no capital por esse aporte.</span></label>
+          <div className="form-actions">
+            <button type="button" className="outline-button" onClick={() => setDeclaring(false)}>Cancelar</button>
+            <button className="primary-button" disabled={declare.pending || cash.candidates.length === 0}><Icon name="check" size={16} /> {declare.pending ? "Registrando…" : "Confirmar aporte anterior"}</button>
+          </div>
+        </form>
+      )}
+      <Feedback feedback={declare.feedback} />
       {confirming && canRegister && (
         <form className="schedule-form" onSubmit={submit} aria-label="Confirmar entrada no capital">
           <input type="hidden" name="investmentId" value={investment.id} />

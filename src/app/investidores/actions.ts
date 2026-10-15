@@ -7,7 +7,7 @@ import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { AuditAction } from "@/lib/admin/audit-rules";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { bankKeys } from "@/lib/bank-account";
-import { investmentCapitalEntries, investmentContractors, investmentContracts, investmentDocuments, investmentPayments, investmentRevisions, investmentScheduleItems, investments, investors, tenants } from "@/lib/db/schema";
+import { investmentCapitalEntries, investmentContractors, investmentContracts, investmentDocuments, investmentPayments, investmentPriorContributions, investmentRevisions, investmentScheduleItems, investments, investors, tenants } from "@/lib/db/schema";
 import { formatDate, formatMoney } from "@/lib/finance/format";
 import { tenantFilter, withInvestorContext } from "@/lib/investors/access";
 import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
@@ -64,14 +64,16 @@ function refresh() {
   revalidatePath("/contas-a-pagar");
 }
 
-// Dinheiro já movimentado pelo contrato (Contas a Pagar): a entrada registrada no capital e as linhas do cronograma com
-// baixa. Com eles, o que deu origem aos lançamentos não muda mais, para preservar o histórico financeiro.
+// Dinheiro já movimentado pelo contrato (Contas a Pagar): a entrada registrada no capital (ou o aporte anterior indicado,
+// migração 0023) e as linhas do cronograma com baixa. Com eles, o que deu origem aos lançamentos não muda mais, para preservar o histórico financeiro.
 async function cashOf(tx: TenantTransaction, investment: { id: string; tenantId: string }) {
   const [entry] = await tx.select({ amountCents: investmentCapitalEntries.amountCents, enteredOn: investmentCapitalEntries.enteredOn }).from(investmentCapitalEntries)
     .where(and(eq(investmentCapitalEntries.investmentId, investment.id), eq(investmentCapitalEntries.tenantId, investment.tenantId)));
   const paid = await tx.selectDistinct({ itemId: investmentPayments.scheduleItemId }).from(investmentPayments)
     .where(and(eq(investmentPayments.investmentId, investment.id), eq(investmentPayments.tenantId, investment.tenantId)));
-  return { entry: entry ?? null, paidItemIds: new Set(paid.map((row) => row.itemId)) };
+  const [prior] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
+    .where(and(eq(investmentPriorContributions.investmentId, investment.id), eq(investmentPriorContributions.tenantId, investment.tenantId)));
+  return { entry: entry ?? null, prior: Boolean(prior), paidItemIds: new Set(paid.map((row) => row.itemId)) };
 }
 const PAID_ITEM_ERROR = { ok: false as const, error: "Esta linha do cronograma já tem pagamento registrado em Contas a Pagar. Para preservar o histórico financeiro, ela não pode ser alterada nem retirada." };
 
@@ -176,8 +178,8 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
     if (cash.paidItemIds.size > 0 && fields.values.startDate !== investment.startDate) {
       return { ok: false, error: "Este contrato já tem pagamentos registrados em Contas a Pagar. Para preservar o histórico financeiro, a data de início não pode mais ser alterada." };
     }
-    if ((cash.entry || cash.paidItemIds.size > 0) && fields.values.status === "CANCELED" && investment.status !== "CANCELED") {
-      return { ok: false, error: "Este contrato já movimentou o capital (entrada ou pagamentos registrados) e não pode ser cancelado. A regra para desfazer esses lançamentos ainda não foi definida." };
+    if ((cash.entry || cash.prior || cash.paidItemIds.size > 0) && fields.values.status === "CANCELED" && investment.status !== "CANCELED") {
+      return { ok: false, error: "Este contrato já está ligado ao capital (entrada, aporte anterior indicado ou pagamentos registrados) e não pode ser cancelado. A regra para desfazer esses lançamentos ainda não foi definida." };
     }
     await tx.update(investments).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investments.id, investment.id), eq(investments.tenantId, investment.tenantId)));
     const beforeValues: InvestmentValues = {

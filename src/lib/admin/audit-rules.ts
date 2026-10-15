@@ -34,6 +34,7 @@ export const AUDIT_ACTIONS = {
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
   INVESTMENT_CAPITAL_ENTRY_REGISTERED: "Entrada do investimento registrada no capital",
   INVESTMENT_PAYMENT_REGISTERED: "Pagamento a investidor registrado (baixa)",
+  INVESTMENT_PRIOR_CONTRIBUTION_DECLARED: "Aporte anterior indicado para contrato de investidor",
   WALLET_INITIAL_CAPITAL_CHANGED: "Capital inicial da carteira definido ou alterado",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;

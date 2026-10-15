@@ -5,13 +5,15 @@ import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { withTenantContext } from "@/lib/auth/guards";
-import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
+import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
 import { checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
 import {
-  INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, contractLabel, entryDateOf, maskReference, parsePaymentFields, paymentCategory,
+  INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, checkPriorContribution, contractLabel, entryDateOf, entryEvidence, maskReference,
+  parsePaymentFields, paymentCategory,
 } from "@/lib/investors/payables";
+import { loadEntryEvidence } from "@/lib/investors/payables-queries";
 import type { ActionResult } from "../actions";
 
 // Contas a Pagar. Tudo roda em withTenantContext: o tenant vem só da sessão e cada consulta filtra tenant_id além do RLS
@@ -21,10 +23,10 @@ import type { ActionResult } from "../actions";
 const id = (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "")}`;
 const field = (data: FormData, key: string, max: number) => String(data.get(key) ?? "").trim().slice(0, max);
 const REQUEST_ID = /^[A-Za-z0-9-]{16,64}$/;
-// Violação de regra do banco (gatilhos e índices únicos da migração 0022): nada fica gravado.
+// Violação de regra do banco (gatilhos e índices únicos das migrações 0022 e 0023): nada fica gravado.
 const dbRule = (error: unknown) => {
   const text = `${error instanceof Error ? error.message : ""} ${(error as { cause?: Error })?.cause?.message ?? ""}`;
-  return /investment_capital_entry_|investment_payment_|Baixa|Entrada do investimento|capital_movement_tenant_idempotency_unique/.test(text);
+  return /investment_capital_entry_|investment_payment_|investment_prior_contribution_|Baixa|Entrada do investimento|Aporte anterior|capital_movement_tenant_idempotency_unique/.test(text);
 };
 
 function refresh() {
@@ -66,8 +68,13 @@ export async function registerInvestmentEntryAction(data: FormData): Promise<Act
       }
       const [existing] = await tx.select({ id: investmentCapitalEntries.id }).from(investmentCapitalEntries)
         .where(and(eq(investmentCapitalEntries.tenantId, tenantId), eq(investmentCapitalEntries.investmentId, investment.id)));
+      const [declared] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
+        .where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.investmentId, investment.id)));
       const enteredOn = entryDateOf(investment);
-      const check = checkCapitalEntry({ enteredOn, today: todayIso(), cycleStartedOn: cycleStartedOn(wallet), investmentStatus: investment.status, hasWallet: Boolean(wallet), alreadyRegistered: Boolean(existing) });
+      const check = checkCapitalEntry({
+        enteredOn, today: todayIso(), cycleStartedOn: cycleStartedOn(wallet), investmentStatus: investment.status, hasWallet: Boolean(wallet), alreadyRegistered: Boolean(existing),
+        priorContributionDeclared: Boolean(declared),
+      });
       if (!check.ok) return check;
       if (shownAmount !== investment.amountCents || shownDate !== enteredOn) {
         return { ok: false, error: "Os dados do contrato mudaram desde que a confirmação foi aberta. Confira o valor e a data e confirme de novo. Nada foi registrado." };
@@ -139,6 +146,11 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
       const capital = await tenantCapital(tx, tenantId);
       const outflow = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents: payment.amountCents, occurredAt: payment.paidOn, availableCents: capital.summary.availableCents });
       if (!outflow.ok) return outflow;
+      // Regra da entrada (migração 0023): contrato novo só com a entrada registrada; contrato antigo com a entrada ou com
+      // o aporte anterior indicado. O banco confere de novo no gatilho da baixa.
+      const evidence = await loadEntryEvidence(tx, tenantId, investment.id);
+      const allowed = entryEvidence({ capitalEntryRule: investment.capitalEntryRule, hasEntry: evidence.entries.has(investment.id), hasPriorContribution: evidence.priors.has(investment.id) });
+      if (!allowed.ok) return { ok: false, error: `${allowed.error} Nada foi registrado.` };
       const label = contractLabel(investment);
       const category = paymentCategory(payment.kind);
       const movementId = id("cap");
@@ -170,6 +182,68 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
     return result;
   } catch (error) {
     if (dbRule(error)) return { ok: false, error: "O pagamento não confere com o saldo da obrigação ou já foi registrado. Nada foi lançado. Recarregue a página e confira." };
+    throw error;
+  }
+}
+
+// Contrato antigo (cadastrado antes da regra da entrada, migração 0023): o usuário indica o aporte comum pelo qual o
+// dinheiro do contrato já entrou no capital. Não lança nada no capital (o dinheiro já está lá); só liga o contrato ao
+// aporte, com confirmação explícita e auditoria. No máximo uma vez por contrato e nunca junto com a entrada.
+export async function declarePriorContributionAction(data: FormData): Promise<ActionResult> {
+  const investmentId = field(data, "investmentId", 80);
+  const movementId = field(data, "movementId", 80);
+  const requestId = field(data, "requestId", 80);
+  if (!investmentId) return { ok: false, error: "Investimento inválido." };
+  if (!movementId) return { ok: false, error: "Escolha o aporte pelo qual o dinheiro deste contrato entrou no capital." };
+  if (field(data, "confirm", 4) !== "1") return { ok: false, error: "Confirme que o dinheiro deste contrato entrou no capital por esse aporte." };
+  if (!REQUEST_ID.test(requestId)) return { ok: false, error: "Formulário expirado. Recarregue a página e tente de novo." };
+  try {
+    const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+      // Mesma ordem de travas da entrada (carteira, depois contrato): indicação e entrada simultâneas esperam uma pela outra.
+      const [wallet] = await tx.select().from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+      if (!wallet) return { ok: false, error: "Defina o capital inicial da carteira (tela Capital) antes." };
+      const [row] = await tx.select({ investment: investments, investorName: investors.name }).from(investments)
+        .innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
+        .where(and(eq(investments.id, investmentId), eq(investments.tenantId, tenantId))).for("update", { of: investments });
+      if (!row) return { ok: false, error: "Investimento não encontrado nesta carteira." };
+      const { investment } = row;
+      const [repeated] = await tx.select().from(investmentPriorContributions).where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.idempotencyKey, requestId)));
+      if (repeated) {
+        return repeated.investmentId === investment.id && repeated.capitalMovementId === movementId
+          ? { ok: true, message: "O aporte anterior deste contrato já estava indicado. Nada foi alterado." }
+          : { ok: false, error: "Este formulário já foi usado. Recarregue a página." };
+      }
+      const [entry] = await tx.select({ id: investmentCapitalEntries.id }).from(investmentCapitalEntries)
+        .where(and(eq(investmentCapitalEntries.tenantId, tenantId), eq(investmentCapitalEntries.investmentId, investment.id)));
+      const [declared] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
+        .where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.investmentId, investment.id)));
+      const [movement] = await tx.select().from(capitalMovements)
+        .where(and(eq(capitalMovements.id, movementId), eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, wallet.cycleNumber))).for("update");
+      const [reversal] = movement ? await tx.select({ id: capitalMovements.id }).from(capitalMovements)
+        .where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.reversedMovementId, movement.id))) : [];
+      const check = checkPriorContribution({
+        investment: { capitalEntryRule: investment.capitalEntryRule, hasEntry: Boolean(entry), status: investment.status }, alreadyDeclared: Boolean(declared),
+        movement: movement ? { id: movement.id, kind: movement.kind, source: movement.source, occurredAt: movement.occurredAt, amountCents: movement.amountCents, reversed: Boolean(reversal) } : null,
+        cycleStartedOn: cycleStartedOn(wallet), today: todayIso(),
+      });
+      if (!check.ok) return check;
+      const priorId = id("ipc");
+      await tx.insert(investmentPriorContributions).values({ id: priorId, tenantId, investmentId: investment.id, capitalMovementId: movement!.id, idempotencyKey: requestId, createdByUserId: session.user.id });
+      const label = contractLabel(investment);
+      await recordAdminAudit(tx, session, {
+        action: "INVESTMENT_PRIOR_CONTRIBUTION_DECLARED", entity: "investment", entityId: investment.id, tenantId, tenantName: await tenantName(tx, tenantId),
+        description: `Aporte anterior indicado para o investimento de ${row.investorName}`,
+        after: {
+          investmentId: investment.id, investorId: investment.investorId, contract: label, investmentAmountCents: investment.amountCents, capitalMovementId: movement!.id,
+          contributionAmountCents: movement!.amountCents, contributionDate: movement!.occurredAt, priorContributionId: priorId, cycleNumber: wallet.cycleNumber,
+        },
+      });
+      return { ok: true, message: `Aporte de ${formatMoney(movement!.amountCents)} em ${formatDate(movement!.occurredAt)} indicado como a entrada do dinheiro deste contrato. As baixas já podem ser registradas.` };
+    });
+    if (result.ok) refresh();
+    return result;
+  } catch (error) {
+    if (dbRule(error)) return { ok: false, error: "O aporte não pôde ser indicado (já indicado, entrada já registrada ou aporte inválido). Nada foi registrado. Recarregue a página." };
     throw error;
   }
 }

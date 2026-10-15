@@ -155,6 +155,13 @@
       "when": 1791934481763,
       "tag": "0022_contas_a_pagar",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791936745846,
+      "tag": "0023_regra_entrada",
+      "breakpoints": true
     }
   ]
 }
