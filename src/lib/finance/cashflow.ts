@@ -100,6 +100,26 @@ export function checkOutflow({ ledger, amountCents, occurredAt, availableCents }
   return { ok: true };
 }
 
+// Empréstimo novo, correção de operação e correção de pagamento mexem num lançamento do extrato (tiram um e/ou põem
+// outro numa data). Recalcula os saldos com a mudança e devolve o menor saldo a partir da primeira data afetada, ou
+// null se nenhum ficar negativo. ledger: extrato em ordem cronológica; o lançamento novo entra depois dos do mesmo dia.
+export function negativeAfterChange(ledger: CapitalLedgerEntry[], change: { removeKey?: string; add?: { date: string; amountCents: number } }) {
+  const removed = change.removeKey ? ledger.find((entry) => entry.key === change.removeKey) : undefined;
+  const entries = ledger.filter((entry) => entry !== removed).map((entry) => ({ date: entry.date, amountCents: entry.amountCents, initial: entry.key === "initial" }));
+  if (change.add) {
+    const position = entries.findIndex((entry) => !entry.initial && entry.date > change.add!.date);
+    entries.splice(position === -1 ? entries.length : position, 0, { ...change.add, initial: false });
+  }
+  const from = [removed?.date, change.add?.date].filter((date): date is string => Boolean(date)).sort()[0] ?? "";
+  let running = 0;
+  let lowest: { date: string; balanceCents: number } | null = null;
+  for (const entry of entries) {
+    running += entry.amountCents;
+    if (!entry.initial && entry.date >= from && running < 0 && (!lowest || running < lowest.balanceCents)) lowest = { date: entry.date, balanceCents: running };
+  }
+  return lowest;
+}
+
 // O capital inicial abre o extrato: mudar o valor desloca todos os saldos pela diferença. Uma redução não pode deixar
 // nenhum ponto do extrato (nem o capital disponível de hoje) negativo; um aumento sempre passa.
 export function checkInitialCapitalChange({ ledger, previousCents, nextCents }: { ledger: CapitalLedgerEntry[]; previousCents: number; nextCents: number }):

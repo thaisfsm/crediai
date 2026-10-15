@@ -233,6 +233,14 @@ async function recordScheduleRevision(tx: TenantTransaction, userId: string, con
   return [investment.tenantId, "INVESTMENT_SCHEDULE_UPDATED", "investment", investment.id, { schedule: before }, { schedule: now }, `${description} (investimento de ${context.investorName})`] as const;
 }
 
+// A devolução do principal somada em todas as linhas não pode passar do valor investido no contrato (só o rendimento é
+// livre). Sem isso, um contrato de R$ 20.000 com duas linhas de R$ 20.000 de principal gerava R$ 40.000 a pagar.
+function principalOverflow(investment: typeof investments.$inferSelect, items: { principalCents: number }[]): { ok: false; error: string } | null {
+  const principalCents = items.reduce((total, item) => total + item.principalCents, 0);
+  if (principalCents <= investment.amountCents) return null;
+  return { ok: false, error: `A devolução do principal no cronograma somaria ${formatMoney(principalCents)}, mais que o valor investido de ${formatMoney(investment.amountCents)}. Confira os valores de principal.` };
+}
+
 const itemValues = (items: (typeof investmentScheduleItems.$inferSelect)[]) => items.map(({ dueDate, yieldCents, principalCents, description }) => ({ dueDate, yieldCents, principalCents, description }));
 
 // Monta o cronograma inteiro. Se já existe, só substitui com a confirmação "replace" (e a mesma montagem enviada duas
@@ -249,6 +257,8 @@ export async function buildInvestmentScheduleAction(data: FormData): Promise<Inv
     if ((await cashOf(tx, context.investment)).paidItemIds.size > 0) return { ok: false, error: "Este cronograma já tem pagamentos registrados em Contas a Pagar e não pode ser substituído. Inclua novas linhas ou edite as que ainda não foram pagas." };
     if (context.items.length > 0 && read("replace", 4) !== "1") return { ok: false, error: `Este investimento já tem um cronograma com ${context.items.length} ${context.items.length === 1 ? "pagamento" : "pagamentos"}. Confirme que deseja substituí-lo.` };
     const { investment } = context;
+    const overflow = principalOverflow(investment, fields.items);
+    if (overflow) return overflow;
     await tx.delete(investmentScheduleItems).where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId)));
     await tx.insert(investmentScheduleItems).values(fields.items.map((item, index) => ({
       id: id("ivs"), tenantId: investment.tenantId, investmentId: investment.id, number: index + 1, ...item, createdByUserId: scope.user.id,
@@ -272,6 +282,8 @@ export async function addInvestmentScheduleItemAction(data: FormData): Promise<I
     if ("ok" in context) return context;
     if (context.items.length >= MAX_SCHEDULE_ITEMS) return { ok: false, error: `O cronograma pode ter no máximo ${MAX_SCHEDULE_ITEMS} pagamentos.` };
     const { investment } = context;
+    const overflow = principalOverflow(investment, [...context.items, fields.values]);
+    if (overflow) return overflow;
     const [last] = await tx.select({ number: max(investmentScheduleItems.number) }).from(investmentScheduleItems)
       .where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId)));
     await tx.insert(investmentScheduleItems).values({ id: id("ivs"), tenantId: investment.tenantId, investmentId: investment.id, number: (last?.number ?? 0) + 1, ...fields.values, createdByUserId: scope.user.id });
@@ -295,6 +307,8 @@ export async function updateInvestmentScheduleItemAction(data: FormData): Promis
     const item = context.items.find((row) => row.id === itemId);
     if (!item) return { ok: false, error: "Pagamento não encontrado neste cronograma." };
     if ((await cashOf(tx, context.investment)).paidItemIds.has(item.id)) return PAID_ITEM_ERROR;
+    const overflow = principalOverflow(context.investment, context.items.map((row) => (row.id === item.id ? fields.values : row)));
+    if (overflow) return overflow;
     await tx.update(investmentScheduleItems).set({ ...fields.values, updatedAt: sql`now()` }).where(and(eq(investmentScheduleItems.id, item.id), eq(investmentScheduleItems.tenantId, item.tenantId)));
     await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, itemValues(context.items).map((row, index) => (context.items[index].id === item.id ? fields.values : row)), "Pagamento do cronograma alterado")));
     return { ok: true, message: "Pagamento do cronograma alterado.", id: context.investment.id };

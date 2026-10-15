@@ -46,6 +46,12 @@ export const auth = betterAuth({
     },
     session: {
       create: {
+        // Conta bloqueada não abre sessão nem atualiza o último acesso (antes o login passava e só as telas recusavam).
+        // A conta com senha provisória continua entrando: é assim que ela chega à troca de senha.
+        before: async (session) => {
+          const [user] = await db.select({ active: users.active }).from(users).where(eq(users.id, session.userId)).limit(1);
+          if (!user?.active) throw new APIError("FORBIDDEN", { message: "Esta conta está desativada. Fale com a administração do CrediAI." });
+        },
         // Último acesso do usuário, mostrado na administração da plataforma.
         after: async (session) => {
           await db.update(users).set({ lastLoginAt: sql`now()` }).where(eq(users.id, session.userId));

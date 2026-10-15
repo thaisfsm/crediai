@@ -138,14 +138,20 @@ export function isValidCnpj(value: string) {
   return checkDigit(digits, [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[12]) && checkDigit(digits, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]) === Number(digits[13]);
 }
 
+// Documento digitado só pode ter números e a pontuação das máscaras (ponto, traço, barra e espaços). Sem isso, "abc" ou
+// dígitos de outros alfabetos (５２９…) sumiam ao tirar o que não é número e o cadastro era gravado sem documento.
+const malformedDocument = (value: string) => !/^[\d\s./-]*$/.test(value) || (value.trim() !== "" && !onlyDigits(value));
+
 // Mensagem de CPF inválido, também usada na tela enquanto o usuário digita (null = válido ou vazio).
 export function cpfProblem(value: string) {
+  if (malformedDocument(value)) return "O CPF deve ter só números, por exemplo 411.797.058-58.";
   const digits = onlyDigits(value);
   if (!digits) return null;
   if (digits.length !== 11) return "O CPF precisa ter 11 dígitos, por exemplo 411.797.058-58.";
   return isValidCpf(digits) ? null : "CPF inválido: confira os números digitados.";
 }
 export function cnpjProblem(value: string) {
+  if (malformedDocument(value)) return "O CNPJ deve ter só números, por exemplo 11.222.333/0001-81.";
   const digits = onlyDigits(value);
   if (!digits) return null;
   if (digits.length !== 14) return "O CNPJ precisa ter 14 dígitos, por exemplo 11.222.333/0001-81.";
@@ -193,6 +199,7 @@ export function formatCpfCnpj(stored: string | null) {
 }
 
 export function normalizeCpfCnpj(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (malformedDocument(value)) return { ok: false, error: "Informe o CPF ou o CNPJ só com números, por exemplo 411.797.058-58." };
   const digits = onlyDigits(value);
   if (!digits) return { ok: true, value: null };
   if (digits.length !== 11 && digits.length !== 14) {
@@ -206,6 +213,7 @@ export function normalizeCpfCnpj(value: string): { ok: true; value: string | nul
 
 // Mensagem de CPF ou CNPJ inválido para a tela (null = válido, vazio ou ainda incompleto).
 export function cpfCnpjProblem(value: string) {
+  if (malformedDocument(value)) return "Informe o CPF ou o CNPJ só com números, por exemplo 411.797.058-58.";
   const digits = onlyDigits(value);
   if (!digits) return null;
   if (digits.length === 11) return cpfProblem(digits);

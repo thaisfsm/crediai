@@ -213,7 +213,7 @@ test("CP6. envio duplicado e concorrência: uma baixa e uma saída por envio; nu
 });
 
 test("CP7. capital insuficiente (hoje e retroativo) bloqueia a baixa sem gravar nada", async () => {
-  const investment = await investorAction(robério, "createInvestmentAction", { investorId: ids.investor, amount: "50.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: daysAgo(38), contractNumber: "CP-B" });
+  const investment = await investorAction(robério, "createInvestmentAction", { investorId: ids.investor, amount: "60.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: daysAgo(38), contractNumber: "CP-B" });
   ids.investmentB = investment.id;
   await investorAction(robério, "addInvestmentScheduleItemAction", { investmentId: ids.investmentB, dueDate: TODAY, yieldAmount: "", principalAmount: "60.000,00", description: "" });
   ids.itemB = await one(`select id from investment_schedule_item where investment_id = '${ids.investmentB}'`);
@@ -346,7 +346,7 @@ test("CP13. telas no desktop e no celular: contas a pagar, detalhe, formulário 
     await browserPage.goto(`${BASE}/investidores/investimentos/${ids.investmentB}`);
     const cash = browserPage.getByRole("region", { name: "Capital e pagamentos do investimento" });
     await cash.getByRole("button", { name: "Registrar a entrada deste investimento no capital" }).click();
-    await cash.getByText(`Confirmo que ${money(5_000_000)} entraram na carteira`).waitFor();
+    await cash.getByText(`Confirmo que ${money(6_000_000)} entraram na carteira`).waitFor();
     if (SHOTS) await cash.screenshot({ path: `${SHOTS}/contrato-entrada-capital-${label}.png` });
     assert.equal(await browserPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal no contrato (${label})`);
     await context.close();
