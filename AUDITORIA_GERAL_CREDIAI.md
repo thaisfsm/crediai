@@ -699,3 +699,26 @@ contra o servidor local acima.
 
 **Confirmação.** Nenhum merge, deploy, migration, variável de ambiente ou dado real foi alterado. Não houve force push.
 Todos os PRs estão em draft.
+
+## 14. Publicação em produção (15/10/2026)
+
+Executado por Claude com a autorização de 14/10 20:09 e as instruções de 15/10. Evidências em `/mnt/project-files/publicacao-2026-10-15/` (`EVIDENCIAS-MIGRACOES.md`, `teste-pg18/`, `producao/`).
+
+| Etapa | Estado | Evidência |
+|---|---|---|
+| Estado inicial | CONCLUÍDA | Produção `5c55e47` (`dpl_HDVbhoZMqWSmGXpxHzSaFuW9ugZE`), 17 migrações, PostgreSQL 18.6, esquema igual ao da 0017 |
+| Causa da falha anterior | CONCLUÍDA (inferida) | Inserção sem `id` com a sequência atrasada (16) devolvia 17. Reproduzida no PostgreSQL 18.6 (cenário B) |
+| Script v2 | CONCLUÍDA | Gerado dos arquivos oficiais (`gerar-script-v2.py`), ids 18–23 explícitos, `setval` 23, pré-condições e conferência do esquema dentro da transação |
+| Teste do script em PostgreSQL 18.6 descartável | CONCLUÍDA | 39/39 verificações: sequência 17 e 16, segunda execução recusada, falha forçada no meio sem resto, cópia alterada desfeita pela conferência do esquema |
+| Atomicidade no Neon | CONCLUÍDA | `run_sql_transaction`: mesmo `pg_backend_pid`, mesmo início de transação e `set_config` local visível entre comandos |
+| Backup | CONCLUÍDA com limitação | Plano gratuito: 1 snapshot e 10 branches, ambos ocupados (`HTTP 422 snapshots limit exceeded`). Nenhum backup apagado. O snapshot `snap-restless-sound-b46p17x4` (14/10 20:12:46Z) tem os mesmos dados de antes da migração (md5 por tabela idêntico). Restaurá-lo, ou usar a restauração por instante (janela de 6 h), exige uma vaga de branch livre |
+| Migrações 0018–0023 | CONCLUÍDA | Uma transação de 149 comandos. Registros 18–23 com hash e data do journal, sequência 23, esquema = referência do Drizzle (col 388, con 145, fn 12, idx 93, pol 102, rls 29, trg 18) |
+| Preservação dos dados | CONCLUÍDA | 24 tabelas com md5 idêntico antes e depois. Tabelas novas vazias. Contrato existente com `capital_entry_rule` NULL (não classificado) |
+| Testes da versão integrada (árvore `788e62f8`) | CONCLUÍDA | build, typecheck, lint e `drizzle-kit check` sem erro; unitários 165/165; E2E 145/145 com BYPASSRLS e 145/145 sem |
+| Integração | CONCLUÍDA | `main` `5c55e47` → `9e4beca` (avanço rápido, sem force push). Merges `--no-ff` de #12, #13, #14, #15, #16, #17, #18, #19, #20 e #23 (que traz o #21). GitHub fechou #12–#21 e #23 como integrados às 13:07:53Z |
+| Deploy | CONCLUÍDA | `dpl_DEZZkwindmbwV7Br8bkNxX17Uhvc`, commit `9e4beca`, READY, alias `crediai-sigma.vercel.app` |
+| Produção sem login | CONCLUÍDA | `/` e as rotas protegidas redirecionam para `/login`; `/setup` 307; cadastro público recusado (`EMAIL_PASSWORD_SIGN_UP_DISABLED`); login inválido 401; cabeçalhos anti-clickjacking presentes; tela de login sem erros de console no desktop (1366) e no celular (390), sem rolagem lateral; nenhum erro nos logs do deploy |
+| Isolamento (banco) | CONCLUÍDA | 0 pagamentos, operações, renovações ou investimentos com tenant diferente do registro pai |
+| Produção com login (dashboard, busca, admin, isolamento na tela) | PENDENTE | Precisa da senha de cada conta. Não foi contornado. A mesma tela e o isolamento foram testados nos E2E (perfil igual ao da produção) |
+
+Uso real durante a publicação: às 13:05–13:06 UTC o Fernando cadastrou um aporte e uma operação (com o código antigo, já sobre o esquema novo). Os registros que existiam antes continuam idênticos.
