@@ -130,5 +130,17 @@ test("campo Banco com sugestões: lista de bancos por nome ou código, no client
   assert.ok(options.filter((value) => value.includes("341") || value.toLowerCase().includes("itaú")).length >= 1, "digitar o código ou o nome acha o banco");
   await bank.fill("Banco que não está na lista");
   assert.equal(await bank.inputValue(), "Banco que não está na lista", "continua livre para outro banco");
+  // Enter completa com o banco que combina (nome sem acento ou código) e não envia o formulário.
+  const clientsBefore = await one(`select count(*)::int from client`);
+  for (const [typed, expected] of [["itau", "341 - Itaú Unibanco"], ["237", "237 - Bradesco"], ["bradesco", "237 - Bradesco"], ["nubank", "260 - Nubank"]]) {
+    await bank.fill(typed);
+    await bank.press("Enter");
+    assert.equal(await bank.inputValue(), expected, `${typed} + Enter escolhe o banco`);
+  }
+  await bank.fill("Banco que não está na lista");
+  await bank.press("Enter");
+  assert.equal(await bank.inputValue(), "Banco que não está na lista", "sem correspondência o texto é mantido");
+  assert.equal(await one(`select count(*)::int from client`), clientsBefore, "Enter no campo Banco não envia o formulário");
+  assert.notEqual(await page.evaluate(() => document.activeElement?.getAttribute("name")), "bankName", "o foco vai para o próximo campo");
   await page.context().close();
 });
