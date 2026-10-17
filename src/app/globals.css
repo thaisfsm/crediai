@@ -1192,10 +1192,10 @@ button { color:inherit; }
 .payables-kpi-amber::before { background: linear-gradient(90deg, transparent, #ecc16b, transparent); }
 .payables-kpi-cyan::before { background: linear-gradient(90deg, transparent, #4fd8e8, transparent); }
 .payables-kpi-green::before { background: linear-gradient(90deg, transparent, #5fd9a8, transparent); }
-.payables-kpi-red::before { background: linear-gradient(90deg, transparent, #ff8589, transparent); }
-.payables-kpi-red:hover, .payables-kpi-red:focus-visible, .payables-kpi-red[aria-current="page"] { border-color: rgba(255,133,137,.45); box-shadow: 0 0 24px rgba(255,133,137,.1); }
-.payables-kpi-alert { border-color: rgba(255,133,137,.3); }
-.payables-kpi-alert strong { color: #ffc2c4; }
+.payables-kpi-red::before { background: linear-gradient(90deg, transparent, #f5222d, transparent); }
+.payables-kpi-red:hover, .payables-kpi-red:focus-visible, .payables-kpi-red[aria-current="page"] { border-color: rgba(245,34,45,.55); box-shadow: 0 0 24px rgba(245,34,45,.14); }
+.payables-kpi-alert { border-color: rgba(245,34,45,.4); }
+.payables-kpi-alert strong { color: #ff4d57; }
 .payables-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 0; padding: 9px 11px; border-radius: 8px; background: rgba(255, 120, 120, .08); font-size: 13px; }
 .payables-lists { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; margin-top: 14px; }
 .payables-lists h3 { margin: 0 0 6px; font-size: 14px; }
