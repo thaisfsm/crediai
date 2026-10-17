@@ -1180,11 +1180,22 @@ button { color:inherit; }
 
 /* Contas a pagar no Dashboard (mesmo resumo da tela Financeiro → Contas a pagar). */
 .payables-dashboard { margin-top: 14px; padding: 16px 18px 14px; }
-.payables-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-.payables-stat { display: flex; min-width: 0; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid rgba(124,172,195,.15); border-radius: 9px; }
-.payables-stat-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.payables-stat-copy strong { font-size: 17px; overflow-wrap: anywhere; }
-.payables-stat-copy small { opacity: .72; font-size: 11.5px; }
+/* Cards de Contas a pagar: mesmo padrão dos indicadores da administração (.central-kpi), clicáveis. */
+.payables-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin: 14px 0 4px; }
+.payables-kpi { position: relative; display: grid; align-content: start; gap: 6px; min-width: 0; padding: 16px 16px 15px; overflow: hidden; border: 1px solid rgba(124,184,213,.14); border-radius: 14px; background: rgba(13,26,40,.78); color: inherit; text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.payables-kpi::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, transparent, rgba(124,184,213,.35), transparent); }
+.payables-kpi span { color: #8da3b5; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+.payables-kpi strong { color: #eef7fb; font-size: 22px; font-weight: 700; letter-spacing: -.5px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.payables-kpi small { color: #7f97a8; font-size: 11px; line-height: 1.4; }
+.payables-kpi:hover, .payables-kpi:focus-visible { border-color: rgba(79,216,232,.4); transform: translateY(-1px); box-shadow: 0 0 24px rgba(79,216,232,.08); }
+.payables-kpi[aria-current="page"] { border-color: rgba(79,216,232,.45); box-shadow: 0 0 24px rgba(79,216,232,.1); }
+.payables-kpi-amber::before { background: linear-gradient(90deg, transparent, #ecc16b, transparent); }
+.payables-kpi-cyan::before { background: linear-gradient(90deg, transparent, #4fd8e8, transparent); }
+.payables-kpi-green::before { background: linear-gradient(90deg, transparent, #5fd9a8, transparent); }
+.payables-kpi-red { border-color: rgba(255,133,137,.3); }
+.payables-kpi-red::before { background: linear-gradient(90deg, transparent, #ff8589, transparent); }
+.payables-kpi-red strong { color: #ffc2c4; }
+.payables-kpi-red:hover, .payables-kpi-red:focus-visible, .payables-kpi-red[aria-current="page"] { border-color: rgba(255,133,137,.55); box-shadow: 0 0 24px rgba(255,133,137,.1); }
 .payables-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 0; padding: 9px 11px; border-radius: 8px; background: rgba(255, 120, 120, .08); font-size: 13px; }
 .payables-lists { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; margin-top: 14px; }
 .payables-lists h3 { margin: 0 0 6px; font-size: 14px; }
@@ -1199,19 +1210,16 @@ button { color:inherit; }
 .finance-subnav a { padding: 7px 13px; border: 1px solid rgba(124,172,195,.22); border-radius: 8px; font-size: 13px; text-decoration: none; color: inherit; }
 .finance-subnav a[aria-current="page"] { border-color: transparent; background: rgba(54,185,173,.18); font-weight: 600; }
 .nav-subitem { padding-left: 34px; font-size: 13px; }
-@media (max-width: 1100px) { .payables-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .payables-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .payables-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .payables-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .payables-kpi { padding: 13px 12px 12px; }
+  .payables-kpi strong { font-size: 17px; }
   .payables-lists { grid-template-columns: 1fr; }
   .payables-row { grid-template-columns: minmax(0, 1fr) auto; }
   .payables-dashboard { padding: 13px 12px 12px; }
-  .payables-stat .secondary-icon { display: none; }
-  .payables-stat-copy strong { font-size: 15px; white-space: nowrap; overflow-wrap: normal; }
   .payables-row { padding: 6px 0; row-gap: 4px; }
   .payables-row .charge-person { grid-row: 1 / span 2; }
   .payables-row .status-chip { justify-self: end; }
   .payables-dashboard .panel-header { flex-wrap: wrap; gap: 10px; }
 }
-.metric-grid.payables-day-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-@media (max-width: 1100px) { .metric-grid.payables-day-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .metric-grid.payables-day-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -117,19 +117,18 @@ async function expectedDay(tenantId) {
 async function assertDaySummary(cookie, tenantId) {
   const day = await expectedDay(tenantId);
   const capital = await available(tenantId);
-  const dashboard = await page(cookie, "/");
-  assert.equal(dashboard.status, 200);
-  assert.match(dashboard.html, new RegExp(`A pagar hoje ${brl(day.dueToday)} Previsto hoje ${brl(day.expectedToday)}`), "Dashboard: a pagar e previsto hoje");
-  assert.match(dashboard.html, new RegExp(`Pendentes hoje ${day.pendingToday} de`), "Dashboard: pendentes hoje");
-  assert.match(dashboard.html, new RegExp(`Vencidas ${brl(day.overdue)}`), "Dashboard: vencidas");
-  assert.match(dashboard.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), "Dashboard: pago hoje");
-  assert.match(dashboard.html, new RegExp(`Capital disponível ${brl(capital)} Só a baixa`), "Dashboard: capital");
-  const payables = await page(cookie, "/contas-a-pagar");
-  assert.match(payables.html, new RegExp(`Previsto hoje ${brl(day.expectedToday)}`), "tela: previsto hoje");
-  assert.match(payables.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), "tela: pago hoje");
-  assert.match(payables.html, new RegExp(`Restante hoje ${brl(day.dueToday)} ${day.pendingToday} pendente`), "tela: restante hoje");
-  assert.match(payables.html, new RegExp(`Total vencido ${brl(day.overdue)} ${day.overdueCount} em atraso`), "tela: vencido");
-  assert.match(payables.html, new RegExp(`Capital disponível ${brl(capital)}`), "tela: capital");
+  // Dashboard e tela usam os mesmos cards (clicáveis, cada um abre a aba correspondente).
+  for (const [where, path] of [["Dashboard", "/"], ["tela", "/contas-a-pagar"]]) {
+    const view = await page(cookie, path);
+    assert.equal(view.status, 200);
+    assert.match(view.html, new RegExp(`A pagar hoje ${brl(day.dueToday)} Previsto hoje ${brl(day.expectedToday)} · ${day.pendingToday} pendente`), `${where}: a pagar, previsto e pendentes hoje`);
+    assert.match(view.html, new RegExp(`Vencidas ${brl(day.overdue)} ${day.overdueCount ? `${day.overdueCount} obriga` : "Nada em atraso"}`), `${where}: vencidas`);
+    assert.match(view.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), `${where}: pago hoje`);
+    assert.match(view.html, new RegExp(`Capital disponível ${brl(capital)} Só a baixa`), `${where}: capital`);
+    const raw = await fetch(`${BASE}${path}`, { headers: { cookie } }).then((response) => response.text());
+    const cards = [...raw.matchAll(/<a[^>]*class="payables-kpi[^"]*"[^>]*>/g)].map(([tag]) => tag.match(/href="([^"]+)"/)?.[1].replace(/&amp;/g, "&"));
+    assert.deepEqual(cards, ["/contas-a-pagar", "/contas-a-pagar?aba=vencidos", "/contas-a-pagar?aba=proximos", "/contas-a-pagar?aba=pagos", "/?tela=capital"], `${where}: cards clicáveis na ordem das abas`);
+  }
   return day;
 }
 
@@ -138,7 +137,7 @@ test("CP1. tela: menu dentro do Financeiro, abas (Hoje por padrão), resumo do d
   assert.match(dashboard, /href="\/contas-a-pagar"/, "item Contas a pagar no menu");
   const { status, html } = await page(robério, "/contas-a-pagar");
   assert.equal(status, 200);
-  for (const label of ["Contas a pagar", "Movimentações", "Previsto hoje", "Pago hoje", "Restante hoje", "Total vencido", "Hoje 1", "Vencidos 1", "Próximos 2", "Pagos 0", "Todos 4", "Obrigações de hoje", "Descrição", "Rendimento · parcela 2", "Paula Pagamentos", "Contrato CP-A"]) assert.ok(html.includes(label), label);
+  for (const label of ["Contas a pagar", "Movimentações", "A pagar hoje", "Vencidas", "Próximos 7 dias", "Pago hoje", "Hoje 1", "Vencidos 1", "Próximos 2", "Pagos 0", "Todos 4", "Obrigações de hoje", "Descrição", "Rendimento · parcela 2", "Paula Pagamentos", "Contrato CP-A"]) assert.ok(html.includes(label), label);
   // A aba Hoje mostra só a obrigação de hoje (pendente); as vencidas ficam num aviso com link, não na lista.
   assert.ok(html.includes("Pendente") && !html.includes("Rendimento · parcela 1 "), "só a de hoje na aba Hoje");
   assert.match(html, /1 obrigação vencida continua em aberto/);

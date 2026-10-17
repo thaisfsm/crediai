@@ -14,6 +14,7 @@ import { FinanceSubnav } from "../financeiro/finance-subnav";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon, type IconName } from "../ui-icon";
 import { registerInvestmentPaymentAction } from "./actions";
+import { PayablesKpis } from "./payables-kpis";
 
 const statusTone: Record<ObligationStatus, string> = { PREVISTA: "status-active", PARCIAL: "status-due", PAGA: "status-paid", VENCIDA: "status-late" };
 export function ObligationStatusChip({ status }: { status: ObligationStatus }) {
@@ -23,16 +24,6 @@ export function ObligationStatusChip({ status }: { status: ObligationStatus }) {
 // Chave de cada envio, criada no primeiro clique e repetida em qualquer reenvio (clique duplo, nova tentativa depois de
 // uma queda de conexão): o servidor grava uma única baixa por chave.
 const newRequestId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`);
-
-function MetricCard({ label, value, caption, icon, tone = "teal" }: { label: string; value: string; caption: string; icon: IconName; tone?: "teal" | "blue" | "purple" }) {
-  return (
-    <article className="metric-card">
-      <div className="metric-top"><span>{label}</span><span className={`metric-icon metric-icon-${tone}`}><Icon name={icon} size={17} /></span></div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-foot"><span className="metric-caption">{caption}</span></div>
-    </article>
-  );
-}
 
 // Formulário da baixa de UMA obrigação: tipo (fixo, o da obrigação), valor (até o saldo), data efetiva, forma de
 // pagamento, referência e observações. O servidor confere tudo de novo com a obrigação travada.
@@ -204,13 +195,7 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
 
       {!data.hasWallet && <EmptyPanel icon="wallet" text="Defina o capital inicial da carteira na tela Capital para registrar pagamentos." action={<Link prefetch={false} className="primary-button" href="/?tela=capital">Ir para Capital</Link>} />}
 
-      <section className="metric-grid payables-day-grid" aria-label="Resumo do dia">
-        <MetricCard icon="calendar" label="Previsto hoje" value={formatMoney(overview.expectedTodayCents)} caption={`${overview.dueTodayCount} ${overview.dueTodayCount === 1 ? "obrigação vence" : "obrigações vencem"} hoje`} />
-        <MetricCard icon="check" tone="blue" label="Pago hoje" value={formatMoney(overview.paidTodayCents)} caption={`${overview.paidTodayCount} ${overview.paidTodayCount === 1 ? "baixa" : "baixas"} com data de hoje`} />
-        <MetricCard icon="clock" label="Restante hoje" value={formatMoney(overview.dueTodayCents)} caption={`${overview.pendingTodayCount} ${overview.pendingTodayCount === 1 ? "pendente" : "pendentes"} hoje`} />
-        <MetricCard icon="alert" tone="purple" label="Total vencido" value={formatMoney(overview.overdueCents)} caption={`${overview.overdueCount} em atraso`} />
-        <MetricCard icon="dollar" label="Capital disponível" value={formatMoney(data.availableCents)} caption={`Em aberto: ${formatMoney(totals.openCents)}`} />
-      </section>
+      <section aria-label="Resumo do dia"><PayablesKpis overview={overview} availableCents={data.availableCents} tabHref={query} currentTab={tab} /></section>
 
       <nav className="payables-tabs" aria-label="Filtro das contas a pagar">
         {(Object.keys(PAYABLE_TABS) as PayableTab[]).map((key) => (
