@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
 import type { ClientSearchResult } from "@/lib/finance/client-search";
@@ -284,7 +285,7 @@ export function BankFieldset({ initial, legend = "Dados bancários e Pix" }: { i
       <div className="form-grid">
         <label className="field field-wide"><span>Titular da conta</span><input name="bankHolderName" maxLength={160} defaultValue={initial?.bankHolderName ?? ""} placeholder="Nome como está no banco" /></label>
         <label className="field"><span>CPF/CNPJ do titular</span><MaskedInput name="bankHolderDocument" mask={holderMask} initial={initial?.bankHolderDocument ? holderMask(initial.bankHolderDocument) : ""} validate={(value) => (onlyDigits(value).length > 11 ? cnpjProblem(value) : cpfProblem(value))} inputMode="numeric" placeholder="CPF ou CNPJ" maxLength={20} /></label>
-        <label className="field"><span>Banco</span><input name="bankName" maxLength={120} defaultValue={initial?.bankName ?? ""} placeholder="Nome ou código, ex.: 341 Itaú" /></label>
+        <label className="field"><span>Banco</span><BankNameInput name="bankName" maxLength={120} defaultValue={initial?.bankName ?? ""} placeholder="Nome ou código, ex.: 341 Itaú" /></label>
         <label className="field"><span>Agência</span><input name="bankBranch" maxLength={20} defaultValue={initial?.bankBranch ?? ""} inputMode="numeric" placeholder="1234" /></label>
         <label className="field"><span>Conta</span><input name="bankAccount" maxLength={30} defaultValue={initial?.bankAccount ?? ""} inputMode="numeric" placeholder="12345-6" /></label>
         <label className="field"><span>Tipo de conta</span><select name="bankAccountType" defaultValue={initial?.bankAccountType ?? ""}><option value="">Não informado</option>{Object.entries(BANK_ACCOUNT_TYPES).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>

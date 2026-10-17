@@ -7,6 +7,7 @@ import type { BankAccountValues } from "@/lib/investors/bank-accounts";
 import type { InvestorDetail } from "@/lib/investors/queries";
 import { INVESTOR_DOCUMENT_KINDS, type InvestorDocumentKind } from "@/lib/investors/rules";
 import { EmptyPanel, Feedback, MaskedInput, formatBytes, useFormAction } from "../portfolio-pages";
+import { BankNameInput } from "../bank-name-input";
 import { Icon } from "../ui-icon";
 import { archiveInvestorBankAccountAction, removeInvestorDocumentAction, saveInvestorBankAccountAction, uploadInvestorDocumentAction } from "./actions";
 import { loadInvestorBankAccountForEditAction } from "./read-actions";
@@ -32,7 +33,7 @@ function BankAccountForm({ investorId, accountId, initial, locked, onDone, onCan
         {accountId && <input type="hidden" name="accountId" value={accountId} />}
         <p className="capital-note field-wide">Informe a conta bancária (banco, agência e conta), a chave Pix ou os dois. Para usar só Pix, deixe os campos do banco em branco.{locked ? " Esta conta está ligada a um contrato: banco, agência, conta e chave Pix não mudam mais (cadastre outra conta se precisar)." : ""}</p>
         <label className="field"><span>Código do banco</span><input name="bankCode" inputMode="numeric" maxLength={3} placeholder="341" defaultValue={initial?.bankCode ?? ""} readOnly={locked} /></label>
-        <label className="field"><span>Nome do banco</span><input name="bankName" maxLength={120} placeholder="Itaú" defaultValue={initial?.bankName ?? ""} readOnly={locked} /></label>
+        <label className="field"><span>Nome do banco</span><BankNameInput name="bankName" maxLength={120} placeholder="Nome ou código, ex.: 341 Itaú" defaultValue={initial?.bankName ?? ""} readOnly={locked} /></label>
         <label className="field"><span>Agência (sem dígito)</span><input name="branch" inputMode="numeric" maxLength={5} placeholder="1234" defaultValue={initial?.branch ?? ""} readOnly={locked} /></label>
         <label className="field"><span>Dígito da agência</span><input name="branchDigit" maxLength={1} placeholder="Opcional" defaultValue={initial?.branchDigit ?? ""} readOnly={locked} /></label>
         <label className="field"><span>Conta (sem dígito)</span><input name="account" inputMode="numeric" maxLength={20} placeholder="12345" defaultValue={initial?.account ?? ""} readOnly={locked} /></label>
