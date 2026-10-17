@@ -4,12 +4,12 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, investmentPriorContributions, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
-import { formatCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { loadAllCyclesOperations } from "@/lib/finance/queries";
 import type { OperationView } from "@/lib/finance/portfolio";
@@ -202,6 +202,28 @@ export async function searchClientsAction(query: string): Promise<{ ok: true; re
       .from(clients).where(and(eq(clients.tenantId, tenantId), match))
       .orderBy(sql`${clients.archivedAt} is not null`, asc(clients.name), asc(clients.id)).limit(CLIENT_SEARCH_LIMIT);
     return { ok: true as const, results: rows.map(({ archivedAt, ...row }) => ({ ...row, archived: archivedAt !== null })) };
+  });
+}
+
+// Preenchimento pelo CPF: procura o CPF digitado nos cadastros da PRÓPRIA carteira (clientes e investidores) e devolve os
+// dados de contato e endereço para o formulário preencher só os campos vazios. Não consulta serviço externo e não grava nada.
+export type RegisteredPerson = { source: "client" | "investor"; id: string; name: string; values: Record<string, string> };
+export async function lookupRegisteredPersonAction(document: string): Promise<{ ok: true; people: RegisteredPerson[] } | { ok: false }> {
+  const digits = onlyDigits(String(document ?? ""));
+  if (digits.length !== 11 || !isValidCpf(digits)) return { ok: true, people: [] };
+  return withTenantContext(async (tx, { tenantId }) => {
+    const clean = (entries: Record<string, string | null | undefined>) => Object.fromEntries(Object.entries(entries).filter(([, value]) => value)) as Record<string, string>;
+    const clientRows = await tx.select().from(clients).where(and(eq(clients.tenantId, tenantId), eq(clients.document, digits), isNull(clients.archivedAt))).limit(1);
+    const investorRows = await tx.select().from(investors).where(and(eq(investors.tenantId, tenantId), eq(investors.document, digits))).limit(1);
+    const people: RegisteredPerson[] = [
+      ...clientRows.map((row) => ({ source: "client" as const, id: row.id, name: row.name, values: clean({
+        name: row.name, phone: row.phone, whatsapp: row.whatsapp, email: row.email, instagram: row.instagram, facebook: row.facebook,
+        Cep: row.residentialCep, Street: row.residentialStreet, Number: row.residentialNumber, Complement: row.residentialComplement, District: row.residentialDistrict, City: row.residentialCity, State: row.residentialState }) })),
+      ...investorRows.map((row) => ({ source: "investor" as const, id: row.id, name: row.name, values: clean({
+        name: row.name, phone: row.phone, whatsapp: row.whatsapp, email: row.email, instagram: row.instagram, facebook: row.facebook,
+        Cep: row.addressCep, Street: row.addressStreet, Number: row.addressNumber, Complement: row.addressComplement, District: row.addressDistrict, City: row.addressCity, State: row.addressState }) })),
+    ];
+    return { ok: true as const, people };
   });
 }
 

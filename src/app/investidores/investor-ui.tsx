@@ -13,7 +13,7 @@ import {
 } from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
 import { DateField } from "../date-field";
-import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction } from "../portfolio-pages";
+import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction, usePersonPrefill } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
 import { declarePriorContributionAction, registerInvestmentEntryAction } from "../contas-a-pagar/actions";
 import { ObligationsTable } from "../contas-a-pagar/payables-ui";
@@ -69,11 +69,13 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
   const [personType, setPersonType] = useState<PersonType | "">(editing?.personTypeStored ?? "");
   const { pending, feedback, onSubmit } = useFormAction(editing ? updateInvestorAction : createInvestorAction, () => { setResetKey((key) => key + 1); setPersonType(editing?.personTypeStored ?? ""); onDone(); });
   const pj = personType === "PJ";
+  const prefill = usePersonPrefill("investor");
   return (
     <section className="panel form-panel" aria-label={editing ? "Editar investidor" : "Novo investidor"}>
       <div className="panel-header"><div><h2>{editing ? `Editar ${editing.name}` : "Novo investidor"}</h2><p>Obrigatórios: tipo de pessoa, nome (ou razão social) e CPF (ou CNPJ). Instagram e Facebook aceitam @usuário ou o endereço do perfil.</p></div></div>
-      <form className="form-grid" onSubmit={onSubmit} key={resetKey}>
+      <form className="form-grid" onSubmit={onSubmit} onInput={editing ? undefined : prefill.onInput} key={resetKey}>
         {editing && <input type="hidden" name="investorId" value={editing.id} />}
+        {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
         {!editing && tenants.length > 0 && (
           <label className="field field-wide"><span>Carteira</span><select name="tenantId" defaultValue={defaultTenantId ?? ""} required>
             <option value="" disabled>Escolha a carteira</option>{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
