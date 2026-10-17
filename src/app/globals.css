@@ -1264,3 +1264,11 @@ button { color:inherit; }
 /* Renegociação: confirmação antes de gravar */
 .field-check { display:flex; align-items:flex-start; gap:9px; margin:14px 0 8px; color:#cfe3ea; font-size:12px; line-height:1.45; cursor:pointer; }
 .field-check input { margin-top:3px; accent-color:#41bee2; }
+
+/* Operações: ações em duas linhas (Registrar pagamento em cima; Corrigir e Excluir embaixo), sem passar por cima do vencimento. */
+@media (min-width: 741px) {
+  .data-table.fit-table td.actions-cell { width: 1%; white-space: normal; }
+  .data-table.fit-table .row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 148px; max-width: 148px; margin-left: auto; white-space: normal; }
+  .data-table.fit-table .row-actions > :first-child { grid-column: 1 / -1; }
+  .data-table.fit-table .row-actions .outline-button { width: 100%; min-height: 30px; padding: 5px 6px; font-size: 11px; white-space: nowrap; justify-content: center; }
+}
