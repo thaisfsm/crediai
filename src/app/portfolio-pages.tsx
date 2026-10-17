@@ -678,8 +678,11 @@ function ClientProfitPanel({ client, portfolio }: { client: ClientRow; portfolio
       <div className="panel-header"><div><h2>Lucro com este cliente</h2><p>Juros efetivamente recebidos em todos os contratos e ciclos da carteira. Serve de apoio para decidir uma renovação.</p></div></div>
       {!loaded ? <EmptyPanel icon="chart" text="Carregando o histórico de lucro…" /> : !history ? <EmptyPanel icon="chart" text={"error" in loaded ? loaded.error : ""} /> : history.operationCount === 0 ? <EmptyPanel icon="chart" text="Este cliente ainda não tem contratos." /> : (
         <>
-          <dl className="payment-summary client-highlights profit-cards">
-            <div className="payment-balance"><dt>Lucro total recebido</dt><dd>{formatMoney(history.interestReceivedCents)}</dd><small>Só juros já pagos, todos os ciclos</small></div>
+          <div className="profit-hero" aria-label={`Lucro com ${client.name}`}>
+            <div><span>Lucro com {client.name}</span><strong>{formatMoney(history.interestReceivedCents)}</strong></div>
+            <small>Só juros já recebidos, somando todos os contratos e ciclos.{history.paidCount > 0 ? ` Contratos quitados deram ${formatMoney(history.paidContractsProfitCents)}.` : ""}</small>
+          </div>
+          <dl className="payment-summary client-highlights">
             <div><dt>Contratos quitados</dt><dd>{history.paidCount}</dd><small>{history.paidCount > 0 ? `Lucro deles: ${formatMoney(history.paidContractsProfitCents)}` : "Nenhum ainda"}</small></div>
             <div><dt>Contratos em aberto</dt><dd>{history.openCount}</dd></div>
             <div><dt>Total emprestado</dt><dd>{formatMoney(history.principalLentCents)}</dd></div>
