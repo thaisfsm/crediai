@@ -870,6 +870,9 @@ button { color:inherit; }
 .modality-switch button { min-height:32px; padding:0 14px; border:0; border-radius:7px; color:#a9bcc9; background:transparent; font:inherit; font-size:12px; font-weight:600; cursor:pointer; }
 .modality-switch button.is-active { color:#06202a; background:#43d9d1; }
 .installment-table { margin-top:14px; }
+.profit-cards div { transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.profit-cards div:hover { transform: translateY(-2px); border-color: rgba(79,216,232,.4); box-shadow: 0 0 24px rgba(79,216,232,.08); }
+@media (prefers-reduced-motion: reduce) { .profit-cards div { transition: none; } .profit-cards div:hover { transform: none; } }
 .client-highlights small { display:block; margin-top:2px; color:#7f95a4; font-size:9px; }
 .status-chip.status-renewal { color:#efbd64; background:rgba(239,189,100,.1); }
 
