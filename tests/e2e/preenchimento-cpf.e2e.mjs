@@ -93,7 +93,7 @@ test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avi
   await page.route("https://brasilapi.com.br/api/cnpj/v1/*", (route) => {
     calls += 1;
     return route.request().url().endsWith("/11222333000181")
-      ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ razao_social: "EMPRESA EXEMPLO LTDA", nome_fantasia: "Exemplo" }) })
+      ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ razao_social: "EMPRESA EXEMPLO LTDA", nome_fantasia: "Exemplo", cep: "01310100", descricao_tipo_de_logradouro: "AVENIDA", logradouro: "PAULISTA", numero: "1578", complemento: "ANDAR 2", bairro: "BELA VISTA", municipio: "SAO PAULO", uf: "SP" }) })
       : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
   });
   const cnpj = page.locator('input[name="businessCnpj"]');
@@ -102,8 +102,15 @@ test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avi
   await sleep(800);
   assert.equal(calls, 0, "CNPJ inválido não consulta");
   await cnpj.fill("11.222.333/0001-81");
-  await page.getByText("Nome da empresa preenchido pela base pública (EMPRESA EXEMPLO LTDA)").waitFor();
+  await page.getByText("Nome da empresa e endereço comercial preenchidos pela base pública (EMPRESA EXEMPLO LTDA)").waitFor();
   assert.equal(await company.inputValue(), "EMPRESA EXEMPLO LTDA");
+  assert.equal(await page.locator('input[name="businessNumber"]').inputValue(), "1578");
+  assert.equal(await page.locator('input[name="businessComplement"]').inputValue(), "ANDAR 2");
+  assert.equal(await page.locator('input[name="businessCity"]').inputValue(), "SAO PAULO");
+  assert.equal(await page.locator('select[name="businessState"]').inputValue(), "SP");
+  assert.match(await page.locator('input[name="businessStreet"]').inputValue(), /PAULISTA/i);
+  assert.equal(await page.locator('input[name="businessCep"]').inputValue(), "01310-100");
+  assert.equal(await page.locator('input[name="residentialStreet"]').inputValue(), "", "o endereço residencial não é tocado");
   await company.fill("Nome digitado");
   await cnpj.fill("");
   await cnpj.fill("11.222.333/0001-81");
