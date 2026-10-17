@@ -560,6 +560,28 @@ function ProfitabilitySummary({ profile, client = false, children }: { profile: 
   );
 }
 
+// Destaque no topo do detalhe da operação: quanto já se lucrou (juros recebidos) com a pessoa, em todos os contratos e
+// ciclos, e quanto deste contrato. Mesma conta da ficha do cliente (clientProfitHistory).
+function OperationProfitHero({ operation }: { operation: OperationView }) {
+  const [operations, setOperations] = useState<OperationView[] | null>(null);
+  const version = `${operation.id}:${operation.payments.length}:${operation.paidCents}`;
+  useEffect(() => {
+    let active = true;
+    loadAllCyclesReportAction().then((result) => { if (active && result.ok) setOperations(result.operations); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [version]);
+  const history = operations ? clientProfitHistory(operations, operation.clientId) : null;
+  const total = history ? history.interestReceivedCents : operation.interestPaidCents;
+  return (
+    <div className="profit-hero" aria-label={`Lucro com ${operation.clientName}`}>
+      <div><span>Lucro com {operation.clientName}</span><strong>{formatMoney(total)}</strong></div>
+      <small>{history
+        ? `Juros já recebidos em ${history.operationCount === 1 ? "1 contrato" : `${history.operationCount} contratos`}. Neste contrato: ${formatMoney(operation.interestPaidCents)}.${history.paidCount > 0 ? ` Contratos quitados deram ${formatMoney(history.paidContractsProfitCents)}.` : ""}`
+        : `Neste contrato: ${formatMoney(operation.interestPaidCents)} de juros recebidos. Carregando o total da pessoa…`}</small>
+    </div>
+  );
+}
+
 function OperationDetailsButton({ operation, today, onChanged }: { operation: OperationView; today: string; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   return (
@@ -1096,6 +1118,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installments.length} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
+        <OperationProfitHero operation={operation} />
         <dl className="payment-summary">
           <div><dt>Principal</dt><dd>{formatMoney(operation.principalCents)}</dd></div>
           <div><dt>{operation.renewalCount > 0 ? "Juros contratados (todos os períodos)" : "Juros"}</dt><dd>{formatMoney(operation.interestCents)}</dd></div>
