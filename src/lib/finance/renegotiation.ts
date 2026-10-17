@@ -5,7 +5,7 @@
 //  • D-H2: o principal da nova operação é o principal em aberto das antigas (não sai dinheiro novo); os juros em aberto
 //    entram como valor fixo, sem contar como recebidos.
 //  • Juros simples sobre o PRINCIPAL: os juros novos nunca incidem sobre juros em aberto (sem juros sobre juros).
-import { dueDates, simpleInterest } from "./rules";
+import { BIWEEKLY_INSTALLMENT_RULE, BIWEEKLY_RULE, INSTALLMENT_RULE, calculateOperation, dueDates, installmentDueDate, simpleInterest } from "./rules";
 import type { OperationView } from "./portfolio";
 
 export type RenegotiationModality = "SINGLE" | "INSTALLMENT";
@@ -64,5 +64,39 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
     // Na renovação do pagamento único, cada novo período cobraria de novo a taxa sobre o principal em aberto.
     periodInterestCents: simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps }),
     warnings,
+  };
+}
+
+// Contrato novo que a gravação cria (Etapa H, parte 2), com os mesmos números da simulação. O principal é o principal em
+// aberto das antigas (nenhum dinheiro novo); os juros em aberto, o ajuste e os juros novos formam os juros do contrato.
+// Parcelado: a parcela é arredondada para cima em centavos (parcela fixa); a diferença, de no máximo count−1 centavos,
+// vai para os juros e é informada em roundingCents. Desconto maior que os juros em aberto não grava (devolveria principal).
+export function renegotiationContract(position: RenegotiationPosition, terms: RenegotiationTerms, loanDate: string) {
+  const sim = simulateRenegotiation(position, terms);
+  if (position.principalOpenCents <= 0) return { ok: false as const, error: "As operações escolhidas não têm principal em aberto para renegociar." };
+  if (sim.renegotiatedCents < sim.baseCents) return { ok: false as const, error: "O desconto passa dos juros em aberto: parte do principal emprestado deixaria de voltar. Reduza o desconto." };
+  if (terms.firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes de hoje." };
+  const principalCents = sim.baseCents;
+  if (terms.modality === "INSTALLMENT") {
+    const installmentCents = Math.ceil(sim.totalCents / terms.count);
+    const totalCents = installmentCents * terms.count;
+    const interestCents = totalCents - principalCents;
+    return {
+      ok: true as const, roundingCents: totalCents - sim.totalCents, sim,
+      contract: {
+        principalCents, interestCents, totalCents, loanDate, dueDate: installmentDueDate(terms.firstDueDate, terms.count, terms.frequency), modality: "INSTALLMENT" as const, frequency: terms.frequency,
+        interestRateBps: terms.rateBps, calculationRule: terms.frequency === "BIWEEKLY" ? BIWEEKLY_INSTALLMENT_RULE : INSTALLMENT_RULE,
+        installmentCount: terms.count, installmentCents, firstDueDate: terms.firstDueDate,
+      },
+    };
+  }
+  const interestCents = sim.totalCents - principalCents;
+  return {
+    ok: true as const, roundingCents: 0, sim,
+    contract: {
+      principalCents, interestCents, totalCents: sim.totalCents, loanDate, dueDate: terms.firstDueDate, modality: "SINGLE" as const, frequency: terms.frequency,
+      interestRateBps: terms.rateBps, calculationRule: terms.frequency === "BIWEEKLY" ? BIWEEKLY_RULE : calculateOperation({ principalCents, interestRateBps: terms.rateBps }).calculationRule,
+      installmentCount: null, installmentCents: null, firstDueDate: terms.firstDueDate,
+    },
   };
 }

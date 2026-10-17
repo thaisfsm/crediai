@@ -3,7 +3,7 @@
 // Período (D-E2): juros e principal recebidos contam pela DATA DO PAGAMENTO; principal emprestado conta pela DATA DO
 // EMPRÉSTIMO; saldo em aberto e juros previstos são sempre os de hoje. Ciclo atual por padrão; "Todos os ciclos" inclui os ciclos encerrados (D-E1).
 import { addDays } from "./format";
-import type { OperationView } from "./portfolio";
+import { newPrincipalCents, type OperationView } from "./portfolio";
 
 export const REPORT_STATUSES = { ALL: "Todas", OPEN: "Em aberto", OVERDUE: "Em atraso", PAID: "Quitadas" } as const;
 export type ReportStatus = keyof typeof REPORT_STATUSES;
@@ -43,7 +43,7 @@ export function operationInPeriod(operation: OperationView, range: { from: strin
   return {
     inPeriod: lent || payments.length > 0,
     row: {
-      principalLentCents: lent ? operation.principalCents : 0,
+      principalLentCents: lent ? newPrincipalCents(operation) : 0,
       principalReceivedCents: payments.reduce((total, payment) => total + payment.principalCents, 0),
       interestReceivedCents: payments.reduce((total, payment) => total + payment.interestCents, 0),
       receivedCents: payments.reduce((total, payment) => total + payment.amountCents, 0),

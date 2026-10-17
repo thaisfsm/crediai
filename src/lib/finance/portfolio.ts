@@ -4,13 +4,16 @@ import type { ClientProfile } from "./client-profile";
 import type { ChartSeries } from "./chart";
 import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
-export type OperationStatus = "OPEN" | "PAID" | "CANCELED";
+export type OperationStatus = "OPEN" | "PAID" | "CANCELED" | "RENEGOTIATED";
 
 export type ClientRecord = ClientProfile & { id: string; name: string; document: string | null; phone: string | null; notes: string | null; archivedAt: string | null; createdAt: string };
 export type OperationCorrection = { id: string; reason: string; changes: { field: string; before: string | null; after: string | null }[]; editedAt: string; editedBy: string | null };
 export type OperationRecord = {
   id: string; clientId: string; clientName: string; principalCents: number; interestRateBps: number; interestCents: number; totalCents: number;
   loanDate: string; dueDate: string; status: OperationStatus; settledAt: string | null; calculationRule: string; createdAt: string;
+  // Operação RENEGOTIATED: contrato novo para onde foi, data, e o principal/juros em aberto que levou para ele.
+  renegotiatedIntoId?: string | null; renegotiatedOn?: string | null; renegotiatedAt?: string | null;
+  renegotiatedPrincipalCents?: number | null; renegotiatedInterestCents?: number | null;
   // Para operação excluída (CANCELED): quando foi excluída. Só ela usa este campo.
   updatedAt?: string;
   // Ciclo da carteira em que a operação foi feita (só preenchido no relatório com todos os ciclos).
@@ -40,7 +43,7 @@ export type CapitalMovementRecord = {
 };
 
 // Extrato do capital: cada linha soma (+) ou tira (−) do capital disponível; o saldo final é o capital disponível atual.
-export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVERSAL" | "WITHDRAWAL" | "OTHER_INCOME" | "LOAN" | "LOAN_CANCELED" | "PAYMENT";
+export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVERSAL" | "WITHDRAWAL" | "OTHER_INCOME" | "LOAN" | "LOAN_CANCELED" | "RENEGOTIATION" | "PAYMENT";
 // reversible/reversed: só para aportes (botão "Estornar aporte" e marca de estornado). Os demais campos opcionais são
 // a origem de cada linha, usada pelo extrato do módulo Financeiro (cashflow.ts).
 export type CapitalLedgerEntry = {
@@ -49,10 +52,10 @@ export type CapitalLedgerEntry = {
 };
 export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = {
   INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", CONTRIBUTION_REVERSAL: "Estorno de aporte", WITHDRAWAL: "Retirada", OTHER_INCOME: "Outra entrada",
-  LOAN: "Capital utilizado em operação", LOAN_CANCELED: "Operação excluída", PAYMENT: "Valor recebido de operação",
+  LOAN: "Capital utilizado em operação", LOAN_CANCELED: "Operação excluída", RENEGOTIATION: "Principal levado à renegociação", PAYMENT: "Valor recebido de operação",
 };
 
-export type OperationState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID" | "CANCELED";
+export type OperationState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID" | "CANCELED" | "RENEGOTIATED";
 export type OperationView = Omit<OperationRecord, "renewals"> & {
   // Na visão, interestCents e totalCents são os contratados até agora (período original + renovações); os do
   // período original ficam em originalInterestCents e originalTotalCents.
@@ -75,10 +78,17 @@ export type OperationView = Omit<OperationRecord, "renewals"> & {
   balanceCents: number; state: OperationState; daysUntilDue: number; payments: AllocatedPayment[];
   // Tempo da operação: do empréstimo até hoje (ou até a quitação) e em quantos meses diferentes houve pagamento.
   elapsedUntil: string; paymentMonths: number;
+  // Rastreio da renegociação: códigos das operações que originaram este contrato e o código do contrato novo que substituiu esta.
+  renegotiatedFrom: { id: string; code: string; principalCents: number; interestCents: number }[]; renegotiatedIntoCode: string | null;
 };
 
 // Totais de um conjunto de operações (um cliente ou a carteira). Só usa pagamentos registrados:
 // juros recebidos são juros realizados; juros restantes das operações em aberto ainda são só previstos.
+// Principal "novo" de uma operação: o de um contrato de renegociação já saiu do caixa nas operações antigas, então só
+// conta o que passa do principal levado delas (normalmente zero). Assim emprestado − recuperado = principal em aberto.
+export const newPrincipalCents = (operation: Pick<OperationView, "principalCents" | "renegotiatedFrom">) =>
+  operation.principalCents - (operation.renegotiatedFrom ?? []).reduce((total, from) => total + from.principalCents, 0);
+
 export function summarizeOperations(operations: OperationView[]) {
   const sum = (pick: (operation: OperationView) => number) => operations.reduce((total, operation) => total + pick(operation), 0);
   const open = operations.filter((operation) => operation.status === "OPEN");
@@ -87,7 +97,7 @@ export function summarizeOperations(operations: OperationView[]) {
     openCount: open.length,
     paidCount: operations.filter((operation) => operation.status === "PAID").length,
     overdueCount: open.filter((operation) => operation.state === "OVERDUE").length,
-    principalCents: sum((operation) => operation.principalCents),
+    principalCents: sum(newPrincipalCents),
     interestCents: sum((operation) => operation.interestCents),
     renewalCount: sum((operation) => operation.renewalCount),
     totalCents: sum((operation) => operation.totalCents),
@@ -185,7 +195,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     // Toda a conta (juros/principal de cada pagamento, período, vencimento, saldo e situação) vem do extrato em rules.ts.
     const ledger = operationLedger(ledgerTerms, paymentsByOperation.get(operation.id) ?? [], today);
     const open = operation.status === "OPEN";
-    const state: OperationState = operation.status === "PAID" ? "PAID" : operation.status === "CANCELED" ? "CANCELED" : ledger.state === "PAID" ? "ACTIVE" : ledger.state;
+    const state: OperationState = operation.status === "PAID" ? "PAID" : operation.status === "CANCELED" ? "CANCELED" : operation.status === "RENEGOTIATED" ? "RENEGOTIATED" : ledger.state === "PAID" ? "ACTIVE" : ledger.state;
     const daysUntilDue = open ? ledger.daysUntilDue : daysBetween(today, ledger.nextDueDate);
     return {
       ...operation, code: operationCode(operation.id), state, daysUntilDue,
@@ -201,9 +211,15 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       payments: [...ledger.items].reverse(),
       elapsedUntil: operation.status === "PAID" && operation.settledAt ? operation.settledAt : today,
       paymentMonths: new Set(ledger.items.map((payment) => payment.paidAt.slice(0, 7))).size,
+      renegotiatedFrom: [], renegotiatedIntoCode: null,
     };
   });
 
+  for (const view of views) {
+    view.renegotiatedFrom = views.filter((other) => other.status === "RENEGOTIATED" && other.renegotiatedIntoId === view.id)
+      .map((other) => ({ id: other.id, code: other.code, principalCents: other.renegotiatedPrincipalCents ?? 0, interestCents: other.renegotiatedInterestCents ?? 0 }));
+    view.renegotiatedIntoCode = view.renegotiatedIntoId ? operationCode(view.renegotiatedIntoId) : null;
+  }
   const live = views.filter((operation) => operation.status !== "CANCELED");
   const open = views.filter((operation) => operation.status === "OPEN");
   // Cobranças: operações em aberto com obrigação pendente, na ordem de cobrança. Uma operação em aberto sem saldo não
@@ -220,6 +236,8 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const otherIncomeCents = movementTotal("OTHER_INCOME");
   const usedCapitalCents = sum(live.map((operation) => operation.principalCents));
   const receivedCents = sum(payments.map((payment) => payment.amountCents));
+  // Renegociação: o principal em aberto das operações antigas volta ao caixa e sai de novo no contrato novo (líquido zero).
+  const renegotiatedCents = sum(views.filter((operation) => operation.status === "RENEGOTIATED").map((operation) => operation.renegotiatedPrincipalCents ?? 0));
   const summary = {
     hasWallet,
     cycleNumber,
@@ -234,7 +252,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     otherIncomeCents,
     investedCents: initialCapitalCents + contributionsCents,
     usedCapitalCents,
-    availableCents: initialCapitalCents + contributionsCents + otherIncomeCents - withdrawalsCents - usedCapitalCents + receivedCents,
+    availableCents: initialCapitalCents + contributionsCents + otherIncomeCents - withdrawalsCents - usedCapitalCents + receivedCents + renegotiatedCents,
     // Principal que ainda não voltou: disponível + emprestado = capital aportado + juros recebidos.
     lentCents: sum(open.map((operation) => operation.principalRemainingCents)),
     receivableCents: sum(open.map((operation) => operation.balanceCents)),
@@ -283,6 +301,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const receivableAt = (day: string) => sum(live.map((operation) => {
     if (operation.loanDate > day) return 0;
     if (operation.status === "PAID" && operation.settledAt && operation.settledAt <= day) return 0;
+    if (operation.status === "RENEGOTIATED" && operation.renegotiatedOn && operation.renegotiatedOn <= day) return 0;
     const paid = sum(payments.filter((payment) => payment.operationId === operation.id && payment.paidAt <= day).map((payment) => payment.amountCents));
     // Os juros de um período renovado só passam a ser devidos a partir da renovação (pagamento ou vencimento).
     const renewed = sum(operation.periods.filter((period) => period.number > 1 && (period.openedOn ?? today) <= day).map((period) => period.interestCents));
@@ -315,6 +334,10 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       const canceledOn = todayIso(new Date(canceledAt));
       return { key: `${operation.id}-canceled`, kind: "LOAN_CANCELED" as const, date: canceledOn < operation.loanDate ? operation.loanDate : canceledOn, description: `${operation.clientName} · Op. #${operation.code}`, amountCents: operation.principalCents, order: canceledAt, operationCode: operation.code };
     }),
+    ...views.filter((operation) => operation.status === "RENEGOTIATED").map((operation) => ({
+      key: `${operation.id}-renegotiated`, kind: "RENEGOTIATION" as const, date: operation.renegotiatedOn ?? operation.loanDate, description: `${operation.clientName} · Op. #${operation.code}`,
+      amountCents: operation.renegotiatedPrincipalCents ?? 0, order: operation.renegotiatedAt ?? operation.updatedAt ?? operation.createdAt, operationCode: operation.code,
+    })),
     ...payments.map((payment) => ({
       key: payment.id, kind: "PAYMENT" as const, date: payment.paidAt, description: `${payment.clientName} · Op. #${operationCode(payment.operationId)}`, amountCents: payment.amountCents, order: payment.createdAt,
       operationCode: operationCode(payment.operationId), principalCents: allocationById.get(payment.id)?.principalCents ?? 0, interestCents: allocationById.get(payment.id)?.interestCents ?? 0,

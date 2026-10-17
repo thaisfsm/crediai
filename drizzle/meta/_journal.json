@@ -169,6 +169,13 @@
       "when": 1792088313547,
       "tag": "0024_investidores_evolucao",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792273617273,
+      "tag": "0025_renegociacao",
+      "breakpoints": true
     }
   ]
 }

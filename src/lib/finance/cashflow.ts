@@ -37,6 +37,7 @@ export const statementCategoryLabels = {
   INITIAL_CAPITAL: "Capital inicial",
   LOAN: "Empréstimo concedido",
   LOAN_CANCELED: "Devolução de operação excluída",
+  RENEGOTIATION: "Principal levado à renegociação",
   PAYMENT: "Recebimento de operação",
   CONTRIBUTION_REVERSAL: "Estorno de aporte",
   LEGACY_WITHDRAWAL: "Retirada (sem categoria)",
@@ -147,6 +148,7 @@ const categoryOfEntry = (entry: CapitalLedgerEntry): StatementCategory => {
     case "INITIAL": return "INITIAL_CAPITAL";
     case "LOAN": return "LOAN";
     case "LOAN_CANCELED": return "LOAN_CANCELED";
+    case "RENEGOTIATION": return "RENEGOTIATION";
     case "PAYMENT": return "PAYMENT";
     case "CONTRIBUTION_REVERSAL": return "CONTRIBUTION_REVERSAL";
     case "CONTRIBUTION": return entry.category === "INVESTOR_CONTRIBUTION" ? "INVESTOR_CONTRIBUTION" : "CAPITAL_CONTRIBUTION";
@@ -158,6 +160,7 @@ const categoryOfEntry = (entry: CapitalLedgerEntry): StatementCategory => {
 function originOf(entry: CapitalLedgerEntry) {
   if (entry.kind === "INITIAL") return "Configurações · capital inicial";
   if (entry.kind === "LOAN") return `Operações · ${entry.operationCode ?? ""}`.trim();
+  if (entry.kind === "RENEGOTIATION") return `Renegociação · ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "LOAN_CANCELED") return `Operações · exclusão ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "PAYMENT") return `Pagamentos · ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "CONTRIBUTION_REVERSAL") return "Capital · estorno de aporte";

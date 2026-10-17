@@ -341,6 +341,7 @@ async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: 
   const [operation] = lock ? await query.for("update") : await query;
   if (!operation) return { ok: false as const, error: "Operação não encontrada nesta carteira." };
   if (operation.status !== "OPEN") return { ok: false as const, error: "Só operações em aberto podem ser corrigidas." };
+  if (await isRenegotiationContract(tx, tenantId, operation.id)) return { ok: false as const, error: RENEGOTIATION_LOCKED };
   const [paid] = await tx.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
   const [renewed] = await tx.select({ count: sql<number>`count(*)::int` }).from(loanRenewals).where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId)));
   if (paid.count > 0 || renewed.count > 0) return { ok: false as const, error: "Correção bloqueada para preservar o histórico financeiro: esta operação já tem pagamento ou renovação registrados." };
@@ -490,6 +491,7 @@ export async function cancelOperationAction(data: FormData): Promise<ActionResul
       .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))))
       .for("update");
     if (!operation || operation.status === "CANCELED") return { ok: false, error: "Operação não encontrada nesta carteira." };
+    if (operation.status === "RENEGOTIATED" || await isRenegotiationContract(tx, tenantId, operation.id)) return { ok: false, error: RENEGOTIATION_LOCKED };
     const [{ count, paid }] = await tx.select({ count: sql<string>`count(*)`, paid: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
       .where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
     if (Number(count) > 0) {
@@ -538,17 +540,26 @@ async function availableCapitalCents(tx: TenantTransaction, tenantId: string, { 
   const [{ movements }] = await tx.select({
     movements: sql<string>`coalesce(sum(case when ${capitalMovements.kind} in (${inflow}) then ${capitalMovements.amountCents} else -${capitalMovements.amountCents} end), 0)`,
   }).from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber)));
-  const [{ lent }] = await tx.select({ lent: sql<string>`coalesce(sum(${loanOperations.principalCents}), 0)` }).from(loanOperations)
+  const [{ lent, renegotiated }] = await tx.select({ lent: sql<string>`coalesce(sum(${loanOperations.principalCents}), 0)`, renegotiated: sql<string>`coalesce(sum(${loanOperations.renegotiatedPrincipalCents}), 0)` }).from(loanOperations)
     .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber), ne(loanOperations.status, "CANCELED")));
   const [{ received }] = await tx.select({ received: sql<string>`coalesce(sum(${payments.amountCents}), 0)` }).from(payments)
     .innerJoin(loanOperations, eq(loanOperations.id, payments.operationId))
     .where(and(eq(payments.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)));
-  return initialCapitalCents + Number(movements) - Number(lent) + Number(received);
+  return initialCapitalCents + Number(movements) - Number(lent) + Number(renegotiated) + Number(received);
 }
 
 // Mensagem quando a mudança deixaria algum saldo do extrato do capital negativo.
 const capitalGapError = (what: string, date: string, negative: { date: string; balanceCents: number }) =>
   `Capital insuficiente: com ${what} em ${formatDate(date)}, o saldo de ${formatDate(negative.date)} ficaria negativo (${formatMoney(negative.balanceCents)}). Confira a data e o valor. Nada foi registrado.`;
+
+// Contrato criado por uma renegociação: o principal dele é o das operações antigas, então ele não é editado nem excluído
+// (o vínculo e o capital deixariam de bater). Para mudar, renegocia-se de novo.
+async function isRenegotiationContract(tx: TenantTransaction, tenantId: string, operationId: string) {
+  const [row] = await tx.select({ id: loanOperations.id }).from(loanOperations)
+    .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.renegotiatedIntoId, operationId))).limit(1);
+  return Boolean(row);
+}
+const RENEGOTIATION_LOCKED = "Esta operação faz parte de uma renegociação e não pode ser alterada ou excluída. Para mudar as condições, renegocie de novo.";
 
 async function currentCycle(tx: TenantTransaction, tenantId: string) {
   const [wallet] = await tx.select({ cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId));
@@ -694,6 +705,7 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
       .where(and(eq(loanOperations.id, payment.operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, wallet.cycleNumber)))
       .for("update");
     if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
+    if (operation.status === "RENEGOTIATED") return { ok: false, error: "Esta operação foi renegociada; o histórico dela não pode mais ser alterado." };
     if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
     if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
     const terms = await ledgerTermsOf(tx, tenantId, operation);

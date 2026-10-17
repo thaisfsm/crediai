@@ -30,6 +30,8 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
   return {
     id: operation.id, clientId: operation.clientId, clientName, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps,
     interestCents: operation.interestCents, totalCents: operation.totalCents, loanDate: operation.loanDate, dueDate: operation.dueDate,
+    renegotiatedIntoId: operation.renegotiatedIntoId, renegotiatedOn: operation.renegotiatedOn, renegotiatedAt: operation.renegotiatedAt?.toISOString() ?? null,
+    renegotiatedPrincipalCents: operation.renegotiatedPrincipalCents, renegotiatedInterestCents: operation.renegotiatedInterestCents,
     status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(), updatedAt: operation.updatedAt.toISOString(),
     renewals,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,

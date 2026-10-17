@@ -29,7 +29,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () =>
 
 export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
-export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED"]);
+export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED", "RENEGOTIATED"]);
 // Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada (toda saída manual de dinheiro,
 // com a categoria do módulo Financeiro), estorno de aporte e outras entradas manuais. O sinal de cada tipo no capital
 // disponível fica em src/lib/finance/cashflow.ts (INFLOW_KINDS); o valor gravado é sempre positivo.
@@ -322,6 +322,13 @@ export const loanOperations = pgTable("loan_operation", {
   status: loanOperationStatus("status").notNull().default("OPEN"),
   settledAt: date("settled_at", { mode: "string" }),
   cycleNumber: integer("cycle_number").notNull().default(1),
+  // Renegociação: operação encerrada como RENEGOTIATED aponta para o contrato novo e guarda o que foi levado para ele
+  // (principal e juros em aberto na data). Os pagamentos e renovações dela não mudam.
+  renegotiatedIntoId: text("renegotiated_into_id"),
+  renegotiatedOn: date("renegotiated_on", { mode: "string" }),
+  renegotiatedAt: timestamp("renegotiated_at", { withTimezone: true }),
+  renegotiatedPrincipalCents: bigint("renegotiated_principal_cents", { mode: "number" }),
+  renegotiatedInterestCents: bigint("renegotiated_interest_cents", { mode: "number" }),
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
@@ -341,6 +348,9 @@ export const loanOperations = pgTable("loan_operation", {
   index("loan_operation_tenant_due_date_idx").on(table.tenantId, table.dueDate),
   unique("loan_operation_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "loan_operation_client_same_tenant_fk", columns: [table.tenantId, table.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
+  foreignKey({ name: "loan_operation_renegotiated_into_fk", columns: [table.tenantId, table.renegotiatedIntoId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
+  check("loan_operation_renegotiated_not_self", sql`${table.renegotiatedIntoId} is null or ${table.renegotiatedIntoId} <> ${table.id}`),
+  check("loan_operation_renegotiated_consistent", sql`(${table.status}::text = 'RENEGOTIATED') = (${table.renegotiatedIntoId} is not null and ${table.renegotiatedOn} is not null and ${table.renegotiatedAt} is not null and ${table.renegotiatedPrincipalCents} >= 0 and ${table.renegotiatedInterestCents} >= 0)`),
   check("loan_operation_principal_positive", sql`${table.principalCents} > 0`),
   check("loan_operation_rate_non_negative", sql`${table.interestRateBps} >= 0`),
   check("loan_operation_amounts_consistent", sql`${table.interestCents} >= 0 and ${table.totalCents} = ${table.principalCents} + ${table.interestCents}`),

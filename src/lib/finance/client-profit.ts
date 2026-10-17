@@ -4,17 +4,17 @@ import type { OperationView } from "./portfolio";
 
 export type ClientProfitOperation = {
   id: string; code: string; loanDate: string; cycleNumber: number | null; status: OperationView["status"];
-  principalCents: number; interestReceivedCents: number; receivedCents: number; principalRemainingCents: number; balanceCents: number;
+  principalCents: number; carriedCents: number; interestReceivedCents: number; receivedCents: number; principalRemainingCents: number; balanceCents: number;
 };
 
-type OperationLike = Pick<OperationView, "id" | "code" | "clientId" | "loanDate" | "status" | "principalCents" | "interestPaidCents" | "paidCents" | "principalRemainingCents" | "balanceCents"> & { cycleNumber?: number };
+type OperationLike = Pick<OperationView, "id" | "code" | "clientId" | "loanDate" | "status" | "principalCents" | "interestPaidCents" | "paidCents" | "principalRemainingCents" | "balanceCents"> & { cycleNumber?: number; renegotiatedPrincipalCents?: number | null };
 
 export function clientProfitHistory(operations: OperationLike[], clientId: string) {
   const rows: ClientProfitOperation[] = operations
     .filter((operation) => operation.clientId === clientId && operation.status !== "CANCELED")
     .map((operation) => ({
       id: operation.id, code: operation.code, loanDate: operation.loanDate, cycleNumber: operation.cycleNumber ?? null, status: operation.status,
-      principalCents: operation.principalCents, interestReceivedCents: operation.interestPaidCents, receivedCents: operation.paidCents,
+      principalCents: operation.principalCents, carriedCents: operation.status === "RENEGOTIATED" ? operation.renegotiatedPrincipalCents ?? 0 : 0, interestReceivedCents: operation.interestPaidCents, receivedCents: operation.paidCents,
       principalRemainingCents: operation.principalRemainingCents, balanceCents: operation.balanceCents,
     }))
     .sort((a, b) => b.loanDate.localeCompare(a.loanDate) || a.code.localeCompare(b.code));
@@ -26,7 +26,8 @@ export function clientProfitHistory(operations: OperationLike[], clientId: strin
     operationCount: rows.length,
     paidCount: rows.filter((row) => row.status === "PAID").length,
     openCount: rows.filter((row) => row.status === "OPEN").length,
-    principalLentCents: sum((row) => row.principalCents),
+    // Principal renegociado passa para o contrato novo: conta uma vez só.
+    principalLentCents: sum((row) => row.principalCents - row.carriedCents),
     interestReceivedCents,
     // Lucro só dos contratos já quitados (o que o cliente fechou e deixou de lucro).
     paidContractsProfitCents: sum((row) => row.interestReceivedCents, (row) => row.status === "PAID"),

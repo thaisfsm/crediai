@@ -1260,3 +1260,7 @@ button { color:inherit; }
   .report-operation-row td:first-child { padding-left: 12px; }
   .report-operation-row .status-chip { max-width: 92px; white-space: normal; line-height: 1.3; }
 }
+
+/* Renegociação: confirmação antes de gravar */
+.field-check { display:flex; align-items:flex-start; gap:9px; margin:14px 0 8px; color:#cfe3ea; font-size:12px; line-height:1.45; cursor:pointer; }
+.field-check input { margin-top:3px; accent-color:#41bee2; }

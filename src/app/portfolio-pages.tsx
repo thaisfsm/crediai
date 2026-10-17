@@ -94,6 +94,7 @@ const stateLabels: Record<OperationView["state"], { label: string; tone: string 
   OVERDUE: { label: "Em atraso", tone: "status-late" },
   PAID: { label: "Quitada", tone: "status-paid" },
   CANCELED: { label: "Cancelada", tone: "status-muted" },
+  RENEGOTIATED: { label: "Renegociada", tone: "status-muted" },
 };
 
 function StatusChip({ state, daysUntilDue }: { state: OperationView["state"]; daysUntilDue: number }) {
@@ -580,7 +581,12 @@ function operationPhrases(operation: OperationView) {
   }
   phrases.push(`Já recebeu ${formatMoney(operation.interestPaidCents)} de juros (lucro realizado).`);
   const elapsed = formatElapsed(operation.loanDate, operation.elapsedUntil);
-  if (operation.status === "PAID") {
+  if (operation.renegotiatedFrom.length > 0) {
+    phrases.push(`Contrato de renegociação: veio ${operation.renegotiatedFrom.length === 1 ? "da operação" : "das operações"} ${operation.renegotiatedFrom.map((from) => `#${from.code} (principal ${formatMoney(from.principalCents)}, juros em aberto ${formatMoney(from.interestCents)})`).join(", ")}.`);
+  }
+  if (operation.status === "RENEGOTIATED") {
+    phrases.push(`Operação renegociada${operation.renegotiatedOn ? ` em ${formatDate(operation.renegotiatedOn)}` : ""}: o saldo em aberto foi levado para o contrato #${operation.renegotiatedIntoCode ?? ""}.`);
+  } else if (operation.status === "PAID") {
     phrases.push(`Operação quitada${operation.settledAt ? ` em ${formatDate(operation.settledAt)}` : ""}, depois de ${elapsed === "hoje" ? "menos de um dia" : elapsed}.`);
   } else {
     phrases.push(elapsed === "hoje" ? "Operação ativa desde hoje." : `Operação ativa há ${elapsed}.`);
@@ -694,7 +700,7 @@ function ClientProfitPanel({ client, portfolio }: { client: ClientRow; portfolio
             <tbody>{history.rows.map((row) => (
               <tr key={row.id}>
                 <td><strong>#{row.code}</strong>{row.cycleNumber !== null && row.cycleNumber !== portfolio.summary.cycleNumber && <small>Ciclo {row.cycleNumber}</small>}</td>
-                <td>{formatDate(row.loanDate)}</td><td>{row.status === "PAID" ? "Quitado" : "Em aberto"}</td>
+                <td>{formatDate(row.loanDate)}</td><td>{row.status === "PAID" ? "Quitado" : row.status === "RENEGOTIATED" ? "Renegociado" : "Em aberto"}</td>
                 <td>{formatMoney(row.principalCents)}</td><td>{formatMoney(row.receivedCents)}</td><td><strong>{formatMoney(row.interestReceivedCents)}</strong></td>
               </tr>
             ))}</tbody>
@@ -1179,7 +1185,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             <ul>{operation.payments.map((payment) => (
               <li key={payment.id}>
                 <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
-                {operation.status !== "CANCELED" && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
+                {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
                 {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
