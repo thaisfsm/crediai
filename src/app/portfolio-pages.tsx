@@ -468,15 +468,15 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
         <label className="field"><span>Facebook</span><input name="facebook" maxLength={200} defaultValue={editing?.facebook ?? ""} placeholder="@usuario ou facebook.com/usuario" /></label>
         <label className="field field-wide"><span>Observações</span><input name="notes" placeholder="Opcional" maxLength={500} defaultValue={editing?.notes ?? ""} /></label>
         <AddressFields kind="residential" client={editing} />
-        <AddressFields kind="business" client={editing} />
         <fieldset className="form-section field-wide">
-          <legend>Empresa (endereço comercial)</legend>
+          <legend>Empresa</legend>
           <div className="form-grid">
-            <label className="field field-wide"><span>Nome da empresa</span><input name="businessCompanyName" maxLength={160} defaultValue={editing?.businessCompanyName ?? ""} placeholder="Onde o cliente trabalha" /></label>
             <label className="field"><span>CNPJ da empresa</span><MaskedInput name="businessCnpj" mask={maskCnpj} initial={formatCnpj(editing?.businessCnpj ?? null) ?? ""} validate={cnpjProblem} inputMode="numeric" placeholder="00.000.000/0000-00" maxLength={20} /></label>
+            <label className="field field-wide"><span>Nome da empresa</span><input name="businessCompanyName" maxLength={160} defaultValue={editing?.businessCompanyName ?? ""} placeholder="Onde o cliente trabalha" /></label>
             {company.notice && <p className="form-feedback field-wide" role="status">{company.notice}</p>}
           </div>
         </fieldset>
+        <AddressFields kind="business" client={editing} />
         <BankFieldset initial={editing} />
         <fieldset className="form-section field-wide">
           <legend>Referências pessoais</legend>
