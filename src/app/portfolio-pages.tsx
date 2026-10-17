@@ -410,6 +410,33 @@ export function usePersonPrefill(target: "client" | "investor") {
   return { notice, onInput };
 }
 
+// Nome da empresa pelo CNPJ: consulta a base pública da BrasilAPI (dado público da Receita) quando o CNPJ digitado é válido
+// e preenche só o campo "Nome da empresa" se ele estiver vazio. Falha ou CNPJ não encontrado: avisa e deixa digitar à mão.
+export function useCompanyNamePrefill() {
+  const [notice, setNotice] = useState<string | null>(null);
+  const last = useRef("");
+  const onInput = (event: FormEvent<HTMLFormElement>) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.name !== "businessCnpj") return;
+    const form = event.currentTarget;
+    const digits = onlyDigits(input.value);
+    last.current = digits;
+    if (digits.length !== 14 || cnpjProblem(digits)) return setNotice(null);
+    setNotice("Buscando o nome da empresa pelo CNPJ…");
+    void fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`).then(async (response) => {
+      if (last.current !== digits) return;
+      if (response.status === 404) return setNotice("CNPJ não encontrado na base pública. Digite o nome da empresa.");
+      if (!response.ok) throw new Error("cnpj");
+      const data = await response.json() as { razao_social?: string; nome_fantasia?: string };
+      const name = String(data.razao_social || data.nome_fantasia || "").trim();
+      if (!name) return setNotice("A base pública não trouxe o nome. Digite o nome da empresa.");
+      setEmptyField(form, "businessCompanyName", name.slice(0, 160));
+      setNotice(`Nome da empresa preenchido pela base pública (${name}). Confira antes de gravar.`);
+    }).catch(() => { if (last.current === digits) setNotice("Não foi possível consultar o CNPJ agora. Digite o nome da empresa."); });
+  };
+  return { notice, onInput };
+}
+
 // Formulário de cadastro e edição. CPF e telefone recebem máscara enquanto o usuário digita; o servidor grava só os dígitos.
 function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | null; onChanged: () => void; onCancel: () => void }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
@@ -420,10 +447,11 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
     if (editing) onCancel();
   });
   const prefill = usePersonPrefill("client");
+  const company = useCompanyNamePrefill();
   return (
     <section className="panel form-panel" aria-label={editing ? "Editar cliente" : "Novo cliente"}>
       <div className="panel-header"><div><h2>{editing ? `Editar ${editing.name}` : "Novo cliente"}</h2><p>Somente o nome é obrigatório.</p></div></div>
-      <form className="form-grid" onSubmit={onSubmit} onInput={editing ? undefined : prefill.onInput} key={resetKey}>
+      <form className="form-grid" onSubmit={onSubmit} onInput={(event) => { if (!editing) prefill.onInput(event); company.onInput(event); }} key={resetKey}>
         {editing && <input type="hidden" name="clientId" value={editing.id} />}
         {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
@@ -441,6 +469,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
           <div className="form-grid">
             <label className="field field-wide"><span>Nome da empresa</span><input name="businessCompanyName" maxLength={160} defaultValue={editing?.businessCompanyName ?? ""} placeholder="Onde o cliente trabalha" /></label>
             <label className="field"><span>CNPJ da empresa</span><MaskedInput name="businessCnpj" mask={maskCnpj} initial={formatCnpj(editing?.businessCnpj ?? null) ?? ""} validate={cnpjProblem} inputMode="numeric" placeholder="00.000.000/0000-00" maxLength={20} /></label>
+            {company.notice && <p className="form-feedback field-wide" role="status">{company.notice}</p>}
           </div>
         </fieldset>
         <BankFieldset initial={editing} />

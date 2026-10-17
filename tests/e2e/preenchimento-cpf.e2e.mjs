@@ -85,3 +85,29 @@ test("preenchimento pelo CPF: investidor → cliente, cliente → investidor, in
 
   assert.deepEqual({ clients: await one(`select count(*)::int from client`), investors: await one(`select count(*)::int from investor`) }, before, "nada foi gravado");
 });
+
+test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avisa se a base pública não responde", async () => {
+  const thais = await login("thais@teste.local");
+  const page = await open(thais, "/?tela=clientes");
+  let calls = 0;
+  await page.route("https://brasilapi.com.br/api/cnpj/v1/*", (route) => {
+    calls += 1;
+    return route.request().url().endsWith("/11222333000181")
+      ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ razao_social: "EMPRESA EXEMPLO LTDA", nome_fantasia: "Exemplo" }) })
+      : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+  const cnpj = page.locator('input[name="businessCnpj"]');
+  const company = page.locator('input[name="businessCompanyName"]');
+  await cnpj.fill("11.222.333/0001-82");
+  await sleep(800);
+  assert.equal(calls, 0, "CNPJ inválido não consulta");
+  await cnpj.fill("11.222.333/0001-81");
+  await page.getByText("Nome da empresa preenchido pela base pública (EMPRESA EXEMPLO LTDA)").waitFor();
+  assert.equal(await company.inputValue(), "EMPRESA EXEMPLO LTDA");
+  await company.fill("Nome digitado");
+  await cnpj.fill("");
+  await cnpj.fill("11.222.333/0001-81");
+  await sleep(1200);
+  assert.equal(await company.inputValue(), "Nome digitado", "o nome digitado não é substituído");
+  await page.context().close();
+});
