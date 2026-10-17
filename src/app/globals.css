@@ -1242,5 +1242,5 @@ button { color:inherit; }
   .fit-table td.actions-cell { width: 1%; white-space: normal; }
   .fit-table .row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 132px; margin-left: auto; }
   .fit-table .row-actions .outline-button { min-height: 30px; padding: 5px 7px; font-size: 11px; }
-  .fit-table td.actions-cell, .fit-table th:last-child { position: static; box-shadow: none; background: transparent; }
+  .data-table.fit-table td.actions-cell, .data-table.fit-table th:last-child:empty { position: static; box-shadow: none; background: transparent; }
 }
