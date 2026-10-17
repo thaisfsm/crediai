@@ -411,7 +411,7 @@ export function usePersonPrefill(target: "client" | "investor") {
 }
 
 // Nome da empresa pelo CNPJ: consulta a base pública da BrasilAPI (dado público da Receita) quando o CNPJ digitado é válido
-// e preenche só o campo "Nome da empresa" se ele estiver vazio. Falha ou CNPJ não encontrado: avisa e deixa digitar à mão.
+// e preenche só os campos vazios: "Nome da empresa" e o endereço comercial. Falha ou CNPJ não encontrado: avisa e deixa digitar à mão.
 export function useCompanyNamePrefill() {
   const [notice, setNotice] = useState<string | null>(null);
   const last = useRef("");
@@ -427,11 +427,16 @@ export function useCompanyNamePrefill() {
       if (last.current !== digits) return;
       if (response.status === 404) return setNotice("CNPJ não encontrado na base pública. Digite o nome da empresa.");
       if (!response.ok) throw new Error("cnpj");
-      const data = await response.json() as { razao_social?: string; nome_fantasia?: string };
+      const data = await response.json() as { razao_social?: string; nome_fantasia?: string; cep?: string; descricao_tipo_de_logradouro?: string; logradouro?: string; numero?: string; complemento?: string; bairro?: string; municipio?: string; uf?: string };
       const name = String(data.razao_social || data.nome_fantasia || "").trim();
       if (!name) return setNotice("A base pública não trouxe o nome. Digite o nome da empresa.");
       setEmptyField(form, "businessCompanyName", name.slice(0, 160));
-      setNotice(`Nome da empresa preenchido pela base pública (${name}). Confira antes de gravar.`);
+      // Endereço comercial pelos dados da empresa; só campos vazios. O CEP vai por último: ele dispara a busca de CEP padrão.
+      const text = (value?: string) => String(value ?? "").trim();
+      const street = [text(data.descricao_tipo_de_logradouro), text(data.logradouro)].filter(Boolean).join(" ");
+      const address: Record<string, string> = { Street: street, Number: text(data.numero) === "S/N" ? "" : text(data.numero), Complement: text(data.complemento), District: text(data.bairro), City: text(data.municipio), State: text(data.uf), Cep: onlyDigits(text(data.cep)) };
+      for (const part of ["Street", "Number", "Complement", "District", "City", "State", "Cep"]) if (address[part]) setEmptyField(form, `business${part}`, address[part].slice(0, 160));
+      setNotice(`Nome da empresa e endereço comercial preenchidos pela base pública (${name}). Confira antes de gravar.`);
     }).catch(() => { if (last.current === digits) setNotice("Não foi possível consultar o CNPJ agora. Digite o nome da empresa."); });
   };
   return { notice, onInput };
