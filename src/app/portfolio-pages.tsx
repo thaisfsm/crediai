@@ -10,6 +10,7 @@ import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, f
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import { INVESTOR_CATEGORIES, isInvestorCategory } from "@/lib/investors/payables";
 import type { TenantPortfolio } from "@/lib/finance/queries";
+import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
@@ -659,6 +660,48 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
   );
 }
 
+// Lucro do cliente em todos os ciclos: ajuda a decidir uma renovação ou novo empréstimo (o lucro já recebido amortece o risco).
+function ClientProfitPanel({ client, portfolio }: { client: ClientRow; portfolio: TenantPortfolio }) {
+  const [loaded, setLoaded] = useState<{ operations: OperationView[] } | { error: string } | null>(null);
+  // Recarrega quando algo muda na carteira (pagamento, nova operação); a lista dos ciclos encerrados não muda.
+  const version = portfolio.payments.length + portfolio.operations.length;
+  useEffect(() => {
+    let active = true;
+    loadAllCyclesReportAction()
+      .then((result) => { if (active) setLoaded(result.ok ? { operations: result.operations } : { error: result.error }); })
+      .catch(() => { if (active) setLoaded({ error: "Não foi possível carregar o histórico de lucro agora." }); });
+    return () => { active = false; };
+  }, [client.id, version]);
+  const history = loaded && "operations" in loaded ? clientProfitHistory(loaded.operations, client.id) : null;
+  return (
+    <section className="panel table-panel" aria-label={`Lucro histórico de ${client.name}`}>
+      <div className="panel-header"><div><h2>Lucro com este cliente</h2><p>Juros efetivamente recebidos em todos os contratos e ciclos da carteira. Serve de apoio para decidir uma renovação.</p></div></div>
+      {!loaded ? <EmptyPanel icon="chart" text="Carregando o histórico de lucro…" /> : !history ? <EmptyPanel icon="chart" text={"error" in loaded ? loaded.error : ""} /> : history.operationCount === 0 ? <EmptyPanel icon="chart" text="Este cliente ainda não tem contratos." /> : (
+        <>
+          <dl className="payment-summary client-highlights profit-cards">
+            <div className="payment-balance"><dt>Lucro total recebido</dt><dd>{formatMoney(history.interestReceivedCents)}</dd><small>Só juros já pagos, todos os ciclos</small></div>
+            <div><dt>Contratos quitados</dt><dd>{history.paidCount}</dd><small>{history.paidCount > 0 ? `Lucro deles: ${formatMoney(history.paidContractsProfitCents)}` : "Nenhum ainda"}</small></div>
+            <div><dt>Contratos em aberto</dt><dd>{history.openCount}</dd></div>
+            <div><dt>Total emprestado</dt><dd>{formatMoney(history.principalLentCents)}</dd></div>
+            <div><dt>Principal em aberto hoje</dt><dd>{formatMoney(history.principalOpenCents)}</dd></div>
+            <div><dt>Principal em risco após o lucro</dt><dd>{formatMoney(history.exposureAfterProfitCents)}</dd><small>{history.coveragePercent === null ? "Sem principal em aberto" : `O lucro recebido cobre ${history.coveragePercent}% do principal em aberto`}</small></div>
+          </dl>
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Operação</th><th>Data</th><th>Situação</th><th>Principal</th><th>Total recebido</th><th>Lucro (juros recebidos)</th></tr></thead>
+            <tbody>{history.rows.map((row) => (
+              <tr key={row.id}>
+                <td><strong>#{row.code}</strong>{row.cycleNumber !== null && row.cycleNumber !== portfolio.summary.cycleNumber && <small>Ciclo {row.cycleNumber}</small>}</td>
+                <td>{formatDate(row.loanDate)}</td><td>{row.status === "PAID" ? "Quitado" : "Em aberto"}</td>
+                <td>{formatMoney(row.principalCents)}</td><td>{formatMoney(row.receivedCents)}</td><td><strong>{formatMoney(row.interestReceivedCents)}</strong></td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </>
+      )}
+    </section>
+  );
+}
+
 // Página do cliente: cadastro, documentos, resumo financeiro e cada operação separada. Valores só do ciclo atual da carteira.
 function ClientDetail({ client, portfolio, onBack, onChanged }: { client: ClientRow; portfolio: TenantPortfolio; onBack: () => void; onChanged: () => void }) {
   const profile = client.profile;
@@ -732,6 +775,7 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
       </section>
       <ClientProfilePanel client={client} />
       <ClientDocuments client={client} onChanged={onChanged} />
+      <ClientProfitPanel client={client} portfolio={portfolio} />
     </div>
   );
 }
