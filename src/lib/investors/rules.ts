@@ -6,7 +6,6 @@ import { addressFields, type Address } from "./address";
 import { addressParts, type AddressPart } from "../finance/client-profile";
 import type { BankValues } from "../bank-account";
 import { addDays, centsToInput, cnpjProblem, cpfProblem, formatDate, formatMoney, isIsoDate, normalizeCpfCnpj, normalizePhone, parseMoneyToCents, parseRateToBps } from "../finance/format";
-import { dueDates } from "../finance/rules";
 
 export const INVESTOR_STATUS = { ACTIVE: "Ativo", INACTIVE: "Inativo" } as const;
 export type PersonType = keyof typeof PERSON_TYPES;
@@ -237,13 +236,34 @@ export function investorFilters(search: { q?: string; status?: string; carteira?
 export const MAX_SCHEDULE_ITEMS = 600;
 export type ScheduleItemValues = { dueDate: string; yieldCents: number; principalCents: number; description: string | null };
 
-// Datas sugeridas: a primeira informada e as seguintes de N em N meses, mantendo o dia (fim de mês curto volta ao dia
-// combinado, pela mesma função de vencimentos das operações). Pagamento único: uma data só.
-export function scheduleDates(firstDueDate: string, count: number, frequency: PaymentFrequency) {
+// Datas sugeridas: a primeira informada (a combinada, livre: não precisa ser um período depois do início nem cair no
+// dia do pagamento) e as seguintes de N em N meses no dia do pagamento combinado (dueDay; sem ele, o dia da primeira
+// data). Mês sem esse dia (30/31 em fevereiro, 31 em abril…) usa o último dia do mês e volta ao dia combinado no mês
+// seguinte. Pagamento único: uma data só.
+export function scheduleDates(firstDueDate: string, count: number, frequency: PaymentFrequency, dueDay?: number | null) {
   if (frequency === "AT_MATURITY") return [firstDueDate];
   const step = FREQUENCY_MONTHS[frequency];
   if (!step) return [];
-  return dueDates("MONTHLY", firstDueDate, (count - 1) * step + 1).filter((_, index) => index % step === 0);
+  const anchor = dueDay && Number.isInteger(dueDay) && dueDay >= 1 && dueDay <= 31 ? dueDay : Number(firstDueDate.slice(8, 10));
+  const dates = [firstDueDate];
+  let monthIndex = Number(firstDueDate.slice(0, 4)) * 12 + Number(firstDueDate.slice(5, 7)) - 1;
+  while (dates.length < count) {
+    monthIndex += step;
+    const year = Math.floor(monthIndex / 12), month = (monthIndex % 12) + 1;
+    const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    dates.push(`${year}-${String(month).padStart(2, "0")}-${String(Math.min(anchor, last)).padStart(2, "0")}`);
+  }
+  return dates;
+}
+
+// Primeira data no dia do pagamento combinado depois do início do contrato (ex.: início 10/10, dia 25 → 25/10; início
+// 25/10, dia 25 → 25/11). É só um ponto de partida editável para a sugestão: a primeira data real é a negociada.
+export function firstDueOnDay(startDate: string, dueDay: number) {
+  if (!isIsoDate(startDate) || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) return null;
+  const year = Number(startDate.slice(0, 4)), month = Number(startDate.slice(5, 7));
+  const day = Math.min(dueDay, new Date(Date.UTC(year, month, 0)).getUTCDate());
+  const sameMonth = `${startDate.slice(0, 8)}${String(day).padStart(2, "0")}`;
+  return sameMonth > startDate ? sameMonth : scheduleDates(sameMonth, 2, "MONTHLY", dueDay)[1];
 }
 
 const amount = (value: string) => (value ? parseMoneyToCents(value) : 0);
@@ -300,14 +320,15 @@ export function scheduleLinesFields(raw: string): { ok: true; items: ScheduleIte
   return { ok: true, items };
 }
 
-// Sugestão de linhas para o usuário revisar ANTES de gravar (nada é gravado por aqui): as datas pela periodicidade, o
-// rendimento digitado repetido em cada data e a devolução do principal digitada na última data. Os valores não são
-// divididos nem calculados; cada linha pode ser alterada, retirada ou acrescentada na revisão.
-export function suggestScheduleLines({ frequency, firstDueDate, count, yieldAmount, principalAmount, description }: {
-  frequency: PaymentFrequency; firstDueDate: string; count: number; yieldAmount: string; principalAmount: string; description: string;
+// Sugestão de linhas para o usuário revisar ANTES de gravar (nada é gravado por aqui): as datas pela periodicidade a
+// partir da primeira data informada, no dia do pagamento escolhido, o rendimento digitado repetido em cada data e a
+// devolução do principal digitada na última data. Os valores não são divididos nem calculados; cada linha pode ser
+// alterada, retirada ou acrescentada na revisão.
+export function suggestScheduleLines({ frequency, firstDueDate, count, yieldAmount, principalAmount, description, dueDay = null }: {
+  frequency: PaymentFrequency; firstDueDate: string; count: number; yieldAmount: string; principalAmount: string; description: string; dueDay?: number | null;
 }): ScheduleLineInput[] {
   if (!isIsoDate(firstDueDate) || !Number.isInteger(count) || count < 1 || count > MAX_SCHEDULE_ITEMS) return [];
-  const dates = scheduleDates(firstDueDate, frequency === "AT_MATURITY" ? 1 : count, frequency);
+  const dates = scheduleDates(firstDueDate, frequency === "AT_MATURITY" ? 1 : count, frequency, dueDay);
   return dates.map((dueDate, index) => {
     const last = index === dates.length - 1;
     const principal = last ? principalAmount : "";
@@ -317,24 +338,31 @@ export function suggestScheduleLines({ frequency, firstDueDate, count, yieldAmou
 }
 
 // Modelo padrão (conveniência, nunca obrigatório): pagamentos periódicos de rendimento (a periodicidade do contrato, ou
-// mensal se não houver uma regular), o primeiro um período depois do início, a quantidade pelo prazo (ou até o vencimento)
-// e o principal integral na última data. Só preenche os parâmetros da sugestão; o rendimento é o valor combinado,
-// digitado pelo usuário, e as linhas ainda passam pela revisão antes de gravar.
+// mensal se não houver uma regular) e o principal integral na última data. Não impõe a primeira data: usa a que o
+// usuário já digitou; sem ela, a primeira data no dia do pagamento combinado depois do início (só como ponto de partida
+// editável); sem dia combinado, deixa a primeira data em branco para o usuário informar a negociada. A quantidade vai
+// até o vencimento final do contrato (ou pelo prazo). O rendimento é o valor combinado, digitado pelo usuário, e as
+// linhas ainda passam pela revisão antes de gravar.
 export function defaultModelPlan(investment: {
-  startDate: string; maturityDate: string | null; termCount: number | null; termUnit: string | null; termMonths: number | null; paymentFrequency: string | null; amountCents: number;
-}) {
+  startDate: string; maturityDate: string | null; termCount: number | null; termUnit: string | null; termMonths: number | null; paymentFrequency: string | null; amountCents: number; dueDay?: number | null;
+}, typed: { firstDueDate?: string; dueDay?: number | null } = {}) {
   const own = investment.paymentFrequency as PaymentFrequency | null;
   const frequency: PaymentFrequency = own && FREQUENCY_MONTHS[own] ? own : "MONTHLY";
   const step = FREQUENCY_MONTHS[frequency] as number;
-  const firstDueDate = dueDates("MONTHLY", investment.startDate, step + 1)[step];
-  const months = investment.termCount && investment.termUnit === "MONTHS" ? investment.termCount
-    : investment.termCount && investment.termUnit === "YEARS" ? investment.termCount * 12
-    : !investment.termCount ? investment.termMonths : null;
-  let count: number | null = months && months % step === 0 ? months / step : null;
-  if (!count && investment.maturityDate && investment.maturityDate >= firstDueDate) {
-    count = scheduleDates(firstDueDate, MAX_SCHEDULE_ITEMS, frequency).filter((date) => date <= (investment.maturityDate as string)).length || null;
+  const dueDay = typed.dueDay ?? investment.dueDay ?? null;
+  const firstDueDate = typed.firstDueDate && isIsoDate(typed.firstDueDate) ? typed.firstDueDate : dueDay ? firstDueOnDay(investment.startDate, dueDay) : null;
+  const principalAmount = centsToInput(investment.amountCents);
+  if (!firstDueDate) return { frequency, firstDueDate: null, dueDay, count: null, principalAmount };
+  let count: number | null = null;
+  if (investment.maturityDate && investment.maturityDate >= firstDueDate) {
+    count = scheduleDates(firstDueDate, MAX_SCHEDULE_ITEMS, frequency, dueDay).filter((date) => date <= (investment.maturityDate as string)).length || null;
+  } else if (!investment.maturityDate) {
+    const months = investment.termCount && investment.termUnit === "MONTHS" ? investment.termCount
+      : investment.termCount && investment.termUnit === "YEARS" ? investment.termCount * 12
+      : !investment.termCount ? investment.termMonths : null;
+    count = months && months % step === 0 ? months / step : null;
   }
-  return { frequency, firstDueDate, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount: centsToInput(investment.amountCents) };
+  return { frequency, firstDueDate, dueDay, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount };
 }
 
 // Datas das linhas comparadas com o contrato: antes do início é recusado na gravação; depois do vencimento do contrato
@@ -370,7 +398,7 @@ const investmentFieldLabels: [keyof InvestmentValues, string, (value: Investment
   ["startDate", "Data de início", (v) => formatDate(v.startDate)],
   ["termCount", "Prazo", (v) => termLabel(v)],
   ["maturityDate", "Vencimento do contrato", (v) => v.maturityDate && formatDate(v.maturityDate)],
-  ["dueDay", "Dia de vencimento", (v) => (v.dueDay ? `Dia ${v.dueDay}` : null)],
+  ["dueDay", "Dia do pagamento", (v) => (v.dueDay ? `Dia ${v.dueDay}` : null)],
   ["paymentFrequency", "Periodicidade dos pagamentos", (v) => v.paymentFrequency && PAYMENT_FREQUENCIES[v.paymentFrequency]],
   ["installmentCount", "Quantidade de parcelas", (v) => (v.installmentCount ? String(v.installmentCount) : null)],
   ["paymentMethod", "Forma de pagamento", (v) => v.paymentMethod && INVESTMENT_PAYMENT_METHODS[v.paymentMethod]],

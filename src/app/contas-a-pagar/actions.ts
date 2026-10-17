@@ -226,13 +226,13 @@ export async function declarePriorContributionAction(data: FormData): Promise<Ac
       const [declared] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
         .where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.investmentId, investment.id)));
       const [movement] = await tx.select().from(capitalMovements)
-        .where(and(eq(capitalMovements.id, movementId), eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, wallet.cycleNumber))).for("update");
+        .where(and(eq(capitalMovements.id, movementId), eq(capitalMovements.tenantId, tenantId))).for("update");
       const [reversal] = movement ? await tx.select({ id: capitalMovements.id }).from(capitalMovements)
         .where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.reversedMovementId, movement.id))) : [];
       const check = checkPriorContribution({
         investment: { capitalEntryRule: investment.capitalEntryRule, hasEntry: Boolean(entry), status: investment.status }, alreadyDeclared: Boolean(declared),
-        movement: movement ? { id: movement.id, kind: movement.kind, source: movement.source, occurredAt: movement.occurredAt, amountCents: movement.amountCents, reversed: Boolean(reversal) } : null,
-        cycleStartedOn: cycleStartedOn(wallet), today: todayIso(),
+        movement: movement ? { id: movement.id, kind: movement.kind, source: movement.source, occurredAt: movement.occurredAt, amountCents: movement.amountCents, reversed: Boolean(reversal), cycleNumber: movement.cycleNumber } : null,
+        currentCycle: wallet.cycleNumber, today: todayIso(),
       });
       if (!check.ok) return check;
       const priorId = id("ipc");

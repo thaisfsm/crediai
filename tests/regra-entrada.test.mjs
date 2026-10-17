@@ -10,7 +10,7 @@ import {
 
 const TODAY = "2026-10-14";
 const contract = (extra = {}) => ({ capitalEntryRule: "REQUIRED", hasEntry: false, hasPriorContribution: false, status: "ACTIVE", ...extra });
-const aporte = (extra = {}) => ({ id: "cap-1", kind: "CONTRIBUTION", source: "CAPITAL", occurredAt: "2026-09-01", amountCents: 1_000_000, reversed: false, ...extra });
+const aporte = (extra = {}) => ({ id: "cap-1", kind: "CONTRIBUTION", source: "CAPITAL", occurredAt: "2026-09-01", amountCents: 1_000_000, reversed: false, cycleNumber: 1, ...extra });
 
 test("RE1. contrato novo: sem entrada a baixa é bloqueada; com a entrada, liberada", () => {
   assert.deepEqual(entryEvidence(contract()), { ok: false, error: ENTRY_REQUIRED_ERROR });
@@ -49,20 +49,30 @@ test("RE3. obrigações mostram por que a baixa está bloqueada, por contrato", 
   assert.equal(filterObligations(list, { q: "  ANA ", from: null, to: null, status: null, kind: null }).length, 4);
 });
 
-test("RE4. aporte anterior: só contrato antigo, sem entrada, uma vez, aporte comum do ciclo, não estornado, não futuro", () => {
+test("RE4. aporte anterior: só contrato antigo, sem entrada, uma vez, aporte comum do ciclo atual, não estornado, não futuro", () => {
   const legacy = contract({ capitalEntryRule: null });
-  const ok = (extra = {}) => checkPriorContribution({ investment: legacy, alreadyDeclared: false, movement: aporte(), cycleStartedOn: "2026-08-01", today: TODAY, ...extra });
+  const ok = (extra = {}) => checkPriorContribution({ investment: legacy, alreadyDeclared: false, movement: aporte(), currentCycle: 1, today: TODAY, ...extra });
   assert.deepEqual(ok(), { ok: true });
   assert.match(ok({ investment: contract() }).error, /cadastrado com a regra da entrada/);
   assert.match(ok({ investment: contract({ capitalEntryRule: null, hasEntry: true }) }).error, /já está registrada/);
   assert.match(ok({ investment: contract({ capitalEntryRule: null, status: "CANCELED" }) }).error, /cancelado/);
   assert.match(ok({ alreadyDeclared: true }).error, /já foi indicado/);
   assert.match(ok({ movement: null }).error, /não encontrado/);
-  assert.match(ok({ movement: aporte({ source: "INVESTOR" }) }).error, /não pode ser usado/);
-  assert.match(ok({ movement: aporte({ kind: "WITHDRAWAL" }) }).error, /não pode ser usado/);
-  assert.match(ok({ movement: aporte({ reversed: true }) }).error, /não pode ser usado/);
+  assert.match(ok({ movement: aporte({ kind: "WITHDRAWAL" }) }).error, /não encontrado/);
+  assert.match(ok({ movement: aporte({ source: "INVESTOR" }) }).error, /entrada de outro contrato de investidor/);
+  assert.match(ok({ movement: aporte({ reversed: true }) }).error, /estornado/);
   assert.match(ok({ movement: aporte({ occurredAt: "2026-10-20" }) }).error, /data futura/);
-  assert.match(ok({ movement: aporte({ occurredAt: "2026-07-31" }) }).error, /anterior ao início do ciclo/);
+});
+
+test("RE4b. aporte do ciclo atual com data anterior à criação da carteira pode ser indicado; aporte de ciclo encerrado não", () => {
+  const legacy = contract({ capitalEntryRule: null });
+  const check = (movement, currentCycle = 1) => checkPriorContribution({ investment: legacy, alreadyDeclared: false, movement, currentCycle, today: TODAY });
+  // Carteira criada em 01/10, aporte do ciclo 1 lançado com data 15/07: está no capital, então pode ser indicado.
+  assert.deepEqual(check(aporte({ occurredAt: "2026-07-15", cycleNumber: 1 })), { ok: true });
+  // Depois de "Zerar carteira" (ciclo 2), um aporte do ciclo 1 não está no capital atual: recusado, com a razão real.
+  const closed = check(aporte({ occurredAt: "2026-09-01", cycleNumber: 1 }), 2);
+  assert.match(closed.error, /ciclo 1 da carteira, encerrado ao zerar a carteira/);
+  assert.doesNotMatch(closed.error, /não existe|indisponível/);
 });
 
 test("RE5. entrada e aporte anterior se excluem (o dinheiro não é contado em dobro)", () => {

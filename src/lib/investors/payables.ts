@@ -256,8 +256,10 @@ export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investment
   if (investmentStatus === "CANCELED") return { ok: false, error: "Este contrato está cancelado: a entrada não pode ser registrada." };
   if (!hasWallet) return { ok: false, error: "Defina o capital inicial da carteira (tela Capital) antes de registrar a entrada." };
   if (enteredOn > today) return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) ainda não chegou. Registre a entrada a partir dessa data.` };
+  // Proteção contra capital em dobro: um investimento recebido antes do início do ciclo atual da carteira já pode estar
+  // no capital inicial ou num aporte comum. A entrada nova não é lançada; o sistema não afirma que o dinheiro não existe.
   if (cycleStartedOn && enteredOn < cycleStartedOn) {
-    return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}). Nada foi registrado: confira a data no contrato.` };
+    return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}). Esse dinheiro pode já estar no capital inicial ou num aporte comum, e lançar uma nova entrada poderia contá-lo em dobro. Nada foi registrado. Se o dinheiro entrou por um aporte, indique esse aporte na página do contrato; se ainda não entrou, confira a data do investimento no contrato.` };
   }
   return { ok: true };
 }
@@ -280,23 +282,25 @@ export function entryEvidence(investment: Pick<PayableInvestment, "capitalEntryR
 }
 
 // Aporte anterior de um contrato antigo: um aporte comum (CONTRIBUTION da tela Capital ou do Financeiro, nunca de
-// investidor), não estornado, da carteira do contrato e do ciclo atual (o que veio antes de "Zerar carteira" não está
-// mais no capital). Nunca junto com a entrada (contaria o dinheiro em dobro).
-export type PriorContributionCandidate = { id: string; kind: string; source: string; occurredAt: string; amountCents: number; reversed: boolean };
-export function checkPriorContribution({ investment, alreadyDeclared, movement, cycleStartedOn, today }: {
-  investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "status">; alreadyDeclared: boolean; movement: PriorContributionCandidate | null; cycleStartedOn: string | null; today: string;
+// investidor), não estornado, da carteira do contrato e do ciclo atual. O critério é o ciclo do aporte, não a data
+// digitada: um aporte do ciclo atual com data antiga (ex.: anterior à criação da carteira) está no capital e pode ser
+// indicado; o que veio antes de "Zerar carteira" ficou no ciclo encerrado e não está no capital atual. Nunca junto com a
+// entrada (contaria o dinheiro em dobro), e cada contrato indica um aporte só.
+export type PriorContributionCandidate = { id: string; kind: string; source: string; occurredAt: string; amountCents: number; reversed: boolean; cycleNumber: number };
+export function checkPriorContribution({ investment, alreadyDeclared, movement, currentCycle, today }: {
+  investment: Pick<PayableInvestment, "capitalEntryRule" | "hasEntry" | "status">; alreadyDeclared: boolean; movement: PriorContributionCandidate | null; currentCycle: number; today: string;
 }): { ok: true } | { ok: false; error: string } {
   if (!isLegacyContract(investment)) return { ok: false, error: "Este contrato foi cadastrado com a regra da entrada: registre a entrada do investimento no capital." };
   if (investment.status === "CANCELED") return { ok: false, error: "Este contrato está cancelado: nada pode ser indicado." };
   if (investment.hasEntry) return { ok: false, error: "A entrada deste investimento já está registrada no capital. Não há aporte anterior a indicar." };
   if (alreadyDeclared) return { ok: false, error: "O aporte anterior deste contrato já foi indicado. Nada foi alterado." };
-  if (!movement || movement.kind !== "CONTRIBUTION" || movement.source === "INVESTOR" || movement.reversed) {
-    return { ok: false, error: "Aporte não encontrado nesta carteira ou não pode ser usado (estornado ou de investidor). Nada foi registrado." };
+  if (!movement || movement.kind !== "CONTRIBUTION") return { ok: false, error: "Aporte não encontrado nesta carteira. Nada foi registrado." };
+  if (movement.source === "INVESTOR") return { ok: false, error: "Este lançamento é a entrada de outro contrato de investidor e não pode ser indicado. Nada foi registrado." };
+  if (movement.reversed) return { ok: false, error: "Este aporte foi estornado e não está no capital. Nada foi registrado." };
+  if (movement.cycleNumber !== currentCycle) {
+    return { ok: false, error: `Este aporte pertence ao ciclo ${movement.cycleNumber} da carteira, encerrado ao zerar a carteira; ele não faz parte do capital do ciclo atual (${currentCycle}). Nada foi registrado.` };
   }
   if (movement.occurredAt > today) return { ok: false, error: "Este aporte tem data futura. Nada foi registrado." };
-  if (cycleStartedOn && movement.occurredAt < cycleStartedOn) {
-    return { ok: false, error: `Este aporte é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}) e não está mais no capital. Nada foi registrado.` };
-  }
   return { ok: true };
 }
 
