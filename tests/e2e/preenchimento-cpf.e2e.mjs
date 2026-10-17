@@ -118,3 +118,17 @@ test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avi
   assert.equal(await company.inputValue(), "Nome digitado", "o nome digitado não é substituído");
   await page.context().close();
 });
+
+test("campo Banco com sugestões: lista de bancos por nome ou código, no cliente e na conta do investidor, e continua livre", async () => {
+  const thais = await login("thais@teste.local");
+  let page = await open(thais, "/?tela=clientes");
+  const bank = page.locator('input[name="bankName"]');
+  const listId = await bank.getAttribute("list");
+  assert.ok(listId, "o campo Banco tem lista de sugestões");
+  const options = await page.locator(`datalist[id="${listId}"] option`).evaluateAll((nodes) => nodes.map((node) => node.value));
+  assert.ok(options.includes("341 - Itaú Unibanco") && options.includes("001 - Banco do Brasil") && options.includes("260 - Nubank"), "traz código e nome");
+  assert.ok(options.filter((value) => value.includes("341") || value.toLowerCase().includes("itaú")).length >= 1, "digitar o código ou o nome acha o banco");
+  await bank.fill("Banco que não está na lista");
+  assert.equal(await bank.inputValue(), "Banco que não está na lista", "continua livre para outro banco");
+  await page.context().close();
+});
