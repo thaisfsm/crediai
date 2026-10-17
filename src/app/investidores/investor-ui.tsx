@@ -279,16 +279,14 @@ export function InvestorsHome({ data }: { data: InvestorsPage }) {
             action={!filtered && !creating ? <button className="primary-button" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> Cadastrar o primeiro investidor</button> : undefined} />
         ) : (
           <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Nome</th>{data.isMaster && <th>Carteira</th>}<th>CPF/CNPJ</th><th>Telefone/WhatsApp</th><th>E-mail</th><th>Instagram</th><th>Facebook</th><th>Status</th><th>Investimentos</th><th>Cadastro</th><th /></tr></thead>
+            <thead><tr><th>Nome</th>{data.isMaster && <th>Carteira</th>}<th>CPF/CNPJ</th><th>Telefone/WhatsApp</th><th>E-mail e redes</th><th>Status</th><th>Investimentos</th><th>Cadastro</th><th /></tr></thead>
             <tbody>{data.investors.map((investor: InvestorRow) => (
               <tr key={investor.id}>
                 <td><Link prefetch={false} className="text-link client-link" href={`/investidores/${investor.id}`}><strong>{investor.name}</strong></Link></td>
                 {data.isMaster && <td>{investor.tenantName}</td>}
                 <td>{formatCpfCnpj(investor.document) ?? "—"}</td>
                 <td>{[formatPhone(investor.phone), investor.whatsapp && `WhatsApp ${formatPhone(investor.whatsapp)}`].filter(Boolean).join(" · ") || "—"}</td>
-                <td>{investor.email ?? "—"}</td>
-                <td><SocialLink network="instagram" value={investor.instagram} /></td>
-                <td><SocialLink network="facebook" value={investor.facebook} /></td>
+                <td>{investor.email ?? "—"}{investor.instagram && <small>Instagram: <SocialLink network="instagram" value={investor.instagram} /></small>}{investor.facebook && <small>Facebook: <SocialLink network="facebook" value={investor.facebook} /></small>}</td>
                 <td><InvestorStatusChip status={investor.status} /></td>
                 <td>{investor.investmentCount}</td>
                 <td>{dateOf(investor.createdAt)}</td>

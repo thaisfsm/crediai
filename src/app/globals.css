@@ -1244,3 +1244,15 @@ button { color:inherit; }
   .fit-table .row-actions .outline-button { min-height: 30px; padding: 5px 7px; font-size: 11px; }
   .data-table.fit-table td.actions-cell, .data-table.fit-table th:last-child:empty { position: static; box-shadow: none; background: transparent; }
 }
+
+/* Todas as tabelas: sem rolagem lateral em telas comuns. Textos e títulos quebram linha (valores em R$ usam espaço
+   inseparável, então não se partem), colunas ficam mais justas e o cabeçalho da coluna de ações não ganha fundo escuro. */
+@media (min-width: 741px) {
+  .data-table { min-width: 0; }
+  .data-table th, .data-table td { padding-right: 6px; padding-left: 6px; white-space: normal; }
+  .data-table th:last-child:empty { background: transparent; box-shadow: none; }
+  .data-table .client-link { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+  .data-table td { overflow-wrap: anywhere; }
+  .data-table .row-actions { flex-wrap: wrap; gap: 6px; }
+  .data-table .row-actions .outline-button { padding-right: 8px; padding-left: 8px; }
+}
