@@ -38,6 +38,31 @@ export type PaymentFrequency = keyof typeof PAYMENT_FREQUENCIES;
 // Meses entre uma data e a seguinte no cronograma sugerido (só para as periodicidades regulares).
 export const FREQUENCY_MONTHS: Partial<Record<PaymentFrequency, number>> = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, YEARLY: 12 };
 
+// Liquidez: quando o investidor pode resgatar o crédito. Só nesta data combinada; a devolução antes dela é sempre
+// facultativa de quem contratou (cláusula do contrato). D+N conta N dias corridos depois do término do contrato.
+export const REDEMPTION_RULES = { AT_MATURITY: "Ao término do contrato", D_PLUS: "D+ (dias corridos depois do término)" } as const;
+export type RedemptionRule = keyof typeof REDEMPTION_RULES;
+export const parseRedemptionRule = (value: string) => (Object.keys(REDEMPTION_RULES) as RedemptionRule[]).find((key) => key === value) ?? null;
+export const REDEMPTION_DAYS_MAX = 3650;
+export const redemptionLabel = (rule: RedemptionRule | null, days: number | null) =>
+  rule === "AT_MATURITY" ? "Ao término do contrato" : rule === "D_PLUS" && days ? `D+${days} (${days} ${days === 1 ? "dia corrido depois" : "dias corridos depois"} do término)` : null;
+// Data em que o crédito pode ser resgatado: o vencimento do contrato, ou o vencimento mais N dias. Sem vencimento, null.
+export function redemptionDate(maturityDate: string | null, rule: RedemptionRule | null, days: number | null) {
+  if (!maturityDate || !isIsoDate(maturityDate) || !rule) return null;
+  return rule === "D_PLUS" && days ? addDays(maturityDate, days) : maturityDate;
+}
+// Ajusta a sugestão do cronograma à liquidez: a devolução do principal vai para a data de resgate (sem mudar valores).
+// Se a data de resgate é a da última linha, a linha continua combinada; se for depois, o principal vira uma linha própria.
+export function applyRedemptionDate(lines: ScheduleLineInput[], date: string | null): ScheduleLineInput[] {
+  if (!date || lines.length === 0) return lines;
+  const index = lines.findLastIndex((line) => line.principalAmount.trim() !== "");
+  if (index < 0) return lines;
+  const line = lines[index];
+  if (line.dueDate === date) return lines;
+  const rest = lines.map((item, position) => (position === index ? { ...item, principalAmount: "", kind: item.yieldAmount.trim() ? "YIELD" : item.kind } : item)).filter((item, position) => position !== index || item.yieldAmount.trim() !== "");
+  return [...rest, { kind: "PRINCIPAL", dueDate: date, yieldAmount: "", principalAmount: line.principalAmount, description: line.description }];
+}
+
 export const INVESTORS_PAGE_SIZE = 25;
 const MAX_CENTS = 100_000_000_000; // R$ 1 bilhão: limite técnico contra valores digitados por engano.
 
@@ -134,6 +159,7 @@ export type InvestmentValues = {
   contractNumber: string | null; investedOn: string | null; termMonths: number | null; paymentFrequency: PaymentFrequency | null; installmentCount: number | null;
   contractedOn: string | null; termCount: number | null; termUnit: TermUnit | null; paymentMethod: InvestmentPaymentMethod | null; bankAccountId: string | null;
   yieldTerms: string | null; principalTerms: string | null;
+  redemptionRule: RedemptionRule | null; redemptionDays: number | null; yieldPaymentCents: number | null;
 };
 
 // Número inteiro opcional entre min e max ("" = null; NaN = inválido).
@@ -181,9 +207,18 @@ export function investmentFields(read: Read): { ok: true; values: InvestmentValu
   if (frequencyInput && !paymentFrequency) return { ok: false, error: "Escolha a periodicidade dos pagamentos na lista." };
   const installmentCount = optionalInteger(read("installmentCount", 6), 1, 600);
   if (Number.isNaN(installmentCount)) return { ok: false, error: "A quantidade de parcelas vai de 1 a 600." };
+  const redemptionInput = read("redemptionRule", 20);
+  const redemptionRule = redemptionInput ? parseRedemptionRule(redemptionInput) : null;
+  if (redemptionInput && !redemptionRule) return { ok: false, error: "Escolha a liquidez na lista (ao término do contrato ou D+ dias)." };
+  const redemptionDays = redemptionRule === "D_PLUS" ? optionalInteger(read("redemptionDays", 6), 1, REDEMPTION_DAYS_MAX) : null;
+  if (redemptionRule === "D_PLUS" && (redemptionDays === null || Number.isNaN(redemptionDays))) return { ok: false, error: `Informe quantos dias depois do término o crédito pode ser resgatado (1 a ${REDEMPTION_DAYS_MAX}).` };
+  const yieldInput = read("yieldPayment", 40);
+  const yieldPaymentCents = yieldInput ? parseMoneyToCents(yieldInput) : null;
+  if (yieldInput && (yieldPaymentCents === null || yieldPaymentCents <= 0 || yieldPaymentCents > MAX_CENTS)) return { ok: false, error: "Informe o rendimento de cada pagamento em reais, por exemplo 500,00." };
   return {
     ok: true,
     values: {
+      redemptionRule, redemptionDays: redemptionDays === null || Number.isNaN(redemptionDays) ? null : redemptionDays, yieldPaymentCents,
       amountCents, agreedRateBps, ratePeriod, startDate, maturityDate: optional(maturityInput), dueDay, notes: optional(read("notes", 1000)), status,
       contractNumber: optional(contractNumber), investedOn: optional(investedOn), termMonths: null, paymentFrequency, installmentCount,
       contractedOn: optional(contractedOn), termCount, termUnit, paymentMethod, bankAccountId: optional(read("bankAccountId", 80)),
@@ -344,7 +379,7 @@ export function suggestScheduleLines({ frequency, firstDueDate, count, yieldAmou
 // até o vencimento final do contrato (ou pelo prazo). O rendimento é o valor combinado, digitado pelo usuário, e as
 // linhas ainda passam pela revisão antes de gravar.
 export function defaultModelPlan(investment: {
-  startDate: string; maturityDate: string | null; termCount: number | null; termUnit: string | null; termMonths: number | null; paymentFrequency: string | null; amountCents: number; dueDay?: number | null;
+  startDate: string; maturityDate: string | null; termCount: number | null; termUnit: string | null; termMonths: number | null; paymentFrequency: string | null; amountCents: number; dueDay?: number | null; yieldPaymentCents?: number | null;
 }, typed: { firstDueDate?: string; dueDay?: number | null } = {}) {
   const own = investment.paymentFrequency as PaymentFrequency | null;
   const frequency: PaymentFrequency = own && FREQUENCY_MONTHS[own] ? own : "MONTHLY";
@@ -352,7 +387,8 @@ export function defaultModelPlan(investment: {
   const dueDay = typed.dueDay ?? investment.dueDay ?? null;
   const firstDueDate = typed.firstDueDate && isIsoDate(typed.firstDueDate) ? typed.firstDueDate : dueDay ? firstDueOnDay(investment.startDate, dueDay) : null;
   const principalAmount = centsToInput(investment.amountCents);
-  if (!firstDueDate) return { frequency, firstDueDate: null, dueDay, count: null, principalAmount };
+  const yieldAmount = investment.yieldPaymentCents ? centsToInput(investment.yieldPaymentCents) : "";
+  if (!firstDueDate) return { frequency, firstDueDate: null, dueDay, count: null, principalAmount, yieldAmount };
   let count: number | null = null;
   if (investment.maturityDate && investment.maturityDate >= firstDueDate) {
     count = scheduleDates(firstDueDate, MAX_SCHEDULE_ITEMS, frequency, dueDay).filter((date) => date <= (investment.maturityDate as string)).length || null;
@@ -362,7 +398,7 @@ export function defaultModelPlan(investment: {
       : !investment.termCount ? investment.termMonths : null;
     count = months && months % step === 0 ? months / step : null;
   }
-  return { frequency, firstDueDate, dueDay, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount };
+  return { frequency, firstDueDate, dueDay, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount, yieldAmount };
 }
 
 // Datas das linhas comparadas com o contrato: antes do início é recusado na gravação; depois do vencimento do contrato
@@ -401,6 +437,8 @@ const investmentFieldLabels: [keyof InvestmentValues, string, (value: Investment
   ["dueDay", "Dia do pagamento", (v) => (v.dueDay ? `Dia ${v.dueDay}` : null)],
   ["paymentFrequency", "Periodicidade dos pagamentos", (v) => v.paymentFrequency && PAYMENT_FREQUENCIES[v.paymentFrequency]],
   ["installmentCount", "Quantidade de parcelas", (v) => (v.installmentCount ? String(v.installmentCount) : null)],
+  ["redemptionRule", "Liquidez (resgate do crédito)", (v) => redemptionLabel(v.redemptionRule, v.redemptionDays)],
+  ["yieldPaymentCents", "Rendimento de cada pagamento", (v) => (v.yieldPaymentCents ? formatMoney(v.yieldPaymentCents) : null)],
   ["paymentMethod", "Forma de pagamento", (v) => v.paymentMethod && INVESTMENT_PAYMENT_METHODS[v.paymentMethod]],
   ["bankAccountId", "Conta bancária para os pagamentos", (v) => (v.bankAccountId ? "conta do investidor" : null)],
   ["yieldTerms", "Condições do rendimento", (v) => v.yieldTerms],
@@ -417,7 +455,8 @@ export function investmentChanges(before: InvestmentValues, after: InvestmentVal
     // O prazo é comparado pelo texto ("12 meses"), para que o formato anterior (term_months) igual ao novo não conte como mudança;
     // a conta bancária, pelo id (o texto não diz qual conta).
     const changed = key === "agreedRateBps" ? before.agreedRateBps !== after.agreedRateBps || before.ratePeriod !== after.ratePeriod
-      : key === "termCount" ? termLabel(before) !== termLabel(after) : before[key] !== after[key];
+      : key === "termCount" ? termLabel(before) !== termLabel(after)
+      : key === "redemptionRule" ? redemptionLabel(before.redemptionRule, before.redemptionDays) !== redemptionLabel(after.redemptionRule, after.redemptionDays) : before[key] !== after[key];
     if (changed) changes.push({ field: label, before: show(before) || null, after: show(after) || null });
   }
   return changes;

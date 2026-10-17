@@ -12,7 +12,7 @@ import { loadInvestmentCash } from "./payables-queries";
 import { contractDataHash, contractSource, contractorData, loadContractor } from "./contract-source";
 import {
   INVESTORS_PAGE_SIZE, investorFilters, personTypeOf, scheduleTotals, scheduleVersion, summarizeInvestments,
-  type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorDocumentKind, type InvestorStatus, type PaymentFrequency, type RatePeriod, type TermUnit,
+  type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorDocumentKind, type InvestorStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule, type TermUnit,
 } from "./rules";
 
 type Search = { q?: string; status?: string; carteira?: string; pagina?: string };
@@ -115,7 +115,8 @@ function toInvestmentView(investment: typeof investments.$inferSelect) {
     contractNumber: investment.contractNumber, investedOn: investment.investedOn, termMonths: investment.termMonths,
     paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, installmentCount: investment.installmentCount,
     contractedOn: investment.contractedOn, termCount: investment.termCount, termUnit: investment.termUnit as TermUnit | null, paymentMethod: investment.paymentMethod as InvestmentPaymentMethod | null,
-    bankAccountId: investment.bankAccountId, yieldTerms: investment.yieldTerms, principalTerms: investment.principalTerms, renewedFromInvestmentId: investment.renewedFromInvestmentId,
+    bankAccountId: investment.bankAccountId, yieldTerms: investment.yieldTerms, principalTerms: investment.principalTerms,
+    redemptionRule: investment.redemptionRule as RedemptionRule | null, redemptionDays: investment.redemptionDays, yieldPaymentCents: investment.yieldPaymentCents, renewedFromInvestmentId: investment.renewedFromInvestmentId,
     createdAt: investment.createdAt.toISOString(), updatedAt: investment.updatedAt.toISOString(),
   };
 }

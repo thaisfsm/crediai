@@ -5,7 +5,7 @@ import type { TenantTransaction } from "@/lib/auth/guards";
 import { investmentContractors, type investments, type investors } from "@/lib/db/schema";
 import type { Address } from "./address";
 import { contractFingerprint, type ContractorData, type ContractSource } from "./contract";
-import { investorAddress, type InvestmentStatus, type RatePeriod } from "./rules";
+import { investorAddress, type InvestmentStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule } from "./rules";
 
 type ContractorRow = typeof investmentContractors.$inferSelect;
 
@@ -34,6 +34,8 @@ export function contractSource(investment: typeof investments.$inferSelect, inve
     investment: {
       id: investment.id, amountCents: investment.amountCents, agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod as RatePeriod,
       startDate: investment.startDate, maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status as InvestmentStatus,
+      paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, yieldPaymentCents: investment.yieldPaymentCents,
+      redemptionRule: investment.redemptionRule as RedemptionRule | null, redemptionDays: investment.redemptionDays,
     },
   };
 }

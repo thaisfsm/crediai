@@ -69,6 +69,7 @@ test("IV4. investimento: taxa e período obrigatórios, período nunca presumido
     amountCents: 5_000_000, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-01", maturityDate: null, dueDay: null, notes: null, status: "ACTIVE",
     contractNumber: null, investedOn: null, termMonths: null, paymentFrequency: null, installmentCount: null,
     contractedOn: null, termCount: null, termUnit: null, paymentMethod: null, bankAccountId: null, yieldTerms: null, principalTerms: null,
+    redemptionRule: null, redemptionDays: null, yieldPaymentCents: null,
   });
   const custom = investmentFields(form({ ...base, contractedOn: "2026-09-28", investedOn: "2026-09-30", termCount: "12", termUnit: "MONTHS", paymentMethod: "PIX", bankAccountId: "conta-1", yieldTerms: "mensal até o dia 10", principalTerms: "50% no 6º mês e 50% no 12º" }));
   assert.equal(custom.ok, true);
@@ -89,7 +90,7 @@ test("IV4. investimento: taxa e período obrigatórios, período nunca presumido
   assert.equal(investmentFields(form({ ...base, dueDay: "10", maturityDate: "2027-10-01", status: "PENDING_SIGNATURE" })).values.dueDay, 10);
   // Nenhum campo de rendimento, saldo ou total a devolver é produzido.
   // Nenhum campo de rendimento calculado, saldo ou total a devolver é produzido (as condições são texto livre).
-  assert.ok(!Object.keys(ok.values).filter((key) => !/Terms$/.test(key)).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
+  assert.ok(!Object.keys(ok.values).filter((key) => !/Terms$|^yieldPaymentCents$/.test(key)).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
   assert.equal(rateLabel(150, "YEARLY"), "1,5% ao ano");
   assert.deepEqual(Object.keys(RATE_PERIODS), ["MONTHLY", "YEARLY", "CONTRACT_TERM", "OTHER"]);
 });
@@ -134,4 +135,52 @@ test("IV7. migration 0015 só cria estrutura: nenhuma linha existente é alterad
   }
   // Documento ligado ao investimento (mesmo tenant), não ao investidor.
   assert.match(sql, /FOREIGN KEY \("tenant_id","investment_id"\) REFERENCES "public"."investment"\("tenant_id","id"\)/);
+});
+
+test("IL1. liquidez (ao término ou D+N) e rendimento de cada pagamento: validação, datas e histórico", async () => {
+  const { redemptionDate, redemptionLabel, investmentChanges, applyRedemptionDate } = await import("../src/lib/investors/rules.ts");
+  const base = { amount: "10.000,00", rate: "5", ratePeriod: "MONTHLY", startDate: "2026-07-15" };
+  const atMaturity = investmentFields(form({ ...base, redemptionRule: "AT_MATURITY", redemptionDays: "99", yieldPayment: "500,00" }));
+  assert.equal(atMaturity.ok, true);
+  assert.equal(atMaturity.values.redemptionRule, "AT_MATURITY");
+  assert.equal(atMaturity.values.redemptionDays, null, "dias só valem em D+");
+  assert.equal(atMaturity.values.yieldPaymentCents, 50_000);
+  const dPlus = investmentFields(form({ ...base, redemptionRule: "D_PLUS", redemptionDays: "30" }));
+  assert.equal(dPlus.values.redemptionDays, 30);
+  assert.equal(dPlus.values.yieldPaymentCents, null);
+  for (const bad of [{ redemptionRule: "D_PLUS" }, { redemptionRule: "D_PLUS", redemptionDays: "0" }, { redemptionRule: "D_PLUS", redemptionDays: "3651" }, { redemptionRule: "D_PLUS", redemptionDays: "1,5" }, { redemptionRule: "QUALQUER" }, { yieldPayment: "0" }, { yieldPayment: "abc" }]) {
+    assert.equal(investmentFields(form({ ...base, ...bad })).ok, false, JSON.stringify(bad));
+  }
+  assert.equal(redemptionDate("2027-06-25", "AT_MATURITY", null), "2027-06-25");
+  assert.equal(redemptionDate("2027-06-25", "D_PLUS", 30), "2027-07-25");
+  assert.equal(redemptionDate("2027-06-25", null, null), null);
+  assert.equal(redemptionDate(null, "D_PLUS", 30), null, "sem vencimento não há data presumida");
+  assert.equal(redemptionLabel("AT_MATURITY", null), "Ao término do contrato");
+  assert.match(redemptionLabel("D_PLUS", 30), /^D\+30/);
+  assert.equal(redemptionLabel(null, null), null);
+  // Histórico: mudar de D+30 para D+60 aparece uma vez, com antes e depois.
+  const changes = investmentChanges(dPlus.values, investmentFields(form({ ...base, redemptionRule: "D_PLUS", redemptionDays: "60" })).values);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].field, "Liquidez (resgate do crédito)");
+  assert.match(changes[0].before, /D\+30/);
+  assert.match(changes[0].after, /D\+60/);
+  assert.equal(investmentChanges(atMaturity.values, { ...atMaturity.values, yieldPaymentCents: 60_000 })[0].field, "Rendimento de cada pagamento");
+  // Cronograma sugerido: o principal vai para a data de resgate e os valores não mudam.
+  const lines = [
+    { kind: "YIELD", dueDate: "2027-05-25", yieldAmount: "500,00", principalAmount: "", description: "" },
+    { kind: "COMBINED", dueDate: "2027-06-25", yieldAmount: "500,00", principalAmount: "10.000,00", description: "" },
+  ];
+  assert.deepEqual(applyRedemptionDate(lines, "2027-06-25"), lines, "resgate no último vencimento: nada muda");
+  assert.deepEqual(applyRedemptionDate(lines, "2027-07-25"), [
+    lines[0], { kind: "YIELD", dueDate: "2027-06-25", yieldAmount: "500,00", principalAmount: "", description: "" },
+    { kind: "PRINCIPAL", dueDate: "2027-07-25", yieldAmount: "", principalAmount: "10.000,00", description: "" },
+  ]);
+  assert.deepEqual(applyRedemptionDate(lines, null), lines);
+});
+
+test("IL2. migration 0026 só acrescenta colunas e travas: nenhum dado existente é alterado", () => {
+  const sql = readFileSync("drizzle/0026_investimento_liquidez.sql", "utf8");
+  assert.ok(!/\b(UPDATE|DELETE|TRUNCATE|DROP|INSERT)\b/i.test(sql));
+  assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 3);
+  assert.ok(/investment_redemption_valid/.test(sql) && /investment_yield_payment_valid/.test(sql));
 });

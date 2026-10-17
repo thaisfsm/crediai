@@ -230,6 +230,7 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
       paymentFrequency: investment.paymentFrequency as InvestmentValues["paymentFrequency"], installmentCount: investment.installmentCount,
       contractedOn: investment.contractedOn, termCount: investment.termCount, termUnit: investment.termUnit as TermUnit | null, paymentMethod: investment.paymentMethod as InvestmentPaymentMethod | null,
       bankAccountId: investment.bankAccountId, yieldTerms: investment.yieldTerms, principalTerms: investment.principalTerms,
+      redemptionRule: investment.redemptionRule as InvestmentValues["redemptionRule"], redemptionDays: investment.redemptionDays, yieldPaymentCents: investment.yieldPaymentCents,
     };
     // O prazo no formato anterior (term_months) vem preenchido no formulário em meses e é gravado no formato novo
     // (term_count/term_unit); o texto ("12 meses") é o mesmo, então não conta como alteração.

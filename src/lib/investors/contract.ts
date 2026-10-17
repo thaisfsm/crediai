@@ -7,13 +7,13 @@
 // gerado e a lista do que falta é mostrada. O PDF gerado NÃO é assinado: a versão assinada é anexada depois, em Documentos.
 import { formatCpfCnpj, formatDate, formatMoney, normalizeCpf, normalizeCpfCnpj, onlyDigits } from "../finance/format";
 import { addressComplete, addressFields, addressLine, type Address } from "./address";
-import { RATE_PERIODS, type InvestmentStatus, type RatePeriod } from "./rules";
+import { PAYMENT_FREQUENCIES, RATE_PERIODS, redemptionDate, type InvestmentStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule } from "./rules";
 
 type Failure = { ok: false; error: string };
 type Read = (key: string, max: number) => string;
 
 // Muda quando o texto do modelo mudar: entra no hash dos dados e fica gravado em cada versão gerada.
-export const CONTRACT_TEMPLATE_VERSION = "contrato-investimento-v1";
+export const CONTRACT_TEMPLATE_VERSION = "contrato-investimento-v2";
 
 export type ContractorValues = {
   legalName: string | null; document: string | null; address: Address;
@@ -60,6 +60,7 @@ export type ContractSource = {
   investment: {
     id: string; amountCents: number; agreedRateBps: number; ratePeriod: RatePeriod; startDate: string;
     maturityDate: string | null; dueDay: number | null; notes: string | null; status: InvestmentStatus;
+    paymentFrequency: PaymentFrequency | null; yieldPaymentCents: number | null; redemptionRule: RedemptionRule | null; redemptionDays: number | null;
   };
 };
 
@@ -79,6 +80,7 @@ export function missingContractData(source: ContractSource, includeNotes: boolea
   if (!(investment.amountCents > 0)) missing.push({ section: "Investimento", item: "valor investido" });
   if (!investment.startDate) missing.push({ section: "Investimento", item: "data de início" });
   if (!investment.maturityDate && !investment.dueDay) missing.push({ section: "Investimento", item: "vencimento do contrato ou dia de vencimento" });
+  if (!investment.redemptionRule) missing.push({ section: "Investimento", item: "liquidez (ao término do contrato ou D+ dias)" });
   if (investment.ratePeriod === "OTHER" && !(includeNotes && investment.notes?.trim())) {
     missing.push({ section: "Investimento", item: "período da taxa \"outro\": descreva o período nas observações e inclua as observações no contrato" });
   }
@@ -95,6 +97,7 @@ export function contractFingerprint(source: ContractSource, includeNotes: boolea
     investment: {
       id: investment.id, amountCents: investment.amountCents, agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod, startDate: investment.startDate,
       maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: includeNotes ? investment.notes : null,
+      paymentFrequency: investment.paymentFrequency, yieldPaymentCents: investment.yieldPaymentCents, redemptionRule: investment.redemptionRule, redemptionDays: investment.redemptionDays,
     },
     includeNotes,
   });
@@ -203,7 +206,18 @@ export function buildContract(source: ContractSource, includeNotes: boolean, met
 
   n = heading("DA TAXA COMBINADA");
   paragraph({ text: `${n}.1. As partes registram a taxa combinada de ` }, { text: contractRateText(investment.agreedRateBps, investment.ratePeriod), bold: true }, { text: "." });
-  paragraph({ text: `${n}.2. Este instrumento não estabelece forma de cálculo, capitalização, periodicidade ou data de pagamento de rendimentos além do que estiver expressamente registrado neste contrato.` });
+  if (investment.paymentFrequency || investment.yieldPaymentCents) {
+    const periodicity = investment.paymentFrequency ? PAYMENT_FREQUENCIES[investment.paymentFrequency].toLowerCase() : null;
+    const parts: Run[] = [{ text: `${n}.2. A remuneração será paga` }];
+    if (periodicity) parts.push({ text: ` com periodicidade ` }, { text: periodicity, bold: true });
+    if (investment.yieldPaymentCents) parts.push({ text: `${periodicity ? ", no valor de " : " no valor de "}` }, { text: formatMoney(investment.yieldPaymentCents), bold: true }, { text: ` (${moneyInWords(investment.yieldPaymentCents)}) a cada pagamento` });
+    if (investment.dueDay) parts.push({ text: `, no dia ${investment.dueDay} de cada mês` });
+    parts.push({ text: ", nas datas combinadas entre as partes." });
+    paragraph(...parts);
+    paragraph({ text: `${n}.3. Este instrumento não estabelece outra forma de cálculo, capitalização ou data de pagamento de rendimentos além do que estiver expressamente registrado neste contrato.` });
+  } else {
+    paragraph({ text: `${n}.2. Este instrumento não estabelece forma de cálculo, capitalização, periodicidade ou data de pagamento de rendimentos além do que estiver expressamente registrado neste contrato.` });
+  }
 
   n = heading("DO PRAZO E DO VENCIMENTO");
   let item = 0;
@@ -211,6 +225,18 @@ export function buildContract(source: ContractSource, includeNotes: boolean, met
   paragraph({ text: `${sub()}Data de início: ` }, { text: formatDate(investment.startDate), bold: true }, { text: "." });
   if (investment.maturityDate) paragraph({ text: `${sub()}Vencimento do contrato: ` }, { text: formatDate(investment.maturityDate), bold: true }, { text: "." });
   if (investment.dueDay) paragraph({ text: `${sub()}Dia de vencimento combinado: ` }, { text: `dia ${investment.dueDay}`, bold: true }, { text: "." });
+
+  if (investment.redemptionRule) {
+    n = heading("DA LIQUIDEZ E DO RESGATE");
+    const liquidityDate = redemptionDate(investment.maturityDate, investment.redemptionRule, investment.redemptionDays);
+    const days = investment.redemptionDays;
+    const when = investment.redemptionRule === "D_PLUS" && days
+      ? `D+${days}, isto é, ${days} ${days === 1 ? "dia corrido" : "dias corridos"} após o término do contrato`
+      : "ao término do contrato";
+    paragraph({ text: `${n}.1. A liquidez do crédito investido é: ` }, { text: when, bold: true }, { text: liquidityDate ? `, em ` : "." }, ...(liquidityDate ? [{ text: formatDate(liquidityDate), bold: true }, { text: "." }] : []));
+    paragraph({ text: `${n}.2. O INVESTIDOR somente poderá resgatar o crédito investido na data de liquidez prevista nesta cláusula, não havendo direito a resgate antecipado.` });
+    paragraph({ text: `${n}.3. A CONTRATANTE poderá, a seu exclusivo critério, devolver o crédito investido, total ou parcialmente, a qualquer momento antes da data de liquidez, sem que isso a obrigue a fazê-lo e sem que o INVESTIDOR possa exigir a devolução antecipada.` });
+  }
 
   if (notes) {
     n = heading("DAS CONDIÇÕES ADICIONAIS");

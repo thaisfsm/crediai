@@ -4,7 +4,7 @@ import { useState } from "react";
 import { centsToInput, formatDate, formatMoney, parseMoneyToCents } from "@/lib/finance/format";
 import { LINE_STATUS, type LineStatus } from "@/lib/investors/position";
 import type { InvestmentDetail } from "@/lib/investors/queries";
-import { LINE_KINDS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, defaultModelPlan, suggestScheduleLines, type LineKind, type PaymentFrequency, type ScheduleLineInput } from "@/lib/investors/rules";
+import { LINE_KINDS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, applyRedemptionDate, defaultModelPlan, redemptionDate, suggestScheduleLines, type LineKind, type PaymentFrequency, type ScheduleLineInput } from "@/lib/investors/rules";
 import { DateField } from "../date-field";
 import { EmptyPanel, Feedback, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
@@ -80,7 +80,7 @@ export function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDo
       {editable && anyPaid && <p className="capital-note">Linhas com pagamento registrado ficam travadas para preservar o histórico financeiro; o cronograma não pode mais ser substituído, mas novas linhas podem ser incluídas.</p>}
       {mode && <ScheduleLinesEditor data={data} mode={mode} onDone={done} onCancel={() => setMode(null)} />}
       {adding && <ScheduleItemForm investmentId={investment.id} onDone={done} onCancel={() => setAdding(false)} />}
-      {lines.length === 0 ? <EmptyPanel icon="calendar" text="Nenhum pagamento no cronograma ainda." /> : (
+      {lines.length === 0 ? <EmptyPanel icon="calendar" text="Nenhum pagamento no cronograma ainda. Monte o cronograma para os pagamentos aparecerem em Financeiro > Contas a pagar, na data combinada." /> : (
         <>
           <dl className="payment-summary">
             <div><dt>Rendimentos informados</dt><dd>{formatMoney(totals.yieldCents)}</dd></div>
@@ -191,7 +191,7 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
   const [count, setCount] = useState(String(investment.installmentCount ?? ""));
   // Dia do pagamento combinado: vem do contrato (se houver) e pode ser trocado aqui; não precisa ser o dia do início.
   const [dueDay, setDueDay] = useState(investment.dueDay ? String(investment.dueDay) : "");
-  const [yieldAmount, setYieldAmount] = useState("");
+  const [yieldAmount, setYieldAmount] = useState(investment.yieldPaymentCents ? centsToInput(investment.yieldPaymentCents) : "");
   const [principalAmount, setPrincipalAmount] = useState("");
   const [description, setDescription] = useState("");
   const [lines, setLines] = useState<ScheduleLineInput[]>([]);
@@ -203,8 +203,10 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
     if (dueDay && !dayNumber(dueDay)) return setHint("O dia do pagamento vai de 1 a 31 (ou deixe em branco para usar o dia da primeira data).");
     const suggestion = suggestScheduleLines({ frequency: values.frequency, firstDueDate: values.firstDueDate, count: values.frequency === "AT_MATURITY" ? 1 : Number(values.count), yieldAmount: yieldAmount.trim(), principalAmount: values.principalAmount.trim(), description: description.trim(), dueDay: dayNumber(dueDay) });
     if (suggestion.length === 0) return setHint(`Informe a data do primeiro pagamento combinada e a quantidade (1 a ${MAX_SCHEDULE_ITEMS}).`);
-    setHint(null);
-    setLines(suggestion);
+    // Liquidez combinada: a devolução do principal vai para a data de resgate (ao término do contrato ou D+N).
+    const resgate = redemptionDate(investment.maturityDate, investment.redemptionRule, investment.redemptionDays);
+    setHint(resgate ? `Devolução do principal na data de resgate combinada (${formatDate(resgate)}). Confira antes de gravar.` : null);
+    setLines(applyRedemptionDate(suggestion, resgate));
   };
   const suggest = () => suggestWith({ frequency, firstDueDate, count, principalAmount });
   // Modelo padrão: preenche periodicidade, quantidade até o vencimento final e principal integral na última data. A

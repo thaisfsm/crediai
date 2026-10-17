@@ -176,6 +176,13 @@
       "when": 1792273617273,
       "tag": "0025_renegociacao",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792277972331,
+      "tag": "0026_investimento_liquidez",
+      "breakpoints": true
     }
   ]
 }

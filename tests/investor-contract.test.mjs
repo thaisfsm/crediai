@@ -19,7 +19,7 @@ const address = (overrides = {}) => ({ Cep: "01310100", Street: "Avenida Paulist
 const source = (overrides = {}) => ({
   contractor: { legalName: "Gestão de Crédito Ação Ltda.", document: "11222333000181", address: address(), representativeName: "Thaís Fernanda", representativeDocument: "41179705858", confirmedAt: "2026-10-13T12:00:00.000Z", ...overrides.contractor },
   investor: { name: "João Conceição Araújo", document: "41179705858", address: address({ Street: "Rua São João", Number: "45", Complement: null, District: "Centro", City: "Ribeirão Preto" }), ...overrides.investor },
-  investment: { id: "ivt_teste", amountCents: 5_000_050, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: 10, notes: null, status: "ACTIVE", ...overrides.investment },
+  investment: { id: "ivt_teste", amountCents: 5_000_050, agreedRateBps: 150, ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: 10, notes: null, status: "ACTIVE", paymentFrequency: "MONTHLY", yieldPaymentCents: 50_000, redemptionRule: "AT_MATURITY", redemptionDays: null, ...overrides.investment },
 });
 const generatedAt = new Date("2026-10-13T13:05:00Z");
 const render = async (data, includeNotes = false, version = 1) => renderContractPdf(buildContract(data, includeNotes, { version, generatedAt }), generatedAt, fonts);
@@ -99,7 +99,7 @@ test("CT5. o contrato não inventa regras nem reaproveita o modelo de empréstim
   }
   // A única taxa no texto é a cadastrada; nenhum valor de rendimento é calculado.
   assert.deepEqual(text.match(/\d+(,\d+)?%/g), ["1,5%"]);
-  assert.ok(!/r\$ (?!50\.000,50)/.test(text), "nenhum outro valor em reais aparece");
+  assert.ok(!/r\$ (?!50\.000,50|500,00)/.test(text), "nenhum outro valor em reais aparece (só o investido e o rendimento digitado)");
   // Observações só entram quando o usuário escolhe.
   const withNotes = pdfText(await render(source({ investment: { notes: "Rendimentos pagos por PIX até o dia 10." } }), true));
   const withoutNotes = pdfText(await render(source({ investment: { notes: "Rendimentos pagos por PIX até o dia 10." } }), false));
@@ -171,4 +171,23 @@ test("CT9. migration 0016 só cria estrutura: nenhuma linha existente é alterad
   assert.match(sql, /"investment_document_contract_same_tenant_fk" FOREIGN KEY \("tenant_id","contract_id"\) REFERENCES "public"."investment_contract"\("tenant_id","id"\)/);
   assert.match(sql, /CREATE UNIQUE INDEX "investment_contract_current_unique"/);
   assert.match(sql, /'investment_contract', 'investment_contractor'/);
+});
+
+test("CT10. cláusulas de liquidez/resgate e de remuneração; liquidez obrigatória", async () => {
+  const text = (data) => pdfText(Buffer.from(data)).replace(/\s+/g, " ");
+  const atEnd = text(await render(source(), false));
+  for (const expected of [
+    "DA LIQUIDEZ E DO RESGATE", "A liquidez do crédito investido é: ao término do contrato, em 13/10/2027.",
+    "somente poderá resgatar o crédito investido na data de liquidez", "não havendo direito a resgate antecipado",
+    "poderá, a seu exclusivo critério, devolver o crédito investido, total ou parcialmente, a qualquer momento antes da data de liquidez",
+    "A remuneração será paga com periodicidade mensal, no valor de R$ 500,00 (quinhentos reais) a cada pagamento, no dia 10 de cada mês",
+  ]) assert.ok(atEnd.includes(expected), `faltou "${expected}"`);
+  const dPlus = text(await render(source({ investment: { redemptionRule: "D_PLUS", redemptionDays: 30 } }), false));
+  assert.ok(dPlus.includes("D+30, isto é, 30 dias corridos após o término do contrato, em 12/11/2027."));
+  const bare = text(await render(source({ investment: { paymentFrequency: null, yieldPaymentCents: null } }), false));
+  assert.ok(bare.includes("não estabelece forma de cálculo, capitalização, periodicidade ou data de pagamento"), "sem remuneração informada, o texto não presume nada");
+  assert.ok(!bare.includes("A remuneração será paga"));
+  assert.deepEqual(missingContractData(source({ investment: { redemptionRule: null, redemptionDays: null } }), false), [{ section: "Investimento", item: "liquidez (ao término do contrato ou D+ dias)" }]);
+  assert.notEqual(contractFingerprint(source({ investment: { redemptionRule: "D_PLUS", redemptionDays: 30 } }), false), contractFingerprint(source(), false));
+  assert.notEqual(contractFingerprint(source({ investment: { yieldPaymentCents: 60_000 } }), false), contractFingerprint(source(), false));
 });

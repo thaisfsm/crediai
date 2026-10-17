@@ -41,7 +41,7 @@ test("IS3. contrato: identificação, datas, prazo com unidade, periodicidade e 
   assert.equal(investmentFields(form({ ...base, paymentFrequency: "WEEKLY" })).ok, false);
   assert.equal(investmentFields(form({ ...base, installmentCount: "601" })).ok, false);
   assert.equal(investmentFields(form({ ...base, investedOn: "2026-02-30" })).ok, false);
-  assert.ok(!Object.keys(full.values).filter((key) => !/Terms$/.test(key)).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
+  assert.ok(!Object.keys(full.values).filter((key) => !/Terms$|^yieldPaymentCents$/.test(key)).some((key) => /yield|rendimento|balance|saldo|return/i.test(key)));
   assert.deepEqual(Object.keys(PAYMENT_FREQUENCIES), ["MONTHLY", "QUARTERLY", "SEMIANNUAL", "YEARLY", "AT_MATURITY", "OTHER"]);
 });
 
@@ -83,10 +83,10 @@ test("IS5. sugestão para revisar: valores exatamente os digitados, principal s�
 test("IS5b. modelo padrão: periodicidade do contrato (ou mensal), primeira data negociada, principal integral no fim; nada fixo", () => {
   const contract = { startDate: "2026-10-15", maturityDate: null, termCount: 12, termUnit: "MONTHS", termMonths: null, paymentFrequency: null, amountCents: 10_000_000, dueDay: null };
   // Sem dia do pagamento e sem primeira data digitada, o modelo não presume a primeira data (nem "um mês depois do início").
-  assert.deepEqual(defaultModelPlan(contract), { frequency: "MONTHLY", firstDueDate: null, dueDay: null, count: null, principalAmount: "100.000,00" });
+  assert.deepEqual(defaultModelPlan(contract), { frequency: "MONTHLY", firstDueDate: null, dueDay: null, count: null, principalAmount: "100.000,00", yieldAmount: "" });
   // Primeira data digitada pelo usuário: é a que vale; a quantidade vem do prazo.
-  assert.deepEqual(defaultModelPlan(contract, { firstDueDate: "2026-11-15" }), { frequency: "MONTHLY", firstDueDate: "2026-11-15", dueDay: null, count: 12, principalAmount: "100.000,00" });
-  assert.deepEqual(defaultModelPlan({ ...contract, paymentFrequency: "QUARTERLY", termCount: 2, termUnit: "YEARS" }, { firstDueDate: "2027-01-15" }), { frequency: "QUARTERLY", firstDueDate: "2027-01-15", dueDay: null, count: 8, principalAmount: "100.000,00" });
+  assert.deepEqual(defaultModelPlan(contract, { firstDueDate: "2026-11-15" }), { frequency: "MONTHLY", firstDueDate: "2026-11-15", dueDay: null, count: 12, principalAmount: "100.000,00", yieldAmount: "" });
+  assert.deepEqual(defaultModelPlan({ ...contract, paymentFrequency: "QUARTERLY", termCount: 2, termUnit: "YEARS" }, { firstDueDate: "2027-01-15" }), { frequency: "QUARTERLY", firstDueDate: "2027-01-15", dueDay: null, count: 8, principalAmount: "100.000,00", yieldAmount: "" });
   // Com vencimento final: conta as datas até ele; sem prazo nem vencimento: a quantidade fica para o usuário.
   assert.equal(defaultModelPlan({ ...contract, termCount: null, termUnit: null, maturityDate: "2027-04-15" }, { firstDueDate: "2026-11-15" }).count, 6);
   assert.equal(defaultModelPlan({ ...contract, termCount: null, termUnit: null }, { firstDueDate: "2026-11-15" }).count, null);
@@ -108,7 +108,7 @@ test("IS5d. início do contrato diferente do dia do pagamento: início 10/10, pa
   assert.equal(firstDueOnDay("2026-10-10", 0), null);
   const contract = { startDate: "2026-10-10", maturityDate: "2027-10-25", termCount: 12, termUnit: "MONTHS", termMonths: null, paymentFrequency: "MONTHLY", amountCents: 1_000_000, dueDay: 25 };
   const plan = defaultModelPlan(contract);
-  assert.deepEqual(plan, { frequency: "MONTHLY", firstDueDate: "2026-10-25", dueDay: 25, count: 13, principalAmount: "10.000,00" });
+  assert.deepEqual(plan, { frequency: "MONTHLY", firstDueDate: "2026-10-25", dueDay: 25, count: 13, principalAmount: "10.000,00", yieldAmount: "" });
   const lines = suggestScheduleLines({ ...plan, yieldAmount: "500,00", description: "" });
   assert.ok(lines.every((line) => line.dueDate.endsWith("-25")), "todas no dia 25");
   assert.equal(lines.at(-1).dueDate, "2027-10-25");

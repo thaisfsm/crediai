@@ -673,6 +673,11 @@ export const investments = pgTable("investment", {
   bankAccountId: text("bank_account_id"),
   yieldTerms: text("yield_terms"),
   principalTerms: text("principal_terms"),
+  // Migração 0026: liquidez (quando o investidor pode resgatar o crédito: ao término do contrato ou D+N dias depois dele)
+  // e o valor do rendimento de cada pagamento, digitado por quem contratou. Nada é calculado com eles.
+  redemptionRule: text("redemption_rule"),
+  redemptionDays: integer("redemption_days"),
+  yieldPaymentCents: bigint("yield_payment_cents", { mode: "number" }),
   // Renovação (migração 0024): o contrato novo aponta para o anterior. O principal ainda não devolvido do anterior passa
   // para o novo sem nova entrada no capital; o anterior fica encerrado com todo o histórico. Uma renovação por contrato.
   renewedFromInvestmentId: text("renewed_from_investment_id"),
@@ -700,6 +705,8 @@ export const investments = pgTable("investment", {
   check("investment_payment_frequency_valid", sql`${table.paymentFrequency} is null or ${table.paymentFrequency} in ('MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'YEARLY', 'AT_MATURITY', 'OTHER')`),
   check("investment_term_pair", sql`(${table.termCount} is null) = (${table.termUnit} is null) and (${table.termUnit} is null or ${table.termUnit} in ('DAYS', 'MONTHS', 'YEARS'))`),
   check("investment_term_count_valid", sql`${table.termCount} is null or ${table.termCount} between 1 and 18250`),
+  check("investment_redemption_valid", sql`(${table.redemptionRule} is null and ${table.redemptionDays} is null) or (${table.redemptionRule} = 'AT_MATURITY' and ${table.redemptionDays} is null) or (${table.redemptionRule} = 'D_PLUS' and ${table.redemptionDays} between 1 and 3650)`),
+  check("investment_yield_payment_valid", sql`${table.yieldPaymentCents} is null or ${table.yieldPaymentCents} > 0`),
   check("investment_payment_method_valid", sql`${table.paymentMethod} is null or ${table.paymentMethod} in ('PIX', 'TRANSFER', 'CASH', 'OTHER')`),
   // A conta vinculada é sempre do próprio investidor do contrato, na mesma carteira.
   foreignKey({ name: "investment_renewed_from_same_tenant_fk", columns: [table.tenantId, table.renewedFromInvestmentId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
