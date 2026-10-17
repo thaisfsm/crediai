@@ -60,7 +60,7 @@ test("PQ1. cadastra R$ 600 em 3 × R$ 300 quinzenais com as datas do exemplo", a
   assert.equal(result.ok, true, JSON.stringify(result));
   const [op] = await admin(`select *, first_due_date::text as first_due, due_date::text as due from loan_operation where client_id = 'c_e2e_quinz'`);
   opId = op.id;
-  assert.deepEqual([op.modality, op.frequency, Number(op.principal_cents), Number(op.interest_cents), Number(op.total_cents), op.installment_count, Number(op.installment_cents), op.first_due, op.due, op.calculation_rule, op.interest_rate_bps],
+  assert.deepEqual([op.modality, op.frequency, Number(op.principal_cents), Number(op.interest_cents), Number(op.total_cents), op.installment_count, Number(op.installment_cents), op.first_due, op.due, op.calculation_rule, Number(op.interest_rate_bps)],
     ["INSTALLMENT", "BIWEEKLY", 60000, 30000, 90000, 3, 30000, FIRST_DUE, "2026-12-06", "FIXED_BIWEEKLY_INSTALLMENTS_V1", 1667]);
   // O principal sai do capital uma única vez.
   assert.equal(await available("ten_roberio"), availableBefore - 60000);

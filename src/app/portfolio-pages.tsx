@@ -6,7 +6,7 @@ import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
 import type { ClientSearchResult } from "@/lib/finance/client-search";
-import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
+import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps } from "@/lib/finance/format";
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import { INVESTOR_CATEGORIES, isInvestorCategory } from "@/lib/investors/payables";
 import type { TenantPortfolio } from "@/lib/finance/queries";
@@ -917,7 +917,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   const single = modality === "SINGLE";
   const daily = single && frequency === "DAILY";
   const principalCents = parseMoneyToCents(single ? principal : loanAmount);
-  const rateBps = parseRateToBps(rate);
+  const rateBps = parseLoanRateToBps(rate);
   const installmentCents = parseMoneyToCents(installment);
   const count = /^\d+$/.test(term.trim()) ? Number(term.trim()) : null;
   const dayCount = /^\d+$/.test(days.trim()) && Number(days) >= 1 && Number(days) <= 365 ? Number(days) : null;

@@ -10,7 +10,7 @@ import { withTenantContext } from "@/lib/auth/guards";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { clients, loanOperations, tenants, wallets } from "@/lib/db/schema";
 import { tenantCapital } from "@/lib/finance/finance-queries";
-import { formatMoney, isIsoDate, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { formatMoney, isIsoDate, parseMoneyToCents, parseLoanRateToBps, todayIso } from "@/lib/finance/format";
 import { operationCode } from "@/lib/finance/portfolio";
 import { renegotiationContract, renegotiationPosition, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
 
@@ -26,7 +26,7 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
   if (text(data, "confirm", 5) !== "1") return { ok: false, error: "Confirme a renegociação para gravar." };
   const modality: RenegotiationModality = text(data, "modality", 20) === "SINGLE" ? "SINGLE" : "INSTALLMENT";
   const frequency: RenegotiationFrequency = text(data, "frequency", 20) === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
-  const rateBps = parseRateToBps(text(data, "rate", 20));
+  const rateBps = parseLoanRateToBps(text(data, "rate", 20));
   if (rateBps === null || rateBps > 100_000) return { ok: false, error: "Informe a taxa de juros em %, por exemplo 5." };
   const countInput = text(data, "count", 5);
   const count = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(countInput) ? Number(countInput) : NaN) : 1;
