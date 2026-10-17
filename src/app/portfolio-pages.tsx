@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
+import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
 import type { ClientSearchResult } from "@/lib/finance/client-search";
@@ -372,6 +372,44 @@ export function AddressFieldset({ legend, nameOf, initialOf }: { legend: string;
   );
 }
 
+// Preenchimento pelo CPF: ao completar um CPF válido, procura o CPF nos cadastros da própria carteira (cliente e investidor)
+// e preenche só os campos ainda vazios do formulário, sem apagar o que a pessoa já digitou. Não consulta serviço externo.
+// No formulário de cliente um CPF já cliente só avisa (CPF é único por carteira); o mesmo vale para o de investidor.
+function setEmptyField(form: HTMLFormElement, name: string, value: string) {
+  const element = form.elements.namedItem(name);
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement) || element.value) return;
+  const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(element, value);
+  element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+}
+export function usePersonPrefill(target: "client" | "investor") {
+  const [notice, setNotice] = useState<string | null>(null);
+  const last = useRef("");
+  const onInput = (event: FormEvent<HTMLFormElement>) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.name !== "document") return;
+    const form = event.currentTarget;
+    const digits = onlyDigits(input.value);
+    last.current = digits;
+    if (digits.length !== 11) return setNotice(null);
+    void lookupRegisteredPersonAction(digits).then((result) => {
+      if (last.current !== digits || !result.ok) return;
+      const sameKind = result.people.find((person) => person.source === target);
+      const other = result.people.find((person) => person.source !== target);
+      if (sameKind) return setNotice(`Este CPF já está cadastrado como ${target === "client" ? "cliente" : "investidor"}: ${sameKind.name}. Use o cadastro existente.`);
+      if (!other) return setNotice(null);
+      const addressName = (part: string) => (target === "client" ? `residential${part}` : `address${part}`);
+      for (const [key, value] of Object.entries(other.values)) {
+        if (["name", "phone", "whatsapp", "email", "instagram", "facebook"].includes(key)) setEmptyField(form, key, value);
+        else if (key !== "Cep") setEmptyField(form, addressName(key), value);
+      }
+      if (other.values.Cep) setEmptyField(form, addressName("Cep"), other.values.Cep);
+      setNotice(`Campos vazios preenchidos com o cadastro de ${other.source === "client" ? "cliente" : "investidor"} ${other.name}. Confira antes de gravar.`);
+    }).catch(() => undefined);
+  };
+  return { notice, onInput };
+}
+
 // Formulário de cadastro e edição. CPF e telefone recebem máscara enquanto o usuário digita; o servidor grava só os dígitos.
 function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | null; onChanged: () => void; onCancel: () => void }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
@@ -381,11 +419,13 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
     onChanged();
     if (editing) onCancel();
   });
+  const prefill = usePersonPrefill("client");
   return (
     <section className="panel form-panel" aria-label={editing ? "Editar cliente" : "Novo cliente"}>
       <div className="panel-header"><div><h2>{editing ? `Editar ${editing.name}` : "Novo cliente"}</h2><p>Somente o nome é obrigatório.</p></div></div>
-      <form className="form-grid" onSubmit={onSubmit} key={resetKey}>
+      <form className="form-grid" onSubmit={onSubmit} onInput={editing ? undefined : prefill.onInput} key={resetKey}>
         {editing && <input type="hidden" name="clientId" value={editing.id} />}
+        {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
         <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
         <label className="field"><span>Telefone</span><MaskedInput name="phone" mask={maskPhone} initial={editing ? formatPhone(editing.phone) ?? "" : ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
