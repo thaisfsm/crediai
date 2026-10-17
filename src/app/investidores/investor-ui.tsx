@@ -285,7 +285,7 @@ export function InvestorsHome({ data }: { data: InvestorsPage }) {
                 <td><Link prefetch={false} className="text-link client-link" href={`/investidores/${investor.id}`}><strong>{investor.name}</strong></Link></td>
                 {data.isMaster && <td>{investor.tenantName}</td>}
                 <td>{formatCpfCnpj(investor.document) ?? "—"}</td>
-                <td>{[formatPhone(investor.phone), investor.whatsapp && `WhatsApp ${formatPhone(investor.whatsapp)}`].filter(Boolean).join(" · ") || "—"}</td>
+                <td className="nowrap-cell">{formatPhone(investor.phone) ?? "—"}{investor.whatsapp && <small>WhatsApp {formatPhone(investor.whatsapp)}</small>}</td>
                 <td>{investor.email ?? "—"}{investor.instagram && <small>Instagram: <SocialLink network="instagram" value={investor.instagram} /></small>}{investor.facebook && <small>Facebook: <SocialLink network="facebook" value={investor.facebook} /></small>}</td>
                 <td><InvestorStatusChip status={investor.status} /></td>
                 <td>{investor.investmentCount}</td>
