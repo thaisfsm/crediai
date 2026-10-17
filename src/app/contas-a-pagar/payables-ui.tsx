@@ -210,8 +210,10 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
       <section className="panel form-panel" aria-label="Filtros">
         <form className="investor-filters payables-filters" action="/contas-a-pagar" method="get" role="search" key={JSON.stringify(filters)}>
           {tab !== "hoje" && <input type="hidden" name="aba" value={tab} />}
-          <label className="field"><span>Investidor</span><input name="q" defaultValue={filters.q} placeholder="Nome ou identificação do contrato" list="payables-investors" autoComplete="off" />
-            <datalist id="payables-investors">{[...new Set(data.investorNames)].map((name) => <option key={name} value={name} />)}</datalist></label>
+          <label className="field"><span>Investidor</span><select name="q" defaultValue={filters.q}>
+            <option value="">Todos os investidores</option>
+            {[...new Set([...data.investorNames, ...(filters.q ? [filters.q] : [])])].map((name) => <option key={name} value={name}>{name}</option>)}
+          </select></label>
           <DateField label="Vencimento de" name="de" defaultValue={filters.from ?? ""} />
           <DateField label="até" name="ate" defaultValue={filters.to ?? ""} />
           <label className="field"><span>Situação</span><select name="situacao" defaultValue={filters.status ? statusSlug(filters.status) : ""}>
