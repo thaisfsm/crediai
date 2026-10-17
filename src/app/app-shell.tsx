@@ -25,9 +25,8 @@ export function navKeyFromSlug(slug: string | undefined): NavKey {
 export const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?tela=${NAV_SLUGS[label]}`);
 const itemHref = (label: NavLabel) => PAGE_ROUTES[label] ?? navHref(label as NavKey);
 
-// sub: item dentro do anterior (Contas a pagar fica no Financeiro).
-const navGroups: { title: string; items: { label: NavLabel; icon: IconName; sub?: boolean }[] }[] = [
-  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "clock", sub: true }, { label: "Investidores", icon: "briefcase" }] },
+const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
+  { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "file" }, { label: "Investidores", icon: "briefcase" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Renegociação", icon: "sparkles" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
 ];
@@ -80,8 +79,8 @@ export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNa
           <div className="nav-group" key={group.title}>
             <p className="nav-heading">{group.title}</p>
             {group.items.map((item) => (
-              <Link prefetch={false} key={item.label} href={itemHref(item.label)} className={`nav-item${item.sub ? " nav-subitem" : ""} ${active === item.label ? "nav-item-active" : ""}`} onClick={intercept(item.label)} aria-current={active === item.label ? "page" : undefined}>
-                <Icon name={item.icon} size={item.sub ? 15 : 18} /><span>{item.label}</span>
+              <Link prefetch={false} key={item.label} href={itemHref(item.label)} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={intercept(item.label)} aria-current={active === item.label ? "page" : undefined}>
+                <Icon name={item.icon} size={18} /><span>{item.label}</span>
                 {item.label === "Cobranças" && pendingCharges > 0 && <span className="nav-count">{pendingCharges}</span>}
               </Link>
             ))}
