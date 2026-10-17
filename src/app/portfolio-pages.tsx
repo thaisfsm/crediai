@@ -723,6 +723,7 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
       <PageHeading eyebrow="CREDIAI · CLIENTES" title={client.name} description={[formatCpf(client.document) && `CPF ${formatCpf(client.document)}`, formatPhone(client.phone), client.notes].filter(Boolean).join(" · ") || "Cliente da carteira."}>
         <button className="outline-button" onClick={onBack}><Icon name="arrow" size={15} /> Voltar para clientes</button>
       </PageHeading>
+      <ClientProfitPanel client={client} portfolio={portfolio} />
       <section className="panel form-panel" aria-label={`Resumo de ${client.name}`}>
         <div className="panel-header"><div>
           <div className="panel-title-row"><h2>Resumo do cliente</h2><span className={`status-chip ${situation.tone}`}><i />{situation.label}</span></div>
@@ -778,7 +779,6 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
       </section>
       <ClientProfilePanel client={client} />
       <ClientDocuments client={client} onChanged={onChanged} />
-      <ClientProfitPanel client={client} portfolio={portfolio} />
     </div>
   );
 }
