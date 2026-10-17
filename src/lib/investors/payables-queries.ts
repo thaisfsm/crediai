@@ -56,6 +56,19 @@ export async function loadTenantObligations(tx: TenantTransaction, tenantId: str
   return buildObligations({ investments: withEvidence as PayableInvestment[], items, payments, today });
 }
 
+// Contratos da carteira (aguardando assinatura ou ativos) que ainda não têm nenhuma linha de cronograma. Não geram obrigação
+// nem valor previsto: aparecem na tela só para o contrato cadastrado não "sumir" enquanto o cronograma não é montado.
+export async function loadContractsWithoutSchedule(tx: TenantTransaction, tenantId: string) {
+  const rows = await tx.select({
+    id: investments.id, investorName: investors.name, contractNumber: investments.contractNumber, status: investments.status,
+    startDate: investments.startDate, maturityDate: investments.maturityDate, amountCents: investments.amountCents,
+  }).from(investments).innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))
+    .where(and(eq(investments.tenantId, tenantId), inArray(investments.status, ["PENDING_SIGNATURE", "ACTIVE"]),
+      sql`not exists (select 1 from investment_schedule_item s where s.investment_id = investment.id and s.tenant_id = investment.tenant_id)`))
+    .orderBy(asc(investments.startDate), asc(investors.name));
+  return rows.map((row) => ({ ...row, status: row.status as "PENDING_SIGNATURE" | "ACTIVE" }));
+}
+
 // Página /contas-a-pagar: withTenantContext (tenant ativo, assinatura válida, só a carteira da sessão).
 export async function loadPayablesPage(search: Search) {
   return withTenantContext(async (tx, { tenantId }) => {
@@ -70,6 +83,7 @@ export async function loadPayablesPage(search: Search) {
       tab: parsePayableTab(search.aba),
       // Resumo do dia: sempre sobre todas as obrigações da carteira (os filtros mudam só a lista), igual ao Dashboard.
       overview: payablesOverview(all, today),
+      withoutSchedule: await loadContractsWithoutSchedule(tx, tenantId),
       filters, totalCount: all.length, matched: visible.length, sections: payablesSections(visible, today), totals: payablesTotals(visible, filters, today),
     };
   });

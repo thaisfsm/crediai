@@ -226,7 +226,27 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
         <p className="capital-note">{filtered ? `${data.matched} de ${data.totalCount} obrigações com estes filtros. Pago no período: ${formatMoney(totals.paidCents)} (${period}).` : `${data.totalCount} obrigações nos cronogramas dos contratos. Pago em todo o histórico: ${formatMoney(totals.paidCents)}.`}</p>
       </section>
 
-      {data.totalCount === 0 && <EmptyPanel icon="briefcase" text="Nenhuma obrigação ainda. Monte o cronograma de pagamentos na página de cada contrato de investimento." action={<Link prefetch={false} className="outline-button" href="/investidores">Ir para Investidores</Link>} />}
+      {data.withoutSchedule.length > 0 && (
+        <section className="panel table-panel" aria-label="Contratos sem cronograma">
+          <div className="panel-header"><div><div className="panel-title-row"><h2>Contratos sem cronograma</h2><span className="today-count">{data.withoutSchedule.length}</span></div>
+            <p>Contratos cadastrados que ainda não têm cronograma de pagamentos. Não há valor previsto até o cronograma ser montado.</p></div></div>
+          <div className="table-scroll"><table className="data-table" aria-label="Contratos sem cronograma">
+            <thead><tr><th>Investidor e contrato</th><th>Valor</th><th>Início</th><th>Vencimento</th><th>Situação</th><th /></tr></thead>
+            <tbody>{data.withoutSchedule.map((contract) => (
+              <tr key={contract.id}>
+                <td><strong>{contract.investorName}</strong><small className="admin-cell-note">{contract.contractNumber ? `Contrato ${contract.contractNumber}` : "Sem número de contrato"}</small></td>
+                <td>{formatMoney(contract.amountCents)}</td>
+                <td>{formatDate(contract.startDate)}</td>
+                <td>{contract.maturityDate ? formatDate(contract.maturityDate) : "—"}</td>
+                <td><span className={`status-chip ${contract.status === "ACTIVE" ? "status-due" : "status-active"}`}><i />{contract.status === "ACTIVE" ? "Sem cronograma" : "Aguardando assinatura · sem cronograma"}</span></td>
+                <td><Link prefetch={false} className="outline-button" href={`/investidores/investimentos/${contract.id}`}>Abrir contrato</Link></td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </section>
+      )}
+
+      {data.totalCount === 0 && data.withoutSchedule.length === 0 && <EmptyPanel icon="briefcase" text="Nenhuma obrigação ainda. Monte o cronograma de pagamentos na página de cada contrato de investimento." action={<Link prefetch={false} className="outline-button" href="/investidores">Ir para Investidores</Link>} />}
 
       {data.totalCount > 0 && TAB_SECTIONS[tab].map((section) => {
         const list = sections[section.key];

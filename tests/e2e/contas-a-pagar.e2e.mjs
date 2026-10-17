@@ -392,6 +392,22 @@ test("CP12. MASTER na própria carteira: entrada e baixa só na carteira dele, s
   assert.ok(!finance.html.includes("Investidor da Thaís"));
 });
 
+test("CP12b. contrato cadastrado sem cronograma aparece em Contas a pagar sem gerar obrigação, valor nem capital; só na própria carteira", async () => {
+  const investor = await investorAction(thais, "createInvestorAction", { personType: "PF", document: "52998224725", name: "Investidor Sem Cronograma", tenantId: "ten_thais" });
+  assert.equal(investor?.ok, true, JSON.stringify(investor));
+  const investment = await investorAction(thais, "createInvestmentAction", { investorId: investor.id, amount: "3.000,00", rate: "1", ratePeriod: "MONTHLY", startDate: TODAY, contractNumber: "SEM-CRON" });
+  assert.equal(investment?.ok, true, JSON.stringify(investment));
+  const movements = await count("capital_movement", "ten_thais");
+  const obligationsBefore = await page(thais, "/contas-a-pagar");
+  assert.match(obligationsBefore.html, /Contratos sem cronograma 1 /);
+  assert.ok(obligationsBefore.html.includes("Investidor Sem Cronograma") && obligationsBefore.html.includes("Contrato SEM-CRON") && obligationsBefore.html.includes("Sem cronograma"));
+  assert.ok(obligationsBefore.html.includes("Investidor da Thaís"), "o contrato com cronograma continua nas obrigações");
+  const roberio = await page(robério, "/contas-a-pagar");
+  assert.ok(!roberio.html.includes("Investidor Sem Cronograma") && !roberio.html.includes("SEM-CRON"), "outra carteira não vê o contrato da Thaís");
+  assert.equal(await count("capital_movement", "ten_thais"), movements, "nada entra nem sai do capital");
+  assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${investment.id}'`), 0, "nenhum cronograma criado sozinho");
+});
+
 test("CP13. telas no desktop e no celular: contas a pagar, detalhe, formulário de baixa e capital do contrato", async () => {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
