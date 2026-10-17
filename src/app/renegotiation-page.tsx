@@ -140,7 +140,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             </tbody>
           </table></div>
           <p className="capital-note">Ao gravar: nenhum dinheiro sai do capital, porque o principal do contrato novo é o mesmo já emprestado. Os juros em aberto passam para o contrato novo e só viram lucro quando forem pagos; os juros já recebidos continuam registrados nas operações antigas, que ficam como Renegociada, com o histórico intacto e o vínculo com o contrato novo.</p>
-          {contract && !contract.ok && <p className="form-feedback form-feedback-warning">{contract.error}</p>}
+          {contract && !contract.ok && !contract.error.startsWith("O desconto") && <p className="form-feedback form-feedback-warning">{contract.error}</p>}
           {contract?.ok && contract.roundingCents > 0 && <p className="muted-cell">{`Parcela fixa arredondada para cima: o total do contrato fica ${formatMoney(contract.roundingCents)} acima da simulação (centavos somados aos juros).`}</p>}
           <label className="field-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>{`Confirmo: encerrar ${chosen.length === 1 ? "a operação" : `as ${chosen.length} operações`} como renegociada${chosen.length === 1 ? "" : "s"} e criar o contrato novo de ${formatMoney(result.totalCents)}.`}</span></label>
           <div className="form-actions"><button type="button" className="primary-button" disabled={!confirmed || pending || !contract?.ok} onClick={save}>{pending ? "Gravando…" : "Gravar renegociação"}</button></div>
