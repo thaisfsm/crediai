@@ -6,10 +6,11 @@ type Tone = "amber" | "red" | "cyan" | "green";
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
-// Card clicável no padrão dos indicadores da administração (brilho de cor no topo; vermelho só quando há atraso).
-function PayableKpi({ href, label, value, caption, tone, current }: { href: string; label: string; value: string; caption: string; tone?: Tone; current?: boolean }) {
+// Card clicável no padrão dos indicadores da administração: cada card tem a sua cor no brilho do topo (Vencidas é sempre
+// vermelho); borda e valor ficam em vermelho só quando há atraso.
+function PayableKpi({ href, label, value, caption, tone, current, alert }: { href: string; label: string; value: string; caption: string; tone?: Tone; current?: boolean; alert?: boolean }) {
   return (
-    <Link prefetch={false} href={href} className={`payables-kpi${tone ? ` payables-kpi-${tone}` : ""}`} aria-current={current ? "page" : undefined}>
+    <Link prefetch={false} href={href} className={`payables-kpi${tone ? ` payables-kpi-${tone}` : ""}${alert ? " payables-kpi-alert" : ""}`} aria-current={current ? "page" : undefined}>
       <span>{label}</span><strong>{value}</strong><small>{caption}</small>
     </Link>
   );
@@ -24,7 +25,7 @@ export function PayablesKpis({ overview, availableCents, tabHref = (tab) => (tab
     <div className="payables-kpis" aria-label="Indicadores das contas a pagar" role="group">
       <PayableKpi href={tabHref("hoje")} current={currentTab === "hoje"} tone="amber" label="A pagar hoje" value={formatMoney(overview.dueTodayCents)}
         caption={`Previsto hoje ${formatMoney(overview.expectedTodayCents)} · ${plural(overview.pendingTodayCount, "pendente", "pendentes")}`} />
-      <PayableKpi href={tabHref("vencidos")} current={currentTab === "vencidos"} tone={overview.overdueCount ? "red" : undefined} label="Vencidas" value={formatMoney(overview.overdueCents)}
+      <PayableKpi href={tabHref("vencidos")} current={currentTab === "vencidos"} tone="red" alert={overview.overdueCount > 0} label="Vencidas" value={formatMoney(overview.overdueCents)}
         caption={overview.overdueCount ? `${plural(overview.overdueCount, "obrigação", "obrigações")} em atraso` : "Nada em atraso"} />
       <PayableKpi href={tabHref("proximos")} current={currentTab === "proximos"} tone="cyan" label="Próximos 7 dias" value={formatMoney(overview.upcomingCents)}
         caption={`${plural(overview.upcomingCount, "obrigação", "obrigações")} até ${formatDate(overview.upcomingUntil)}`} />
