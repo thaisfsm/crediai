@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, users, wallets } from "@/lib/db/schema";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
+import { normalizeName } from "@/lib/finance/client-search";
 import { todayIso } from "@/lib/finance/format";
 import {
   buildObligations, filterObligations, parsePayableTab, parsePayablesFilters, payablesOverview, payablesSections, payablesTotals,
@@ -83,7 +84,13 @@ export async function loadPayablesPage(search: Search) {
       tab: parsePayableTab(search.aba),
       // Resumo do dia: sempre sobre todas as obrigações da carteira (os filtros mudam só a lista), igual ao Dashboard.
       overview: payablesOverview(all, today),
-      withoutSchedule: await loadContractsWithoutSchedule(tx, tenantId),
+      // Lista do campo Investidor (todos os investidores da carteira, mesmo sem contrato ou cronograma) e contratos sem
+      // cronograma; a busca por nome ou contrato vale para os dois.
+      investorNames: (await tx.select({ name: investors.name }).from(investors).where(eq(investors.tenantId, tenantId)).orderBy(asc(investors.name))).map((row) => row.name),
+      withoutSchedule: (await loadContractsWithoutSchedule(tx, tenantId)).filter((contract) => {
+        const q = normalizeName(filters.q);
+        return !q || normalizeName(contract.investorName).includes(q) || normalizeName(contract.contractNumber ?? "").includes(q);
+      }),
       filters, totalCount: all.length, matched: visible.length, sections: payablesSections(visible, today), totals: payablesTotals(visible, filters, today),
     };
   });

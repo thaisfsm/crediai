@@ -402,6 +402,14 @@ test("CP12b. contrato cadastrado sem cronograma aparece em Contas a pagar sem ge
   assert.match(obligationsBefore.html, /Contratos sem cronograma 1 /);
   assert.ok(obligationsBefore.html.includes("Investidor Sem Cronograma") && obligationsBefore.html.includes("Contrato SEM-CRON") && obligationsBefore.html.includes("Sem cronograma"));
   assert.ok(obligationsBefore.html.includes("Investidor da Thaís"), "o contrato com cronograma continua nas obrigações");
+  const rawHtml = await (await fetch(`${BASE}/contas-a-pagar`, { headers: { cookie: thais } })).text();
+  const options = rawHtml.match(/<datalist id="payables-investors">(.*?)<\/datalist>/s)?.[1] ?? "";
+  assert.ok(options.includes('value="Investidor Sem Cronograma"') && options.includes('value="Investidor da Thaís"'), "o campo Investidor lista todos os investidores cadastrados");
+  assert.ok(!options.includes("Paula Pagamentos"), "a lista não mostra investidores de outra carteira");
+  const filtered = await page(thais, "/contas-a-pagar?q=sem+cron");
+  assert.match(filtered.html, /Contratos sem cronograma 1 /, "a busca vale para os contratos sem cronograma");
+  const otherName = await page(thais, "/contas-a-pagar?q=nome-que-nao-existe");
+  assert.ok(!otherName.html.includes("Contrato SEM-CRON"), "a busca esconde contratos sem cronograma que não combinam");
   const roberio = await page(robério, "/contas-a-pagar");
   assert.ok(!roberio.html.includes("Investidor Sem Cronograma") && !roberio.html.includes("SEM-CRON"), "outra carteira não vê o contrato da Thaís");
   assert.equal(await count("capital_movement", "ten_thais"), movements, "nada entra nem sai do capital");
