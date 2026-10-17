@@ -1,0 +1,5 @@
+ALTER TABLE "investment" ADD COLUMN "redemption_rule" text;--> statement-breakpoint
+ALTER TABLE "investment" ADD COLUMN "redemption_days" integer;--> statement-breakpoint
+ALTER TABLE "investment" ADD COLUMN "yield_payment_cents" bigint;--> statement-breakpoint
+ALTER TABLE "investment" ADD CONSTRAINT "investment_redemption_valid" CHECK (("investment"."redemption_rule" is null and "investment"."redemption_days" is null) or ("investment"."redemption_rule" = 'AT_MATURITY' and "investment"."redemption_days" is null) or ("investment"."redemption_rule" = 'D_PLUS' and "investment"."redemption_days" between 1 and 3650));--> statement-breakpoint
+ALTER TABLE "investment" ADD CONSTRAINT "investment_yield_payment_valid" CHECK ("investment"."yield_payment_cents" is null or "investment"."yield_payment_cents" > 0);

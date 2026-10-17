@@ -57,6 +57,7 @@ const protectedHash = () => one(`select md5(string_agg(x, '|' order by x)) from 
   union all select 'u'||concat_ws(',', u.id, u.name, u.email, u.role, u.tenant_id, u.active) from "user" u union all select 'c'||row(c.*)::text from client c
   union all select 'i'||row(i.*)::text from investment i where i.id = 'ivt_old_f'
   union all select 'd'||concat_ws(',', d.id, d.kind, d.contract_id, d.replaced_at, md5(d.content)) from investment_document d where d.id = 'idoc_old_f') t`);
+const LIQ = { redemptionRule: "AT_MATURITY", paymentFrequency: "MONTHLY", yieldPayment: "500,00" };
 const SIGNED = "%PDF-1.4 contrato assinado pelo investidor";
 const ADDRESS = { addressCep: "01310-100", addressStreet: "Avenida Paulista", addressNumber: "1000", addressComplement: "Sala 12", addressDistrict: "Bela Vista", addressCity: "São Paulo", addressState: "SP" };
 
@@ -83,6 +84,7 @@ test("K1. sem dados obrigatórios: a página lista o que falta e a geração é 
   assert.match(view.html, /Para gerar a versão final do contrato, falta:/);
   assert.match(view.html, /Empresa contratante: razão social/);
   assert.match(view.html, /Investidor: endereço completo/);
+  assert.match(view.html, /Investimento: liquidez \(ao término do contrato ou D\+ dias\)/, "liquidez é obrigatória no contrato");
   const refused = await action(robério, "generateContractAction", { investmentId: ids.investment });
   assert.equal(refused?.ok, false);
   assert.match(refused.error, /Falta: .*Empresa contratante: razão social.*Investidor: endereço completo/);
@@ -112,6 +114,9 @@ test("K2. empresa contratante: rascunho não libera; confirmação exige dados c
 });
 
 test("K3. gerar contrato: versão 1 vinculada ao investimento, PDF com os dados corretos e auditoria sem dados pessoais", async () => {
+  // Liquidez e remuneração combinadas entram no contrato.
+  const liquidity = await action(robério, "updateInvestmentAction", { investmentId: ids.investment, amount: "50.000,50", rate: "1,5", ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: "10", notes: "Rendimentos por PIX até o dia 10.", status: "PENDING_SIGNATURE", ...LIQ });
+  assert.equal(liquidity?.ok, true, JSON.stringify(liquidity));
   const generated = await action(robério, "generateContractAction", { investmentId: ids.investment, includeNotes: "1" });
   assert.equal(generated?.ok, true, JSON.stringify(generated));
   ids.v1 = generated.id;
@@ -127,7 +132,8 @@ test("K3. gerar contrato: versão 1 vinculada ao investimento, PDF com os dados 
   const content = pdfText(row.content).replace(/\s+/g, " ");
   for (const expected of ["Robério Gestão de Crédito Ltda., CNPJ nº 11.222.333/0001-81", "representante legal: Robério Santos, CPF nº 529.982.247-25", "João Conceição Araújo, CPF nº 411.797.058-58",
     "Rua São João, 45, Centro, Ribeirão Preto/SP, CEP 01310-100", "R$ 50.000,50 (cinquenta mil reais e cinquenta centavos)", "1,5% ao mês", "Data de início: 13/10/2026",
-    "Vencimento do contrato: 13/10/2027", "Dia de vencimento combinado: dia 10", "Rendimentos por PIX até o dia 10.", "São Paulo/SP, ____ de", "Versão 1", "Documento sem assinaturas"]) {
+    "Vencimento do contrato: 13/10/2027", "Dia de vencimento combinado: dia 10", "Rendimentos por PIX até o dia 10.", "São Paulo/SP, ____ de", "Versão 1", "Documento sem assinaturas",
+    "A liquidez do crédito investido é: ao término do contrato, em 13/10/2027.", "não havendo direito a resgate antecipado", "A remuneração será paga com periodicidade mensal, no valor de R$ 500,00 (quinhentos reais) a cada pagamento"]) {
     assert.ok(content.includes(expected), `PDF sem "${expected}"`);
   }
   // O status do investimento não muda: gerar não é assinar.
@@ -197,7 +203,7 @@ test("K6. anexar o contrato assinado indicando a versão gerada que foi assinada
 });
 
 test("K7. dados alterados: nova versão só com confirmação, o assinado é preservado e o histórico fica completo", async () => {
-  const updated = await action(robério, "updateInvestmentAction", { investmentId: ids.investment, amount: "60.000,00", rate: "1,5", ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: "10", notes: "Rendimentos por PIX até o dia 10.", status: "PENDING_SIGNATURE" });
+  const updated = await action(robério, "updateInvestmentAction", { investmentId: ids.investment, amount: "60.000,00", rate: "1,5", ratePeriod: "MONTHLY", startDate: "2026-10-13", maturityDate: "2027-10-13", dueDay: "10", notes: "Rendimentos por PIX até o dia 10.", status: "PENDING_SIGNATURE", ...LIQ });
   assert.equal(updated?.ok, true);
   assert.match((await page(robério, `/investidores/investimentos/${ids.investment}`)).html, /Os dados do contrato mudaram desde a versão 1/);
   const unconfirmed = await action(robério, "generateContractAction", { investmentId: ids.investment, includeNotes: "1" });
@@ -270,13 +276,13 @@ test("K9. MASTER vê, baixa e gera contrato de qualquer carteira; os dados vão 
 });
 
 test("K10. período 'outro' só gera com as observações no contrato; investimento cancelado não gera", async () => {
-  const other = await action(robério, "updateInvestmentAction", { investmentId: ids.otherInvestment, amount: "1.000,00", rate: "3", ratePeriod: "OTHER", startDate: "2026-10-13", maturityDate: "2026-12-13", notes: "3% ao trimestre." });
+  const other = await action(robério, "updateInvestmentAction", { investmentId: ids.otherInvestment, amount: "1.000,00", rate: "3", ratePeriod: "OTHER", startDate: "2026-10-13", maturityDate: "2026-12-13", notes: "3% ao trimestre.", ...LIQ });
   assert.equal(other?.ok, true);
   assert.match((await action(robério, "generateContractAction", { investmentId: ids.otherInvestment }))?.error ?? "", /período da taxa "outro"/);
   const withNotes = await action(robério, "generateContractAction", { investmentId: ids.otherInvestment, includeNotes: "1" });
   assert.equal(withNotes?.ok, true, JSON.stringify(withNotes));
   assert.match(pdfText(await one(`select content from investment_contract where id = '${withNotes.id}'`)).replace(/\s+/g, " "), /3%, no período descrito nas condições adicionais deste instrumento.*3% ao trimestre\./);
-  await action(robério, "updateInvestmentAction", { investmentId: ids.otherInvestment, amount: "1.000,00", rate: "3", ratePeriod: "OTHER", startDate: "2026-10-13", maturityDate: "2026-12-13", notes: "3% ao trimestre.", status: "CANCELED" });
+  await action(robério, "updateInvestmentAction", { investmentId: ids.otherInvestment, amount: "1.000,00", rate: "3", ratePeriod: "OTHER", startDate: "2026-10-13", maturityDate: "2026-12-13", notes: "3% ao trimestre.", status: "CANCELED", ...LIQ });
   assert.match((await action(robério, "generateContractAction", { investmentId: ids.otherInvestment, includeNotes: "1" }))?.error ?? "", /cancelado/);
 });
 

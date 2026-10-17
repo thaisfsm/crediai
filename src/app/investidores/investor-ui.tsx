@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
-import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, todayIso } from "@/lib/finance/format";
+import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
 import { CONTRACT_STATES, contractState, formatDateTime, type ContractState } from "@/lib/investors/contract";
 import {
-  DOCUMENT_KINDS, INVESTMENT_PAYMENT_METHODS, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, investorAddress, rateLabel, termLabel,
-  type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type PersonType, type TermUnit,
+  DOCUMENT_KINDS, INVESTMENT_PAYMENT_METHODS, REDEMPTION_RULES, redemptionDate, redemptionLabel, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, investorAddress, rateLabel, termLabel,
+  type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type PersonType, type RedemptionRule, type TermUnit,
 } from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
 import { DateField } from "../date-field";
@@ -112,6 +112,14 @@ function InvestorForm({ editing, tenants = [], defaultTenantId, onDone, onCancel
   );
 }
 
+// Sugestão (só um atalho, o valor é sempre editável): valor investido x taxa, quando a taxa é mensal.
+function suggestedYield(amountText: string, rateText: string, period: string) {
+  if (period !== "MONTHLY") return null;
+  const cents = parseMoneyToCents(amountText);
+  const bps = parseRateToBps(rateText);
+  return cents && bps ? centsToInput(Math.round((cents * bps) / 10000)) : null;
+}
+
 type AccountOption = { id: string; label: string; isPreferred: boolean; archivedAt: string | null; hasPix: boolean; hasTransfer: boolean };
 
 // Campos do contrato (cadastro, edição e renovação). Tudo é o que foi negociado com o investidor: taxa com o período,
@@ -119,6 +127,11 @@ type AccountOption = { id: string; label: string; isPreferred: boolean; archived
 function InvestmentFields({ editing, today, accounts, renewal }: { editing?: InvestmentData; today: string; accounts: AccountOption[]; renewal?: { principalCents: number; startDate: string } }) {
   const legacyTerm = editing && !editing.termCount && editing.termMonths ? { count: String(editing.termMonths), unit: "MONTHS" as TermUnit } : null;
   const [method, setMethod] = useState<InvestmentPaymentMethod | "">(editing?.paymentMethod ?? "");
+  const [redemption, setRedemption] = useState<RedemptionRule | "">(editing?.redemptionRule ?? "");
+  const [yieldPayment, setYieldPayment] = useState(editing?.yieldPaymentCents ? centsToInput(editing.yieldPaymentCents) : "");
+  const [rateText, setRateText] = useState(editing ? String(editing.agreedRateBps / 100).replace(".", ",") : "");
+  const [amountText, setAmountText] = useState(renewal ? centsToInput(renewal.principalCents) : editing ? centsToInput(editing.amountCents) : "");
+  const [ratePeriodValue, setRatePeriodValue] = useState<string>(editing?.ratePeriod ?? "");
   const usable = accounts.filter((account) => !account.archivedAt || account.id === editing?.bankAccountId);
   const preferred = accounts.find((account) => account.isPreferred && !account.archivedAt);
   const fits = (account: AccountOption) => (method === "PIX" ? account.hasPix : method === "TRANSFER" ? account.hasTransfer : true);
@@ -127,9 +140,9 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
       {renewal
         ? <><input type="hidden" name="amount" value={centsToInput(renewal.principalCents)} /><input type="hidden" name="principalCents" value={renewal.principalCents} />
           <label className="field"><span>Principal renovado</span><input value={formatMoney(renewal.principalCents)} readOnly aria-readonly="true" tabIndex={-1} /></label></>
-        : <label className="field"><span>Valor investido (R$)</span><input name="amount" inputMode="decimal" placeholder="50.000,00" defaultValue={editing ? centsToInput(editing.amountCents) : ""} required readOnly={Boolean(editing?.renewedFromInvestmentId)} /></label>}
-      <label className="field"><span>Taxa combinada (%)</span><input name="rate" inputMode="decimal" placeholder="1,5" defaultValue={editing ? String(editing.agreedRateBps / 100).replace(".", ",") : ""} required /></label>
-      <label className="field"><span>A taxa se refere a</span><select name="ratePeriod" defaultValue={editing?.ratePeriod ?? ""} required>
+        : <label className="field"><span>Valor investido (R$)</span><input name="amount" inputMode="decimal" placeholder="50.000,00" value={amountText} onChange={(event) => setAmountText(event.target.value)} required readOnly={Boolean(editing?.renewedFromInvestmentId)} /></label>}
+      <label className="field"><span>Taxa combinada (%)</span><input name="rate" inputMode="decimal" placeholder="1,5" value={rateText} onChange={(event) => setRateText(event.target.value)} required /></label>
+      <label className="field"><span>A taxa se refere a</span><select name="ratePeriod" value={ratePeriodValue} onChange={(event) => setRatePeriodValue(event.target.value)} required>
         <option value="" disabled>Escolha o período da taxa</option>
         {(Object.keys(RATE_PERIODS) as (keyof typeof RATE_PERIODS)[]).map((period) => <option key={period} value={period}>{RATE_PERIODS[period]}</option>)}
       </select></label>
@@ -161,6 +174,13 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
           {(Object.keys(INVESTMENT_STATUS) as InvestmentStatus[]).filter((status) => !renewal || status !== "CANCELED").map((status) => <option key={status} value={status}>{INVESTMENT_STATUS[status]}</option>)}
         </select></label>
       )}
+      <label className="field"><span>Rendimento de cada pagamento (R$, opcional)</span><input name="yieldPayment" inputMode="decimal" placeholder="Ex.: 500,00" value={yieldPayment} onChange={(event) => setYieldPayment(event.target.value)} aria-describedby="yield-payment-help" />
+        <small id="yield-payment-help" className="admin-cell-note">Você define o valor. Ele preenche o cronograma e as contas a pagar, e você pode alterar cada data depois.{" "}
+          {suggestedYield(amountText, rateText, ratePeriodValue) && <button type="button" className="text-link" onClick={() => setYieldPayment(suggestedYield(amountText, rateText, ratePeriodValue) as string)}>Sugerir {suggestedYield(amountText, rateText, ratePeriodValue)} pela taxa mensal</button>}</small></label>
+      <label className="field"><span>Liquidez: quando o crédito pode ser resgatado</span><select name="redemptionRule" value={redemption} onChange={(event) => setRedemption(event.target.value as RedemptionRule | "")}>
+        <option value="">Não informada</option>{(Object.keys(REDEMPTION_RULES) as RedemptionRule[]).map((key) => <option key={key} value={key}>{REDEMPTION_RULES[key]}</option>)}
+      </select></label>
+      {redemption === "D_PLUS" && <label className="field"><span>Quantos dias depois do término (D+)</span><input name="redemptionDays" inputMode="numeric" maxLength={4} placeholder="Ex.: 30" defaultValue={editing?.redemptionDays ?? ""} required /></label>}
       <label className="field field-wide"><span>Condições do rendimento (opcional)</span><textarea name="yieldTerms" maxLength={1000} rows={2} defaultValue={renewal ? "" : editing?.yieldTerms ?? ""} placeholder="Ex.: rendimento mensal pago até o dia 10, por Pix" /></label>
       <label className="field field-wide"><span>Regras de devolução do principal (opcional)</span><textarea name="principalTerms" maxLength={1000} rows={2} defaultValue={renewal ? "" : editing?.principalTerms ?? ""} placeholder="Ex.: devolução integral no vencimento; ou 50% no 6º mês e 50% no 12º" /></label>
       <label className="field field-wide"><span>Observações</span><textarea name="notes" maxLength={1000} rows={3} defaultValue={renewal ? "" : editing?.notes ?? ""} placeholder="Outros detalhes combinados" /></label>
@@ -598,6 +618,8 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
           <div><dt>Quantidade de parcelas</dt><dd>{investment.installmentCount ?? "—"}</dd></div>
           <div><dt>Forma de pagamento</dt><dd>{investment.paymentMethod ? INVESTMENT_PAYMENT_METHODS[investment.paymentMethod] : "—"}</dd></div>
           <div><dt>Conta para os pagamentos</dt><dd>{account ? `${account.label}${account.archivedAt ? " (retirada)" : ""}` : "—"}</dd></div>
+          <div><dt>Rendimento de cada pagamento</dt><dd>{investment.yieldPaymentCents ? formatMoney(investment.yieldPaymentCents) : "—"}</dd></div>
+          <div><dt>Liquidez (resgate do crédito)</dt><dd>{redemptionLabel(investment.redemptionRule, investment.redemptionDays) ?? "—"}{(() => { const date = redemptionDate(investment.maturityDate, investment.redemptionRule, investment.redemptionDays); return date ? ` · resgate em ${formatDate(date)}` : ""; })()}</dd></div>
           <div><dt>Condições do rendimento</dt><dd className="preserve-lines">{investment.yieldTerms ?? "—"}</dd></div>
           <div><dt>Devolução do principal</dt><dd className="preserve-lines">{investment.principalTerms ?? "—"}</dd></div>
           <div><dt>Status</dt><dd>{INVESTMENT_STATUS[investment.status]}</dd></div>
