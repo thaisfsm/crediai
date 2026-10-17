@@ -140,7 +140,7 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
         {(Object.keys(TERM_UNIT_LABELS) as TermUnit[]).map((unit) => <option key={unit} value={unit}>{TERM_UNIT_LABELS[unit]}</option>)}
       </select></label>
       <DateField label="Vencimento do contrato (opcional)" name="maturityDate" defaultValue={renewal ? "" : editing?.maturityDate ?? ""} />
-      <label className="field"><span>Dia de vencimento (opcional)</span><input name="dueDay" inputMode="numeric" placeholder="1 a 31" maxLength={2} defaultValue={editing?.dueDay ?? ""} /></label>
+      <label className="field"><span>Dia do pagamento combinado (opcional)</span><input name="dueDay" inputMode="numeric" placeholder="Ex.: 25 (pode ser diferente do início)" maxLength={2} defaultValue={editing?.dueDay ?? ""} /></label>
       <label className="field"><span>Periodicidade dos pagamentos (opcional)</span><select name="paymentFrequency" defaultValue={editing?.paymentFrequency ?? ""}>
         <option value="">Não informada</option>
         {(Object.keys(PAYMENT_FREQUENCIES) as PaymentFrequency[]).map((frequency) => <option key={frequency} value={frequency}>{PAYMENT_FREQUENCIES[frequency]}</option>)}
@@ -593,7 +593,7 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
           <div><dt>Data de início</dt><dd>{formatDate(investment.startDate)}</dd></div>
           <div><dt>Prazo</dt><dd>{termLabel(investment) ?? "—"}</dd></div>
           <div><dt>Vencimento do contrato</dt><dd>{investment.maturityDate ? formatDate(investment.maturityDate) : "—"}</dd></div>
-          <div><dt>Dia de vencimento</dt><dd>{investment.dueDay ? `Dia ${investment.dueDay}` : "—"}</dd></div>
+          <div><dt>Dia do pagamento</dt><dd>{investment.dueDay ? `Dia ${investment.dueDay}` : "—"}</dd></div>
           <div><dt>Periodicidade dos pagamentos</dt><dd>{investment.paymentFrequency ? PAYMENT_FREQUENCIES[investment.paymentFrequency] : "—"}</dd></div>
           <div><dt>Quantidade de parcelas</dt><dd>{investment.installmentCount ?? "—"}</dd></div>
           <div><dt>Forma de pagamento</dt><dd>{investment.paymentMethod ? INVESTMENT_PAYMENT_METHODS[investment.paymentMethod] : "—"}</dd></div>
@@ -701,7 +701,7 @@ function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => v
       </dl>
       {!cash.ownWallet && <p className="capital-note">Este contrato é de outra carteira: a entrada no capital e as baixas só podem ser registradas pela própria carteira.</p>}
       {cash.ownWallet && !cash.entry && !cash.prior && investment.status !== "CANCELED" && !fromRenewal && (cash.legacy
-        ? <p className="capital-note" role="note">Contrato cadastrado antes da regra da entrada no capital. As baixas ficam bloqueadas até você dizer como o dinheiro entrou: registre a entrada (se o valor ainda não está no capital) ou indique o aporte comum pelo qual ele já entrou. O sistema não decide isso sozinho.</p>
+        ? <p className="capital-note" role="note">Contrato cadastrado antes da regra da entrada no capital. As baixas ficam bloqueadas até você dizer como o dinheiro entrou: registre a entrada (se o valor ainda não está no capital) ou indique o aporte comum pelo qual ele já entrou. O sistema não comprova sozinho de onde veio o dinheiro: o vínculo com um aporte só existe se você confirmar, e só indique o aporte se tiver certeza de que é o dinheiro deste contrato. Enquanto não for informado, as baixas ficam bloqueadas; isso não quer dizer que o dinheiro não exista ou não esteja no capital.</p>
         : <p className="capital-note" role="note">{hasOpen ? "As baixas deste contrato ficam bloqueadas até a entrada do investimento ser registrada no capital." : "A baixa dos pagamentos deste contrato exige a entrada do investimento registrada no capital."}</p>)}
       <p className="capital-note">Baixas, entradas e aportes indicados não se alteram, não se estornam e não se apagam por aqui. Contrato que já movimentou o capital não pode ser cancelado. Essas correções aguardam uma regra própria.</p>
       {declaring && canDeclare && (

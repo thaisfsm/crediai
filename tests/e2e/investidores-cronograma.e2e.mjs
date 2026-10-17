@@ -291,8 +291,8 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   for (const [label, viewport] of [["desktop", { width: 1440, height: 900 }], ["celular", { width: 390, height: 844 }]]) {
-    const create = async (contractNumber) => {
-      const created = await action(robério, "createInvestmentAction", { investorId: ids.investor, amount: "100.000,00", rate: "5", ratePeriod: "MONTHLY", startDate: "2026-11-01", termCount: "12", termUnit: "MONTHS", paymentFrequency: "MONTHLY", contractNumber });
+    const create = async (contractNumber, extra = { dueDay: "1" }) => {
+      const created = await action(robério, "createInvestmentAction", { investorId: ids.investor, amount: "100.000,00", rate: "5", ratePeriod: "MONTHLY", startDate: "2026-11-01", termCount: "12", termUnit: "MONTHS", paymentFrequency: "MONTHLY", contractNumber, ...extra });
       assert.equal(created?.ok, true, JSON.stringify(created));
       return created.id;
     };
@@ -303,16 +303,44 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
     await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
     const browserPage = await context.newPage();
 
+    // Sem dia do pagamento combinado e sem primeira data digitada, o modelo não presume a primeira data.
+    const noDay = await create(`SEM-DIA-${label}`, {});
+    await browserPage.goto(`${BASE}/investidores/investimentos/${noDay}`);
+    let schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
+    await schedule.getByRole("button", { name: "Montar cronograma" }).click();
+    await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
+    await schedule.getByText("O sistema não presume a primeira data").waitFor();
+    assert.equal(await schedule.getByRole("table", { name: "Linhas para revisar" }).count(), 0);
+
+    // Início no dia 10 e pagamentos todo dia 25 até o vencimento final: sugestão no dia 25, editável, nada gravado.
+    const day25 = await create(`DIA-25-${label}`, { dueDay: "25", termCount: "", termUnit: "", maturityDate: "2027-04-25", startDate: "2026-11-10" });
+    await browserPage.goto(`${BASE}/investidores/investimentos/${day25}`);
+    schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
+    await schedule.getByRole("button", { name: "Montar cronograma" }).click();
+    assert.equal(await schedule.getByLabel("Dia do pagamento (opcional)").inputValue(), "25");
+    await schedule.getByLabel("Rendimento de cada data (R$)").fill("500,00");
+    await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
+    let review = schedule.getByRole("table", { name: "Linhas para revisar" });
+    await review.waitFor();
+    assert.deepEqual(await review.locator('input[type="date"]').evaluateAll((inputs) => inputs.map((input) => input.value)),
+      ["2026-11-25", "2026-12-25", "2027-01-25", "2027-02-25", "2027-03-25", "2027-04-25"]);
+    assert.equal(await review.getByLabel("Principal da linha 6", { exact: true }).inputValue(), "100.000,00");
+    // Qualquer data pode ser trocada antes de gravar (ex.: primeiro pagamento negociado para 05/12).
+    await review.getByLabel("Vencimento da linha 1", { exact: true }).fill("2026-12-05");
+    assert.equal(await review.getByLabel("Vencimento da linha 1", { exact: true }).inputValue(), "2026-12-05");
+    if (SHOTS) await schedule.screenshot({ path: `${SHOTS}/dia-25-revisao-${label}.png` });
+    assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${day25}'`), 0, "a sugestão não grava sozinha");
+
     // Modelo padrão: rendimento mensal digitado, principal integral na última data; revisão antes de gravar.
     await browserPage.goto(`${BASE}/investidores/investimentos/${standard}`);
-    let schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
+    schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
     await schedule.getByRole("button", { name: "Montar cronograma" }).click();
     await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
     await schedule.getByText("Digite o rendimento combinado de cada data").waitFor();
     assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${standard}'`), 0, "o modelo não grava sozinho");
     await schedule.getByLabel("Rendimento de cada data (R$)").fill("5.000,00");
     await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
-    const review = schedule.getByRole("table", { name: "Linhas para revisar" });
+    review = schedule.getByRole("table", { name: "Linhas para revisar" });
     await review.waitFor();
     assert.equal(await review.locator("tbody tr").count(), 12);
     assert.equal(await review.getByLabel("Vencimento da linha 1", { exact: true }).inputValue(), "2026-12-01");

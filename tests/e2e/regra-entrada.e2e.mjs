@@ -183,7 +183,7 @@ test("RE4. contrato antigo sem evidência: baixa bloqueada com explicação; nad
 test("RE5. burla: ids forjados, aporte inválido, entrada × aporte, estorno e cancelamento (API e banco)", async () => {
   const entryMovement = await one(`select capital_movement_id from investment_capital_entry where investment_id = '${ids.novo.id}'`);
   // Aporte de investidor, aporte inexistente e aporte de outro tenant (Fernando tem um no fixture).
-  assert.match((await declare(robério, ids.semEvidencia.id, entryMovement)).error, /não pode ser usado/);
+  assert.match((await declare(robério, ids.semEvidencia.id, entryMovement)).error, /entrada de outro contrato de investidor/);
   assert.match((await declare(robério, ids.semEvidencia.id, "cap_inexistente")).error, /não encontrado/);
   const fernandoMovement = await one(`select id from capital_movement where tenant_id = 'ten_fernando' limit 1`);
   assert.match((await declare(robério, ids.semEvidencia.id, fernandoMovement)).error, /não encontrado/);

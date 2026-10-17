@@ -189,6 +189,8 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
   const [firstDueDate, setFirstDueDate] = useState("");
   const [dateKey, setDateKey] = useState(0);
   const [count, setCount] = useState(String(investment.installmentCount ?? ""));
+  // Dia do pagamento combinado: vem do contrato (se houver) e pode ser trocado aqui; não precisa ser o dia do início.
+  const [dueDay, setDueDay] = useState(investment.dueDay ? String(investment.dueDay) : "");
   const [yieldAmount, setYieldAmount] = useState("");
   const [principalAmount, setPrincipalAmount] = useState("");
   const [description, setDescription] = useState("");
@@ -196,19 +198,26 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
   const [hint, setHint] = useState<string | null>(null);
   const { pending, feedback, onSubmit } = useFormAction(saveInvestmentScheduleLinesAction, onDone);
   const options = (Object.keys(PAYMENT_FREQUENCIES) as PaymentFrequency[]).filter((key) => key !== "OTHER");
+  const dayNumber = (value: string) => (/^\d{1,2}$/.test(value) && Number(value) >= 1 && Number(value) <= 31 ? Number(value) : null);
   const suggestWith = (values: { frequency: PaymentFrequency; firstDueDate: string; count: string; principalAmount: string }) => {
-    const suggestion = suggestScheduleLines({ frequency: values.frequency, firstDueDate: values.firstDueDate, count: values.frequency === "AT_MATURITY" ? 1 : Number(values.count), yieldAmount: yieldAmount.trim(), principalAmount: values.principalAmount.trim(), description: description.trim() });
-    if (suggestion.length === 0) return setHint(`Informe a data do primeiro pagamento e a quantidade (1 a ${MAX_SCHEDULE_ITEMS}).`);
+    if (dueDay && !dayNumber(dueDay)) return setHint("O dia do pagamento vai de 1 a 31 (ou deixe em branco para usar o dia da primeira data).");
+    const suggestion = suggestScheduleLines({ frequency: values.frequency, firstDueDate: values.firstDueDate, count: values.frequency === "AT_MATURITY" ? 1 : Number(values.count), yieldAmount: yieldAmount.trim(), principalAmount: values.principalAmount.trim(), description: description.trim(), dueDay: dayNumber(dueDay) });
+    if (suggestion.length === 0) return setHint(`Informe a data do primeiro pagamento combinada e a quantidade (1 a ${MAX_SCHEDULE_ITEMS}).`);
     setHint(null);
     setLines(suggestion);
   };
   const suggest = () => suggestWith({ frequency, firstDueDate, count, principalAmount });
-  // Modelo padrão: preenche periodicidade, primeira data, quantidade e principal integral na última data. O rendimento é
-  // o combinado, digitado por você; as linhas só aparecem para revisão.
+  // Modelo padrão: preenche periodicidade, quantidade até o vencimento final e principal integral na última data. A
+  // primeira data é a que você digitou; sem ela, a primeira no dia do pagamento depois do início (editável); sem dia
+  // combinado, você informa a negociada. O rendimento é o combinado, digitado por você; as linhas só aparecem para revisão.
   const useDefaultModel = () => {
-    const plan = defaultModelPlan(investment);
+    if (dueDay && !dayNumber(dueDay)) return setHint("O dia do pagamento vai de 1 a 31 (ou deixe em branco para usar o dia da primeira data).");
+    const plan = defaultModelPlan(investment, { firstDueDate, dueDay: dayNumber(dueDay) });
+    setFrequency(plan.frequency); setPrincipalAmount(plan.principalAmount);
+    if (!plan.firstDueDate) return setHint("Informe a data do primeiro pagamento combinada (ou o dia do pagamento) e clique de novo em “Usar modelo padrão”. O sistema não presume a primeira data.");
     const values = { frequency: plan.frequency, firstDueDate: plan.firstDueDate, count: plan.count ? String(plan.count) : count, principalAmount: plan.principalAmount };
-    setFrequency(values.frequency); setFirstDueDate(values.firstDueDate); setDateKey((key) => key + 1); setCount(values.count); setPrincipalAmount(values.principalAmount);
+    if (values.firstDueDate !== firstDueDate) { setFirstDueDate(values.firstDueDate); setDateKey((key) => key + 1); }
+    setCount(values.count);
     if (!values.count) return setHint("Modelo padrão preenchido. Informe a quantidade de pagamentos (o contrato não tem prazo nem vencimento que a defina), o rendimento de cada data e clique em “Sugerir linhas para revisar”.");
     if (!yieldAmount.trim()) return setHint("Modelo padrão preenchido. Digite o rendimento combinado de cada data e clique em “Sugerir linhas para revisar”.");
     suggestWith(values);
@@ -224,11 +233,12 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
   return (
     <div className="schedule-form" aria-label={mode === "replace" ? "Montar cronograma" : "Incluir várias linhas"}>
       <div className="form-grid">
-        <p className="capital-note field-wide">Opcional: gere uma sugestão pela periodicidade, ou use o modelo padrão (rendimento periódico e principal integral no fim do prazo). A sugestão só preenche a tabela de revisão abaixo, com o rendimento digitado em cada data e a devolução do principal na última; nada é dividido nem calculado, e nada é gravado antes de você conferir. Para uma negociação diferente (principal em partes, datas irregulares), altere, retire ou acrescente linhas na revisão.</p>
+        <p className="capital-note field-wide">Opcional: as datas e os valores são os combinados com o investidor, e o dia do pagamento não precisa ser o dia do início do contrato (ex.: início em 10/10 e pagamentos todo dia 25). Gere uma sugestão pela periodicidade a partir da primeira data combinada, ou use o modelo padrão (rendimento periódico até o vencimento final e principal integral na última data). A sugestão só preenche a tabela de revisão abaixo; nada é dividido nem calculado, e nada é gravado antes de você conferir. Você pode alterar qualquer data ou valor, retirar ou acrescentar linhas, ou montar tudo à mão com &ldquo;Linha em branco&rdquo;.</p>
         <label className="field"><span>Periodicidade da sugestão</span><select value={frequency} onChange={(event) => setFrequency(event.target.value as PaymentFrequency)}>
           {options.map((key) => <option key={key} value={key}>{PAYMENT_FREQUENCIES[key]}</option>)}
         </select></label>
         <DateField key={dateKey} label={frequency === "AT_MATURITY" ? "Data do pagamento" : "Data do primeiro pagamento"} name="suggestFirstDueDate" defaultValue={firstDueDate} onChange={setFirstDueDate} />
+        {frequency !== "AT_MATURITY" && <label className="field"><span>Dia do pagamento (opcional)</span><input inputMode="numeric" maxLength={2} placeholder="Ex.: 25" value={dueDay} onChange={(event) => setDueDay(event.target.value.replace(/\D/g, ""))} aria-describedby="due-day-help" /><small id="due-day-help" className="admin-cell-note">Mês sem esse dia usa o último dia do mês.</small></label>}
         {frequency !== "AT_MATURITY" && <label className="field"><span>Quantidade de pagamentos</span><input inputMode="numeric" maxLength={3} placeholder="12" value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
         <label className="field"><span>{frequency === "AT_MATURITY" ? "Rendimento (R$)" : "Rendimento de cada data (R$)"}</span><input inputMode="decimal" placeholder="1.000,00" value={yieldAmount} onChange={(event) => setYieldAmount(event.target.value)} /></label>
         <label className="field"><span>Devolução do principal na última data (R$)</span><input inputMode="decimal" placeholder={centsToInput(investment.amountCents)} value={principalAmount} onChange={(event) => setPrincipalAmount(event.target.value)} /></label>
