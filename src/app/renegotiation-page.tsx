@@ -1,12 +1,12 @@
 "use client";
 
-// Renegociação (Etapa H, parte 1): escolher o cliente e as operações em aberto e simular novas condições.
-// SÓ SIMULA: esta tela não chama nenhuma ação do servidor; nada é gravado, encerrado ou lançado no capital. A gravação,
-// as situações "Renegociada" e os efeitos financeiros ficam desligados até a revisão e a autorização da Etapa H, parte 2.
-import { useState } from "react";
+// Renegociação (Etapa H): escolher o cliente e as operações em aberto, simular as novas condições e GRAVAR. Gravar encerra as
+// operações antigas como "Renegociada", cria o contrato novo ligado a elas e não move dinheiro do capital (renegotiateAction).
+import { useState, useTransition } from "react";
 import { addDays, formatDate, formatMoney, formatRate, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
 import type { TenantPortfolio } from "@/lib/finance/queries";
-import { renegotiationPosition, simulateRenegotiation, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
+import { renegotiateAction } from "./renegotiation-actions";
+import { renegotiationContract, renegotiationPosition, simulateRenegotiation, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
 import { DateField } from "./date-field";
 import { EmptyPanel, PageHeading } from "./portfolio-pages";
 
@@ -26,6 +26,9 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const [rate, setRate] = useState("");
   const [count, setCount] = useState("3");
   const [firstDueDate, setFirstDueDate] = useState(addDays(portfolio.today, 30));
+  const [confirmed, setConfirmed] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const operations = open.filter((operation) => operation.clientId === clientId);
   const chosen = operations.filter((operation) => !excluded.includes(operation.id));
   const position = renegotiationPosition(chosen);
@@ -36,11 +39,27 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const reasonMissing = adjustmentKind !== "NONE" && adjustmentReason.trim().length < 3;
   const ready = chosen.length > 0 && !reasonMissing && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
   const result = ready ? simulateRenegotiation(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number) }) : null;
+  const contract = result ? renegotiationContract(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number) }, portfolio.today) : null;
+  const save = () => {
+    const data = new FormData();
+    data.set("clientId", clientId);
+    for (const operation of chosen) data.append("operationIds", operation.id);
+    data.set("modality", modality); data.set("frequency", frequency); data.set("rate", rate); data.set("count", String(periods)); data.set("firstDueDate", firstDueDate);
+    data.set("adjustmentKind", adjustmentKind); data.set("adjustment", adjustment); data.set("reason", adjustmentReason); data.set("confirm", confirmed ? "1" : "0");
+    setFeedback(null);
+    startTransition(async () => {
+      try {
+        const saved = await renegotiateAction(data);
+        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); }
+        else setFeedback({ tone: "error", text: saved.error });
+      } catch { setFeedback({ tone: "error", text: "Não foi possível gravar a renegociação. Nada foi alterado; tente novamente." }); }
+    });
+  };
   const periodWord = frequency === "BIWEEKLY" ? "quinzena" : "mês";
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · RENEGOCIAÇÃO" title="Renegociação" description="Simule novas condições para as operações em aberto de um cliente. Esta tela só simula: nada é gravado." />
-      <p className="form-feedback form-feedback-warning">Simulação apenas. Gravar a renegociação (encerrar as operações antigas e criar a nova) depende das suas decisões D-H1 a D-H4 e ainda não existe.</p>
+      <PageHeading eyebrow="CREDIAI · RENEGOCIAÇÃO" title="Renegociação" description="Escolha as operações em aberto de um cliente, simule as novas condições e grave: as antigas ficam como renegociadas e o novo contrato guarda o vínculo." />
+      {feedback && <p className={`form-feedback ${feedback.tone === "ok" ? "" : "form-feedback-error"}`} role="status">{feedback.text}</p>}
       <section className="panel form-panel" aria-label="Operações a renegociar">
         <div className="panel-header"><div><h2>1. Cliente e operações</h2><p>Só operações em aberto do ciclo atual.</p></div></div>
         {clients.length === 0 ? <EmptyPanel icon="wallet" text="Nenhuma operação em aberto para renegociar." /> : (
@@ -120,7 +139,11 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
               <tr><td>Saída de caixa na renegociação</td><td>—</td><td>{formatMoney(result.comparison.capitalOutflowCents)}</td></tr>
             </tbody>
           </table></div>
-          <p className="capital-note">Efeito esperado (propostas D-H2 e D-H3, ainda não decididas): nenhum dinheiro sai do capital, porque o principal da proposta é o mesmo já emprestado. Os juros recebidos continuam registrados nas operações antigas. Os juros a receber da proposta só viram lucro quando forem pagos. As antigas ficariam como “Renegociada”, ligadas à nova, sem apagar pagamentos.</p>
+          <p className="capital-note">Ao gravar: nenhum dinheiro sai do capital, porque o principal do contrato novo é o mesmo já emprestado. Os juros em aberto passam para o contrato novo e só viram lucro quando forem pagos; os juros já recebidos continuam registrados nas operações antigas, que ficam como Renegociada, com o histórico intacto e o vínculo com o contrato novo.</p>
+          {contract && !contract.ok && !contract.error.startsWith("O desconto") && <p className="form-feedback form-feedback-warning">{contract.error}</p>}
+          {contract?.ok && contract.roundingCents > 0 && <p className="muted-cell">{`Parcela fixa arredondada para cima: o total do contrato fica ${formatMoney(contract.roundingCents)} acima da simulação (centavos somados aos juros).`}</p>}
+          <label className="field-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>{`Confirmo: encerrar ${chosen.length === 1 ? "a operação" : `as ${chosen.length} operações`} como renegociada${chosen.length === 1 ? "" : "s"} e criar o contrato novo de ${formatMoney(result.totalCents)}.`}</span></label>
+          <div className="form-actions"><button type="button" className="primary-button" disabled={!confirmed || pending || !contract?.ok} onClick={save}>{pending ? "Gravando…" : "Gravar renegociação"}</button></div>
         </section>
       )}
     </div>
