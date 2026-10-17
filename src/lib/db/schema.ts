@@ -8,6 +8,7 @@ import {
   foreignKey,
   index,
   integer,
+  numeric,
   jsonb,
   pgEnum,
   pgPolicy,
@@ -313,7 +314,8 @@ export const loanOperations = pgTable("loan_operation", {
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
   clientId: text("client_id").notNull(),
   principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
-  interestRateBps: integer("interest_rate_bps").notNull(),
+  // Pontos-base com uma casa decimal (1% = 100): permite taxas com 3 casas, como 14,995% (= 1499,5). Migração 0027.
+  interestRateBps: numeric("interest_rate_bps", { precision: 9, scale: 1, mode: "number" }).notNull(),
   interestCents: bigint("interest_cents", { mode: "number" }).notNull(),
   totalCents: bigint("total_cents", { mode: "number" }).notNull(),
   loanDate: date("loan_date", { mode: "string" }).notNull(),

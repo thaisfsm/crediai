@@ -3,7 +3,7 @@
 // Renegociação (Etapa H): escolher o cliente e as operações em aberto, simular as novas condições e GRAVAR. Gravar encerra as
 // operações antigas como "Renegociada", cria o contrato novo ligado a elas e não move dinheiro do capital (renegotiateAction).
 import { useState, useTransition } from "react";
-import { addDays, formatDate, formatMoney, formatRate, parseMoneyToCents, parseRateToBps } from "@/lib/finance/format";
+import { addDays, formatDate, formatMoney, formatRate, parseMoneyToCents, parseLoanRateToBps } from "@/lib/finance/format";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { renegotiateAction } from "./renegotiation-actions";
 import { renegotiationContract, renegotiationPosition, simulateRenegotiation, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
@@ -32,7 +32,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const operations = open.filter((operation) => operation.clientId === clientId);
   const chosen = operations.filter((operation) => !excluded.includes(operation.id));
   const position = renegotiationPosition(chosen);
-  const rateBps = parseRateToBps(rate);
+  const rateBps = parseLoanRateToBps(rate);
   const adjustmentCents = adjustmentKind === "NONE" ? 0 : parseMoneyToCents(adjustment);
   const periods = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(count) ? Number(count) : NaN) : 1;
   // Desconto ou acréscimo só entra com motivo (D-H1).

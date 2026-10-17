@@ -9,7 +9,7 @@ import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
-import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps, todayIso } from "@/lib/finance/format";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { loadAllCyclesOperations } from "@/lib/finance/queries";
 import type { OperationView } from "@/lib/finance/portfolio";
@@ -262,7 +262,7 @@ function operationTermsFromForm(data: FormData) {
   const fixedInterest = frequency === "BIWEEKLY" && text(data, "interestMode", 10) === "FIXED";
   const fixedInterestCents = fixedInterest ? parseMoneyToCents(text(data, "interestAmount", 40)) : null;
   if (fixedInterest && (fixedInterestCents === null || fixedInterestCents <= 0 || fixedInterestCents > MAX_CENTS)) return { ok: false as const, error: "Informe os juros por quinzena em reais, por exemplo 1.200,00." };
-  const interestRateBps = fixedInterest ? 0 : parseRateToBps(text(data, "rate", 20));
+  const interestRateBps = fixedInterest ? 0 : parseLoanRateToBps(text(data, "rate", 20));
   if (interestRateBps === null || interestRateBps > 100_000) return { ok: false as const, error: "Informe a taxa de juros em %, por exemplo 30." };
   if (frequency === "DAILY") {
     const daysInput = text(data, "days", 10);

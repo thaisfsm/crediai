@@ -1,0 +1,1 @@
+ALTER TABLE "loan_operation" ALTER COLUMN "interest_rate_bps" SET DATA TYPE numeric(9, 1);

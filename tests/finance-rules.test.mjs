@@ -328,3 +328,23 @@ test("M. taxa 0% não renova sozinha: vencida com principal em aberto fica Em at
   assert.equal(ledger.state, "OVERDUE");
   assert.equal(ledger.periodNumber, 1);
 });
+
+test("TX1. taxa de juros com 3 casas decimais: leitura, exibição e cálculo", async () => {
+  const { parseLoanRateToBps, formatRate } = await import("../src/lib/finance/format.ts");
+  assert.equal(parseLoanRateToBps("14,995"), 1499.5);
+  assert.equal(parseLoanRateToBps("14.995%"), 1499.5);
+  assert.equal(parseLoanRateToBps("5"), 500);
+  assert.equal(parseLoanRateToBps("1,5"), 150);
+  assert.equal(parseLoanRateToBps("0,001"), 0.1);
+  assert.equal(parseLoanRateToBps("14,9955"), null, "4 casas não são aceitas");
+  assert.equal(parseLoanRateToBps("abc"), null);
+  assert.equal(parseLoanRateToBps("-1"), null);
+  assert.equal(formatRate(1499.5), "14,995%");
+  assert.equal(formatRate(500), "5%");
+  assert.equal(formatRate(150), "1,5%");
+  // R$ 7.334,75 a 14,995% ao mês: 733.475 x 1499,5 / 10.000 = 109.984,6 -> 109.985 centavos (R$ 1.099,85).
+  const op = calculateOperation({ principalCents: 733_475, interestRateBps: parseLoanRateToBps("14,995") });
+  assert.equal(op.interestCents, 109_985);
+  assert.equal(op.totalCents, 843_460);
+  assert.equal(calculateOperation({ principalCents: 733_475, interestRateBps: 1500 }).interestCents, 110_021, "taxa de 2 casas continua igual");
+});

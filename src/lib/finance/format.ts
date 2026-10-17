@@ -12,7 +12,7 @@ export function splitMoney(cents: number) {
 }
 
 export function formatRate(bps: number) {
-  return `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+  return `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 3 })}%`;
 }
 
 // Aceita "20.000,00", "20000", "20000.5", "R$ 1.000,00".
@@ -30,6 +30,14 @@ export function parseRateToBps(input: string) {
   const normalized = input.replace(/[%\s]/g, "").replace(",", ".");
   if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null;
   return Math.round(Number(normalized) * 100);
+}
+
+// Taxa de juros das operações: até 3 casas decimais em % (14,995 = 1499,5 pontos-base). Os pontos-base ficam com uma
+// casa decimal (coluna numeric(9,1)); a taxa do investidor segue em número inteiro de pontos-base (parseRateToBps).
+export function parseLoanRateToBps(input: string) {
+  const normalized = input.replace(/[%\s]/g, "").replace(",", ".");
+  if (!/^\d+(\.\d{1,3})?$/.test(normalized)) return null;
+  return Math.round(Number(normalized) * 1000) / 10;
 }
 
 export function isIsoDate(value: string) {
