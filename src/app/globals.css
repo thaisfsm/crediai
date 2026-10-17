@@ -1256,4 +1256,7 @@ button { color:inherit; }
   .data-table .row-actions { flex-wrap: nowrap; gap: 5px; white-space: nowrap; }
   .data-table .row-actions .outline-button { padding-right: 8px; padding-left: 8px; white-space: nowrap; }
   .data-table td.actions-cell, .data-table td.nowrap-cell { white-space: nowrap; }
+  .report-operation-row td { font-size: 11px; }
+  .report-operation-row td:first-child { padding-left: 12px; }
+  .report-operation-row .status-chip { max-width: 92px; white-space: normal; line-height: 1.3; }
 }

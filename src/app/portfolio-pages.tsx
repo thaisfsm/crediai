@@ -763,14 +763,16 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
       <section className="panel table-panel" aria-label={`Operações de ${client.name}`}>
         <div className="panel-header"><div><div className="panel-title-row"><h2>Operações</h2><span className="today-count">{operations.length}</span></div><p>Cada operação separadamente. &quot;Detalhes&quot; abre o histórico de pagamentos.</p></div></div>
         {operations.length === 0 ? <EmptyPanel icon="wallet" text="Nenhuma operação para este cliente no ciclo atual." /> : (
-          <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Operação</th><th>Data</th><th>Vencimento</th><th>Principal</th><th>Juros</th><th>Total original</th><th>Recebido</th><th>Juros recebidos</th><th>Principal recebido</th><th>Saldo</th><th>Pagamentos</th><th>Tempo</th><th>Situação</th><th /></tr></thead>
+          <div className="table-scroll"><table className="data-table fit-table">
+            <thead><tr><th>Operação</th><th>Principal e juros</th><th>Total original</th><th>Recebido</th><th>Saldo</th><th>Vencimento e situação</th><th /></tr></thead>
             <tbody>{operations.map((operation) => (
               <tr key={operation.id}>
-                <td><strong>#{operation.code}</strong></td><td>{formatDate(operation.loanDate)}</td><td>{formatDate(operation.nextDueDate)}</td><td>{formatMoney(operation.principalCents)}</td><td>{formatMoney(operation.interestCents)}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}</td>
-                <td>{formatMoney(operation.originalTotalCents)}</td><td>{formatMoney(operation.paidCents)}</td><td>{formatMoney(operation.interestPaidCents)}</td><td>{formatMoney(operation.principalPaidCents)}</td>
-                <td><strong>{formatMoney(operation.balanceCents)}</strong></td><td>{operation.payments.length}</td><td>{operationAge(operation)}</td>
-                <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td>
+                <td data-label="Operação"><strong>#{operation.code}</strong><small>Emprestado em {formatDate(operation.loanDate)} · {operationAge(operation)}</small></td>
+                <td data-label="Principal e juros">{formatMoney(operation.principalCents)}<small>juros {formatMoney(operation.interestCents)}{operation.renewalCount > 0 && ` · ${plural(operation.renewalCount, "renovação", "renovações")}`}</small></td>
+                <td data-label="Total original">{formatMoney(operation.originalTotalCents)}</td>
+                <td data-label="Recebido">{formatMoney(operation.paidCents)}<small>juros {formatMoney(operation.interestPaidCents)} · principal {formatMoney(operation.principalPaidCents)}</small><small>{plural(operation.payments.length, "pagamento", "pagamentos")}</small></td>
+                <td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
+                <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
                 <td className="actions-cell"><OperationDetailsButton operation={operation} today={portfolio.today} onChanged={onChanged} /></td>
               </tr>
             ))}</tbody>
