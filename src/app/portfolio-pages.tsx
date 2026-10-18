@@ -14,6 +14,7 @@ import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { MoneyInput } from "./money-input";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
@@ -136,7 +137,7 @@ export function WalletSetup({ onSaved, cycleNumber = 1 }: { onSaved: () => void;
     <section className="panel form-panel wallet-setup" aria-label="Configurar carteira">
       <div className="panel-header"><div><h2>{cycleNumber > 1 ? `Novo ciclo da carteira (ciclo ${cycleNumber})` : "Configure sua carteira"}</h2><p>{cycleNumber > 1 ? "A carteira foi zerada. Informe o capital inicial deste novo ciclo; os clientes cadastrados continuam disponíveis." : "Informe o capital inicial para o CrediAI calcular o capital disponível conforme as suas operações."}</p></div></div>
       <form className="form-grid form-grid-inline" onSubmit={onSubmit}>
-        <label className="field"><span>Capital inicial (R$)</span><input name="initialCapital" inputMode="decimal" placeholder="20.000,00" required /></label>
+        <label className="field"><span>Capital inicial (R$)</span><MoneyInput name="initialCapital" inputMode="decimal" placeholder="20.000,00" required /></label>
         <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar capital inicial"}</button>
       </form>
       <Feedback feedback={feedback} />
@@ -153,7 +154,7 @@ export function SettingsPage({ portfolio, onChanged }: { portfolio: TenantPortfo
       <section className="panel form-panel">
         <div className="panel-header"><div><h2>Capital inicial da carteira</h2><p>{summary.hasWallet ? `Atual: ${formatMoney(summary.initialCapitalCents)}` : "Ainda não informado."} O capital disponível é recalculado a partir deste valor.</p></div></div>
         <form className="form-grid form-grid-inline" onSubmit={onSubmit}>
-          <label className="field"><span>Capital inicial (R$)</span><input name="initialCapital" inputMode="decimal" placeholder="20.000,00" defaultValue={summary.hasWallet ? (summary.initialCapitalCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} required /></label>
+          <label className="field"><span>Capital inicial (R$)</span><MoneyInput name="initialCapital" inputMode="decimal" placeholder="20.000,00" defaultValue={summary.hasWallet ? (summary.initialCapitalCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} required /></label>
           <button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar"}</button>
         </form>
         <Feedback feedback={feedback} />
@@ -998,9 +999,9 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
         <label className="field field-wide"><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
         {single ? (
           <>
-            <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
+            <label className="field"><span>Valor principal (R$)</span><MoneyInput name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
             {fixed
-              ? <label className="field"><span>Juros por quinzena (R$)</span><input name="interestAmount" inputMode="decimal" placeholder="1.200,00" value={interestAmount} onChange={(event) => setInterestAmount(event.target.value)} required /></label>
+              ? <label className="field"><span>Juros por quinzena (R$)</span><MoneyInput name="interestAmount" inputMode="decimal" placeholder="1.200,00" value={interestAmount} onChange={(event) => setInterestAmount(event.target.value)} required /></label>
               : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => setRate(event.target.value)} required /></label>}
             <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
             {daily ? (
@@ -1012,8 +1013,8 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           </>
         ) : (
           <>
-            <label className="field"><span>Valor emprestado (R$)</span><input name="loanAmount" inputMode="decimal" placeholder="10.000,00" value={loanAmount} onChange={(event) => setLoanAmount(event.target.value)} required /></label>
-            <label className="field"><span>Valor de cada parcela (R$)</span><input name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
+            <label className="field"><span>Valor emprestado (R$)</span><MoneyInput name="loanAmount" inputMode="decimal" placeholder="10.000,00" value={loanAmount} onChange={(event) => setLoanAmount(event.target.value)} required /></label>
+            <label className="field"><span>Valor de cada parcela (R$)</span><MoneyInput name="installment" inputMode="decimal" placeholder="1.200,00" value={installment} onChange={(event) => setInstallment(event.target.value)} required /></label>
             <label className="field"><span>{biweeklyInstallments ? "Quantidade de parcelas (quinzenas)" : "Prazo total (meses)"}</span><input name="term" inputMode="numeric" placeholder={biweeklyInstallments ? "3" : "10"} value={term} onChange={(event) => setTerm(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
             <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
             <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={dueDate} onChange={setDueDate} required />
@@ -1065,7 +1066,7 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
     <form className="form-grid edit-payment-form" onSubmit={onSubmit} aria-label="Editar pagamento">
       <input type="hidden" name="paymentId" value={payment.id} />
       <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} min={operation.loanDate} max={today} required />
-      <label className="field"><span>Valor pago (R$)</span><input name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
+      <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
       {renewal && <p className="capital-note field-wide">Este pagamento renovou o período até {formatDate(renewal.newDueDate)}. Ele pode ser corrigido para um valor maior (o excedente abate o principal), mas não menor que os juros pagos na renovação.</p>}
       <label className="field field-wide"><span>Observação</span><input name="notes" defaultValue={payment.notes ?? ""} placeholder="Opcional" maxLength={500} /></label>
       {exceeds && <p className="form-feedback form-feedback-warning">O pagamento não pode ser maior que {formatMoney(maxCents)}, o saldo da operação sem este pagamento.</p>}
@@ -1153,7 +1154,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
-            <label className="field"><span>Valor recebido (R$)</span><input name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
+            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
             <div className="payment-shortcuts field-wide">
               {canRenew && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.interestRemainingCents))}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
               {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(next.remainingCents))}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
@@ -1322,17 +1323,17 @@ function EditOperationPanel({ operation, clients, onClose, onChanged }: { operat
           <label className="field field-wide"><span>Cliente</span><select name="clientId" defaultValue={operation.clientId}>{options.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
           {installment ? (
             <>
-              <label className="field"><span>Valor emprestado (R$)</span><input name="loanAmount" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
-              <label className="field"><span>Valor de cada parcela (R$)</span><input name="installment" inputMode="decimal" defaultValue={centsToInput(operation.installmentCents ?? 0)} required /></label>
+              <label className="field"><span>Valor emprestado (R$)</span><MoneyInput name="loanAmount" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
+              <label className="field"><span>Valor de cada parcela (R$)</span><MoneyInput name="installment" inputMode="decimal" defaultValue={centsToInput(operation.installmentCents ?? 0)} required /></label>
               <label className="field"><span>{operation.frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Prazo total (meses)"}</span><input name="term" inputMode="numeric" maxLength={3} defaultValue={String(operation.installments.length)} required /></label>
               <DateField label="Data do empréstimo" name="loanDate" defaultValue={operation.loanDate} onChange={() => setReview(null)} required />
               <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={() => setReview(null)} required />
             </>
           ) : (
             <>
-              <label className="field"><span>Valor principal (R$)</span><input name="principal" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
+              <label className="field"><span>Valor principal (R$)</span><MoneyInput name="principal" inputMode="decimal" defaultValue={centsToInput(operation.principalCents)} required /></label>
               {biweekly && interestMode === "FIXED"
-                ? <label className="field"><span>Juros por quinzena (R$)</span><input name="interestAmount" inputMode="decimal" defaultValue={operation.ledgerTerms.interestMode === "FIXED" ? centsToInput(operation.periodInterestCents) : ""} required /></label>
+                ? <label className="field"><span>Juros por quinzena (R$)</span><MoneyInput name="interestAmount" inputMode="decimal" defaultValue={operation.ledgerTerms.interestMode === "FIXED" ? centsToInput(operation.periodInterestCents) : ""} required /></label>
                 : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : biweekly ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" defaultValue={operation.ledgerTerms.interestMode === "FIXED" ? "" : rateInput} required /></label>}
               <DateField label="Data do empréstimo" name="loanDate" defaultValue={operation.loanDate} onChange={() => setReview(null)} required />
               {daily ? (
@@ -1485,7 +1486,7 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
         <section className="panel form-panel wallet-setup" aria-label="Definir capital inicial">
           <div className="panel-header"><div><h2>Defina o capital inicial{summary.cycleNumber > 1 ? ` do ciclo ${summary.cycleNumber}` : ""}</h2><p>Depois disso você pode registrar aportes.</p></div></div>
           <form className="form-grid form-grid-inline" onSubmit={initial.onSubmit}>
-            <label className="field"><span>Capital inicial (R$)</span><input name="initialCapital" inputMode="decimal" placeholder="20.000,00" required /></label>
+            <label className="field"><span>Capital inicial (R$)</span><MoneyInput name="initialCapital" inputMode="decimal" placeholder="20.000,00" required /></label>
             <button className="primary-button" disabled={initial.pending}><Icon name="check" size={16} /> {initial.pending ? "Salvando…" : "Salvar capital inicial"}</button>
           </form>
           <Feedback feedback={initial.feedback} />
@@ -1494,7 +1495,7 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
         <section className="panel form-panel" aria-label="Registrar aporte">
           <div className="panel-header"><div><h2>Registrar aporte</h2><p>Dinheiro novo colocado na carteira. Entra no capital disponível na hora.</p></div></div>
           <form className="form-grid" onSubmit={contribution.onSubmit}>
-            <label className="field"><span>Valor do aporte (R$)</span><input name="amount" inputMode="decimal" placeholder="2.000,00" required /></label>
+            <label className="field"><span>Valor do aporte (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder="2.000,00" required /></label>
             <label className="field"><span>Data do aporte</span><input name="occurredAt" type="date" defaultValue={portfolio.today} max={portfolio.today} required /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
             <div className="form-actions"><button className="primary-button" disabled={contribution.pending}><Icon name="plus" size={16} /> {contribution.pending ? "Registrando…" : "Registrar aporte"}</button></div>
@@ -1506,7 +1507,7 @@ export function CapitalPage({ portfolio, onChanged }: { portfolio: TenantPortfol
         <section className="panel form-panel" aria-label="Registrar retirada">
           <div className="panel-header"><div><h2>Registrar retirada</h2><p>Dinheiro tirado da carteira. Limitado ao capital disponível de {formatMoney(Math.max(summary.availableCents, 0))}. Para registrar com categoria (salário, retirada de sócio, despesas, impostos), use <a className="text-link inline-link" href="/financeiro">Financeiro</a>.</p></div></div>
           <form className="form-grid" onSubmit={withdrawal.onSubmit}>
-            <label className="field"><span>Valor da retirada (R$)</span><input name="amount" inputMode="decimal" placeholder="2.000,00" required /></label>
+            <label className="field"><span>Valor da retirada (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder="2.000,00" required /></label>
             <label className="field"><span>Data da retirada</span><input name="occurredAt" type="date" defaultValue={portfolio.today} max={portfolio.today} required /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
             <div className="form-actions"><button className="primary-button" disabled={withdrawal.pending}><Icon name="arrow" size={16} /> {withdrawal.pending ? "Registrando…" : "Registrar retirada"}</button></div>
