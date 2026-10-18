@@ -7,6 +7,7 @@ import type { Obligation } from "@/lib/investors/payables";
 import type { InvestmentDetail } from "@/lib/investors/queries";
 import { LINE_KINDS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, applyRedemptionDate, defaultModelPlan, redemptionDate, suggestScheduleLines, type LineKind, type PaymentFrequency, type ScheduleLineInput } from "@/lib/investors/rules";
 import { DateField } from "../date-field";
+import { MoneyInput } from "../money-input";
 import { QuickPayButton } from "../contas-a-pagar/payables-ui";
 import { EmptyPanel, Feedback, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
@@ -154,8 +155,8 @@ function LineAmounts({ kind, yieldAmount, principalAmount, onKind, onYield, onPr
       <label className="field"><span>Tipo</span><select name="kind" value={kind} onChange={(event) => onKind(event.target.value as LineKind)}>
         {(Object.keys(LINE_KINDS) as LineKind[]).map((key) => <option key={key} value={key}>{LINE_KINDS[key]}</option>)}
       </select></label>
-      {kind !== "PRINCIPAL" && <label className="field"><span>Rendimento (R$)</span><input name="yieldAmount" inputMode="decimal" placeholder="1.000,00" value={yieldAmount} onChange={(event) => onYield(event.target.value)} required /></label>}
-      {kind !== "YIELD" && <label className="field"><span>Devolução do principal (R$)</span><input name="principalAmount" inputMode="decimal" placeholder="10.000,00" value={principalAmount} onChange={(event) => onPrincipal(event.target.value)} required /></label>}
+      {kind !== "PRINCIPAL" && <label className="field"><span>Rendimento (R$)</span><MoneyInput name="yieldAmount" inputMode="decimal" placeholder="1.000,00" value={yieldAmount} onChange={(event) => onYield(event.target.value)} required /></label>}
+      {kind !== "YIELD" && <label className="field"><span>Devolução do principal (R$)</span><MoneyInput name="principalAmount" inputMode="decimal" placeholder="10.000,00" value={principalAmount} onChange={(event) => onPrincipal(event.target.value)} required /></label>}
       <label className="field"><span>Total da linha</span><input value={formatMoney(total)} readOnly aria-readonly="true" tabIndex={-1} /></label>
     </>
   );
@@ -246,10 +247,10 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
           {options.map((key) => <option key={key} value={key}>{PAYMENT_FREQUENCIES[key]}</option>)}
         </select></label>
         <DateField key={dateKey} label={frequency === "AT_MATURITY" ? "Data do pagamento" : "Data do primeiro pagamento"} name="suggestFirstDueDate" defaultValue={firstDueDate} onChange={setFirstDueDate} />
-        {frequency !== "AT_MATURITY" && <label className="field"><span>Dia do pagamento (opcional)</span><input inputMode="numeric" maxLength={2} placeholder="Ex.: 25" value={dueDay} onChange={(event) => setDueDay(event.target.value.replace(/\D/g, ""))} aria-describedby="due-day-help" /><small id="due-day-help" className="admin-cell-note">Mês sem esse dia usa o último dia do mês.</small></label>}
+        {frequency !== "AT_MATURITY" && <label className="field"><span>Dia do pagamento (opcional)</span><input inputMode="numeric" maxLength={2} placeholder="Ex.: 25 (mês curto usa o último dia)" value={dueDay} onChange={(event) => setDueDay(event.target.value.replace(/\D/g, ""))} title="Mês sem esse dia usa o último dia do mês." /></label>}
         {frequency !== "AT_MATURITY" && <label className="field"><span>Quantidade de pagamentos</span><input inputMode="numeric" maxLength={3} placeholder="12" value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
         <label className="field"><span>{frequency === "AT_MATURITY" ? "Rendimento (R$)" : "Rendimento de cada data (R$)"}</span><input inputMode="decimal" placeholder="1.000,00" value={yieldAmount} onChange={(event) => setYieldAmount(event.target.value)} /></label>
-        <label className="field"><span>Devolução do principal na última data (R$)</span><input inputMode="decimal" placeholder={centsToInput(investment.amountCents)} value={principalAmount} onChange={(event) => setPrincipalAmount(event.target.value)} /></label>
+        <label className="field"><span>Devolução do principal na última data (R$)</span><MoneyInput inputMode="decimal" placeholder={centsToInput(investment.amountCents)} value={principalAmount} onChange={(event) => setPrincipalAmount(event.target.value)} /></label>
         <label className="field"><span>Observação (opcional)</span><input maxLength={200} placeholder="Ex.: rendimento mensal" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
         <div className="form-actions"><button type="button" className="outline-button" onClick={useDefaultModel}>Usar modelo padrão</button><button type="button" className="outline-button" onClick={suggest}>Sugerir linhas para revisar</button><button type="button" className="outline-button" onClick={() => setLines((current) => [...current, emptyLine()])}><Icon name="plus" size={16} /> Linha em branco</button></div>
         {hint && <p className="form-feedback form-feedback-error field-wide" role="alert">{hint}</p>}
@@ -269,8 +270,8 @@ function ScheduleLinesEditor({ data, mode, onDone, onCancel }: { data: Investmen
                 <td><select aria-label={`Tipo da linha ${index + 1}`} value={line.kind} onChange={(event) => update(index, { kind: event.target.value })}>
                   {(Object.keys(LINE_KINDS) as LineKind[]).map((key) => <option key={key} value={key}>{LINE_KINDS[key]}</option>)}
                 </select></td>
-                <td><input aria-label={`Rendimento da linha ${index + 1}`} inputMode="decimal" value={line.yieldAmount} disabled={line.kind === "PRINCIPAL"} onChange={(event) => update(index, { yieldAmount: event.target.value })} /></td>
-                <td><input aria-label={`Principal da linha ${index + 1}`} inputMode="decimal" value={line.principalAmount} disabled={line.kind === "YIELD"} onChange={(event) => update(index, { principalAmount: event.target.value })} /></td>
+                <td><MoneyInput aria-label={`Rendimento da linha ${index + 1}`} inputMode="decimal" value={line.yieldAmount} disabled={line.kind === "PRINCIPAL"} onChange={(event) => update(index, { yieldAmount: event.target.value })} /></td>
+                <td><MoneyInput aria-label={`Principal da linha ${index + 1}`} inputMode="decimal" value={line.principalAmount} disabled={line.kind === "YIELD"} onChange={(event) => update(index, { principalAmount: event.target.value })} /></td>
                 <td><input aria-label={`Observação da linha ${index + 1}`} maxLength={200} value={line.description ?? ""} onChange={(event) => update(index, { description: event.target.value })} /></td>
                 <td><button type="button" className="text-link" onClick={() => setLines((current) => current.filter((_, position) => position !== index))}>Retirar</button></td>
               </tr>

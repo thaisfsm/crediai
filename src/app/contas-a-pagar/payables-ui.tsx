@@ -10,6 +10,7 @@ import {
 } from "@/lib/investors/payables";
 import type { PayablesPageData } from "@/lib/investors/payables-queries";
 import { DateField } from "../date-field";
+import { MoneyInput } from "../money-input";
 import { FinanceSubnav } from "../financeiro/finance-subnav";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon, type IconName } from "../ui-icon";
@@ -50,7 +51,7 @@ export function PaymentForm({ obligation, today, minDate, availableCents, onDone
         <input type="hidden" name="kind" value={obligation.kind} />
         <input type="hidden" name="requestId" defaultValue="" />
         <label className="field"><span>Tipo da obrigação</span><select value={obligation.kind} disabled><option value={obligation.kind}>{OBLIGATION_KINDS[obligation.kind]}</option></select></label>
-        <label className="field"><span>Valor pago (R$)</span><input name="amount" inputMode="decimal" value={amountText} onChange={(event) => setAmountText(event.target.value)} aria-invalid={invalid || aboveBalance || aboveCapital} required /></label>
+        <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amountText} onChange={(event) => setAmountText(event.target.value)} aria-invalid={invalid || aboveBalance || aboveCapital} required /></label>
         <DateField label="Data efetiva do pagamento" name="paidOn" defaultValue={today} min={minDate} max={today} required />
         <label className="field"><span>Forma de pagamento</span><select name="method" defaultValue="" required>
           <option value="" disabled>Escolha</option>

@@ -15,6 +15,7 @@ import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/inve
 import { DateField } from "../date-field";
 import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, formatBytes, useFormAction, usePersonPrefill } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
+import { MoneyInput } from "../money-input";
 import { declarePriorContributionAction, registerInvestmentEntryAction } from "../contas-a-pagar/actions";
 import { ObligationsTable } from "../contas-a-pagar/payables-ui";
 import {
@@ -140,7 +141,7 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
       {renewal
         ? <><input type="hidden" name="amount" value={centsToInput(renewal.principalCents)} /><input type="hidden" name="principalCents" value={renewal.principalCents} />
           <label className="field"><span>Principal renovado</span><input value={formatMoney(renewal.principalCents)} readOnly aria-readonly="true" tabIndex={-1} /></label></>
-        : <label className="field"><span>Valor investido (R$)</span><input name="amount" inputMode="decimal" placeholder="50.000,00" value={amountText} onChange={(event) => setAmountText(event.target.value)} required readOnly={Boolean(editing?.renewedFromInvestmentId)} /></label>}
+        : <label className="field"><span>Valor investido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder="50.000,00" value={amountText} onChange={(event) => setAmountText(event.target.value)} required readOnly={Boolean(editing?.renewedFromInvestmentId)} /></label>}
       <label className="field"><span>Taxa combinada (%)</span><input name="rate" inputMode="decimal" placeholder="1,5" value={rateText} onChange={(event) => setRateText(event.target.value)} required /></label>
       <label className="field"><span>A taxa se refere a</span><select name="ratePeriod" value={ratePeriodValue} onChange={(event) => setRatePeriodValue(event.target.value)} required>
         <option value="" disabled>Escolha o período da taxa</option>
