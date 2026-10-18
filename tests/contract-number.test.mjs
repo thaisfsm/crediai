@@ -14,3 +14,23 @@ test("NC2. contador da carteira: próximo depois do maior número gerado; númer
   assert.equal(nextContractSequence(["2026.07.15-0001"]), 2);
   assert.equal(nextContractSequence(["2026.07.15-0001", "2026.08.01-0007", "2026.07.20-0003", "X-0099"]), 8);
 });
+
+import { addMonthsIso, addTermIso, installmentsFor, termFromDates } from "../src/lib/investors/rules.ts";
+
+test("NC3. fórmulas do contrato: vencimento = início + prazo, prazo = entre as datas, parcelas = prazo / periodicidade", () => {
+  assert.equal(addMonthsIso("2026-08-25", 12), "2027-08-25");
+  assert.equal(addMonthsIso("2026-01-31", 1), "2026-02-28");
+  assert.equal(addTermIso("2026-08-25", 1, "YEARS"), "2027-08-25");
+  assert.equal(addTermIso("2026-08-25", 45, "DAYS"), "2026-10-09");
+  assert.deepEqual(termFromDates("2026-08-25", "2027-08-25"), { count: 12, unit: "MONTHS" });
+  assert.deepEqual(termFromDates("2026-01-31", "2026-02-28"), { count: 1, unit: "MONTHS" });
+  assert.deepEqual(termFromDates("2026-08-25", "2026-10-09"), { count: 45, unit: "DAYS" });
+  assert.equal(termFromDates("2026-08-25", "2026-08-25"), null);
+  assert.equal(installmentsFor(12, "MONTHS", "MONTHLY"), 12);
+  assert.equal(installmentsFor(12, "MONTHS", "QUARTERLY"), 4);
+  assert.equal(installmentsFor(10, "MONTHS", "QUARTERLY"), null);
+  assert.equal(installmentsFor(1, "YEARS", "MONTHLY"), 12);
+  assert.equal(installmentsFor(12, "MONTHS", "AT_MATURITY"), 1);
+  assert.equal(installmentsFor(45, "DAYS", "MONTHLY"), null);
+  assert.equal(installmentsFor(12, "MONTHS", ""), null);
+});

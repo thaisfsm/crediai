@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
-import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, isIsoDate, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
 import { CONTRACT_STATES, contractState, formatDateTime, type ContractState } from "@/lib/investors/contract";
 import {
-  DOCUMENT_KINDS, INVESTMENT_PAYMENT_METHODS, REDEMPTION_RULES, redemptionDate, redemptionLabel, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, investorAddress, rateLabel, termLabel,
+  DOCUMENT_KINDS, INVESTMENT_PAYMENT_METHODS, REDEMPTION_RULES, redemptionDate, redemptionLabel, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, addTermIso, installmentsFor, investorAddress, rateLabel, termFromDates, termLabel,
   type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type PersonType, type RedemptionRule, type TermUnit,
 } from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
@@ -135,6 +135,49 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
   const [amountText, setAmountText] = useState(renewal ? centsToInput(renewal.principalCents) : editing ? centsToInput(editing.amountCents) : "");
   const [ratePeriodValue, setRatePeriodValue] = useState<string>(editing?.ratePeriod ?? "");
   const autoYield = suggestedYield(amountText, rateText, ratePeriodValue);
+  // Datas, prazo e parcelas (sugestões que a pessoa pode trocar): o último campo mexido manda. Prazo digitado calcula o
+  // vencimento (início + prazo); vencimento escolhido calcula o prazo; parcelas = prazo / periodicidade.
+  const [start, setStart] = useState(renewal?.startDate ?? editing?.startDate ?? today);
+  const [maturity, setMaturity] = useState(renewal ? "" : editing?.maturityDate ?? "");
+  const [maturityKey, setMaturityKey] = useState(0);
+  const [termText, setTermText] = useState(renewal ? "" : editing?.termCount ? String(editing.termCount) : legacyTerm?.count ?? "");
+  const [termUnit, setTermUnit] = useState<TermUnit>(renewal ? "MONTHS" : (editing?.termUnit as TermUnit | null) ?? legacyTerm?.unit ?? "MONTHS");
+  const [frequency, setFrequency] = useState<PaymentFrequency | "">(editing?.paymentFrequency ?? "");
+  const [installText, setInstallText] = useState(editing?.installmentCount ? String(editing.installmentCount) : "");
+  const [installTouched, setInstallTouched] = useState(Boolean(editing?.installmentCount));
+  const [driver, setDriver] = useState<"dates" | "term" | null>(!renewal && editing?.termCount ? "term" : !renewal && editing?.maturityDate ? "dates" : null);
+  const refreshInstallments = (count: string, unit: TermUnit, freq: PaymentFrequency | "") => {
+    const quantity = Number(count);
+    const result = !installTouched && quantity > 0 ? installmentsFor(quantity, unit, freq) : null;
+    if (result) setInstallText(String(result));
+  };
+  const setMaturityFromTerm = (startIso: string, count: string, unit: TermUnit) => {
+    const quantity = Number(count);
+    if (!isIsoDate(startIso) || !(quantity > 0)) return;
+    setMaturity(addTermIso(startIso, quantity, unit));
+    setMaturityKey((key) => key + 1);
+  };
+  const onStart = (iso: string) => {
+    setStart(iso);
+    if (driver === "term") setMaturityFromTerm(iso, termText, termUnit);
+    else if (driver === "dates" && maturity) {
+      const term = termFromDates(iso, maturity);
+      if (term) { setTermText(String(term.count)); setTermUnit(term.unit); refreshInstallments(String(term.count), term.unit, frequency); }
+    }
+  };
+  const onMaturity = (iso: string) => {
+    setMaturity(iso);
+    setDriver("dates");
+    const term = termFromDates(start, iso);
+    if (term) { setTermText(String(term.count)); setTermUnit(term.unit); refreshInstallments(String(term.count), term.unit, frequency); }
+  };
+  const onTerm = (count: string, unit: TermUnit) => {
+    setTermText(count);
+    setTermUnit(unit);
+    setDriver("term");
+    setMaturityFromTerm(start, count, unit);
+    refreshInstallments(count, unit, frequency);
+  };
   const usable = accounts.filter((account) => !account.archivedAt || account.id === editing?.bankAccountId);
   const preferred = accounts.find((account) => account.isPreferred && !account.archivedAt);
   const fits = (account: AccountOption) => (method === "PIX" ? account.hasPix : method === "TRANSFER" ? account.hasTransfer : true);
@@ -152,18 +195,18 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
       <div className="field"><span>Número do contrato</span><input value={editing ? editing.contractNumber ?? "Sem número (contrato anterior ao número automático)" : "Gerado pelo sistema ao salvar (ANO.MÊS.DIA-0001)"} readOnly aria-label="Número do contrato" /></div>
       <DateField label="Data da contratação (opcional)" name="contractedOn" defaultValue={renewal ? "" : editing?.contractedOn ?? ""} />
       {!renewal && <DateField label="Data em que o dinheiro foi recebido (opcional)" name="investedOn" defaultValue={editing?.investedOn ?? ""} />}
-      <DateField label="Data de início" name="startDate" defaultValue={renewal?.startDate ?? editing?.startDate ?? today} required />
-      <label className="field"><span>Prazo (opcional)</span><input name="termCount" inputMode="numeric" placeholder="12" maxLength={5} defaultValue={renewal ? "" : editing?.termCount ?? legacyTerm?.count ?? ""} /></label>
-      <label className="field"><span>Unidade do prazo</span><select name="termUnit" defaultValue={renewal ? "MONTHS" : editing?.termUnit ?? legacyTerm?.unit ?? "MONTHS"}>
+      <DateField label="Data de início" name="startDate" defaultValue={renewal?.startDate ?? editing?.startDate ?? today} onChange={onStart} required />
+      <label className="field"><span>Prazo (opcional)</span><input name="termCount" inputMode="numeric" placeholder="12" maxLength={5} value={termText} onChange={(event) => onTerm(event.target.value.replace(/\D/g, ""), termUnit)} title="Com a data de início, o prazo calcula o vencimento (e o vencimento calcula o prazo)." /></label>
+      <label className="field"><span>Unidade do prazo</span><select name="termUnit" value={termUnit} onChange={(event) => onTerm(termText, event.target.value as TermUnit)}>
         {(Object.keys(TERM_UNIT_LABELS) as TermUnit[]).map((unit) => <option key={unit} value={unit}>{TERM_UNIT_LABELS[unit]}</option>)}
       </select></label>
-      <DateField label="Vencimento do contrato (opcional)" name="maturityDate" defaultValue={renewal ? "" : editing?.maturityDate ?? ""} />
+      <DateField key={maturityKey} label="Vencimento do contrato (opcional)" name="maturityDate" defaultValue={maturity} onChange={onMaturity} />
       <label className="field"><span>Dia do pagamento combinado (opcional)</span><input name="dueDay" inputMode="numeric" placeholder="Ex.: 25 (pode ser diferente do início)" maxLength={2} defaultValue={editing?.dueDay ?? ""} /></label>
-      <label className="field"><span>Periodicidade dos pagamentos (opcional)</span><select name="paymentFrequency" defaultValue={editing?.paymentFrequency ?? ""}>
+      <label className="field"><span>Periodicidade dos pagamentos (opcional)</span><select name="paymentFrequency" value={frequency} onChange={(event) => { const next = event.target.value as PaymentFrequency | ""; setFrequency(next); refreshInstallments(termText, termUnit, next); }}>
         <option value="">Não informada</option>
         {(Object.keys(PAYMENT_FREQUENCIES) as PaymentFrequency[]).map((frequency) => <option key={frequency} value={frequency}>{PAYMENT_FREQUENCIES[frequency]}</option>)}
       </select></label>
-      <label className="field"><span>Quantidade de parcelas (opcional)</span><input name="installmentCount" inputMode="numeric" placeholder="12" maxLength={3} defaultValue={editing?.installmentCount ?? ""} /></label>
+      <label className="field"><span>Quantidade de parcelas (opcional)</span><input name="installmentCount" inputMode="numeric" placeholder="12" maxLength={3} value={installText} onChange={(event) => { setInstallText(event.target.value.replace(/\D/g, "")); setInstallTouched(true); }} title="Calculada pelo prazo e a periodicidade; você pode trocar." /></label>
       <label className="field"><span>Forma de pagamento ao investidor (opcional)</span><select name="paymentMethod" value={method} onChange={(event) => setMethod(event.target.value as InvestmentPaymentMethod | "")}>
         <option value="">Não informada</option>{(Object.keys(INVESTMENT_PAYMENT_METHODS) as InvestmentPaymentMethod[]).map((key) => <option key={key} value={key}>{INVESTMENT_PAYMENT_METHODS[key]}</option>)}
       </select></label>
