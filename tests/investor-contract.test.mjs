@@ -191,3 +191,11 @@ test("CT10. cláusulas de liquidez/resgate e de remuneração; liquidez obrigat�
   assert.notEqual(contractFingerprint(source({ investment: { redemptionRule: "D_PLUS", redemptionDays: 30 } }), false), contractFingerprint(source(), false));
   assert.notEqual(contractFingerprint(source({ investment: { yieldPaymentCents: 60_000 } }), false), contractFingerprint(source(), false));
 });
+
+test("CT6. datas do primeiro e do último pagamento no contrato; vencimento termina no último pagamento", async () => {
+  const text = pdfText(await render(source({ investment: { startDate: "2026-07-15", maturityDate: "2027-06-25", firstPaymentDate: "2026-08-25", lastPaymentDate: "2027-07-25" } })));
+  assert.match(text, /Data do primeiro pagamento: 25\/08\/2026/);
+  assert.match(text, /Data do último pagamento: 25\/07\/2027/);
+  assert.match(text, /Vencimento do contrato: 25\/07\/2027/);
+  assert.doesNotMatch(text, /25\/06\/2027/);
+});

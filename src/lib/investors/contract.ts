@@ -61,6 +61,8 @@ export type ContractSource = {
     id: string; amountCents: number; agreedRateBps: number; ratePeriod: RatePeriod; startDate: string;
     maturityDate: string | null; dueDay: number | null; notes: string | null; status: InvestmentStatus;
     paymentFrequency: PaymentFrequency | null; yieldPaymentCents: number | null; redemptionRule: RedemptionRule | null; redemptionDays: number | null;
+    // Primeira e última data do cronograma de pagamentos (quando há cronograma).
+    firstPaymentDate?: string | null; lastPaymentDate?: string | null;
   };
 };
 
@@ -98,6 +100,7 @@ export function contractFingerprint(source: ContractSource, includeNotes: boolea
       id: investment.id, amountCents: investment.amountCents, agreedRateBps: investment.agreedRateBps, ratePeriod: investment.ratePeriod, startDate: investment.startDate,
       maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: includeNotes ? investment.notes : null,
       paymentFrequency: investment.paymentFrequency, yieldPaymentCents: investment.yieldPaymentCents, redemptionRule: investment.redemptionRule, redemptionDays: investment.redemptionDays,
+      firstPaymentDate: investment.firstPaymentDate ?? null, lastPaymentDate: investment.lastPaymentDate ?? null,
     },
     includeNotes,
   });
@@ -223,12 +226,16 @@ export function buildContract(source: ContractSource, includeNotes: boolean, met
   let item = 0;
   const sub = () => `${n}.${++item}. `;
   paragraph({ text: `${sub()}Data de início: ` }, { text: formatDate(investment.startDate), bold: true }, { text: "." });
-  if (investment.maturityDate) paragraph({ text: `${sub()}Vencimento do contrato: ` }, { text: formatDate(investment.maturityDate), bold: true }, { text: "." });
+  if (investment.firstPaymentDate) paragraph({ text: `${sub()}Data do primeiro pagamento: ` }, { text: formatDate(investment.firstPaymentDate), bold: true }, { text: "." });
+  if (investment.lastPaymentDate) paragraph({ text: `${sub()}Data do último pagamento: ` }, { text: formatDate(investment.lastPaymentDate), bold: true }, { text: "." });
+  // O contrato termina no último pagamento do cronograma; sem cronograma vale o vencimento cadastrado.
+  const contractEnd = investment.lastPaymentDate ?? investment.maturityDate;
+  if (contractEnd) paragraph({ text: `${sub()}Vencimento do contrato: ` }, { text: formatDate(contractEnd), bold: true }, { text: "." });
   if (investment.dueDay) paragraph({ text: `${sub()}Dia de vencimento combinado: ` }, { text: `dia ${investment.dueDay}`, bold: true }, { text: "." });
 
   if (investment.redemptionRule) {
     n = heading("DA LIQUIDEZ E DO RESGATE");
-    const liquidityDate = redemptionDate(investment.maturityDate, investment.redemptionRule, investment.redemptionDays);
+    const liquidityDate = redemptionDate(contractEnd ?? null, investment.redemptionRule, investment.redemptionDays);
     const days = investment.redemptionDays;
     const when = investment.redemptionRule === "D_PLUS" && days
       ? `D+${days}, isto é, ${days} ${days === 1 ? "dia corrido" : "dias corridos"} após o término do contrato`

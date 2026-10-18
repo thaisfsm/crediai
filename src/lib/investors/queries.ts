@@ -257,7 +257,7 @@ export async function loadInvestmentDetail(investmentId: string) {
     // Contas do investidor para escolher no contrato: as em uso e a já escolhida (mesmo se retirada depois).
     const bankAccounts = (await loadBankAccountViews(tx, row.investment.tenantId, row.investor.id)).filter((account) => !account.archivedAt || account.id === row.investment.bankAccountId);
     const contractorRow = await loadContractor(tx, row.investment.tenantId);
-    const source = contractSource(row.investment, row.investor, contractorRow);
+    const source = contractSource(row.investment, row.investor, contractorRow, scheduleRows.map((item) => item.dueDate));
     const current = contracts.find((contract) => !contract.supersededAt) ?? null;
     // Observações entram no contrato por escolha do usuário; a sugestão é repetir a escolha da versão vigente.
     const includeNotesDefault = current ? current.includesNotes : Boolean(row.investment.notes?.trim());
