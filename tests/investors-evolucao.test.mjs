@@ -14,6 +14,11 @@ test("EV1. conta bancária: só se exige o que se aplica (banco completo, só Pi
   assert.equal(bank.values.accountDigit, "X");
   assert.equal(bank.values.holderDocument, "41179705858");
   assert.equal(bank.values.pixKey, null);
+  const named = bankAccountFields(form({ bankName: "237 - Bradesco", branch: "1234", account: "99887" }));
+  assert.equal(named.ok, true, "sem campo de código: o código vem do nome");
+  assert.equal(named.values.bankCode, "237");
+  assert.equal(named.values.bankName, "237 - Bradesco");
+  assert.equal(bankAccountFields(form({ bankName: "Itaú", branch: "1234", account: "99887" })).values.bankCode, null, "nome sem código: fica sem código");
   const pixOnly = bankAccountFields(form({ pixKeyType: "EMAIL", pixKey: "Ana@Exemplo.com", isPreferred: "1" }));
   assert.equal(pixOnly.ok, true, "só Pix não exige agência nem conta");
   assert.equal(pixOnly.values.pixKey, "ana@exemplo.com");

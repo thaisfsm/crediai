@@ -16,7 +16,8 @@ const pick = <T extends string>(options: Record<T, string>, value: string) => (O
 
 export function bankAccountFields(read: Read): { ok: true; values: BankAccountValues } | Failure {
   const text = (key: string, max: number) => read(key, max).replace(/\s+/g, " ").trim() || null;
-  const bankCode = read("bankCode", 10).replace(/\s/g, "");
+  // O código vem junto do nome ("237 - Bradesco"): sem campo próprio na tela. Só contas ligadas a contrato reenviam o código gravado.
+  const bankCode = (read("bankName", 120).trim().match(/^(\d{3})(?!\d)/)?.[1] ?? read("bankCode", 10)).replace(/\s/g, "");
   if (bankCode && !/^\d{3}$/.test(bankCode)) return { ok: false, error: "Código do banco: 3 números, por exemplo 341 ou 001." };
   const branch = read("branch", 10).replace(/\s/g, "");
   if (branch && !/^\d{1,5}$/.test(branch)) return { ok: false, error: "Agência: só números, até 5, sem o dígito (ele vai no campo ao lado)." };
