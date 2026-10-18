@@ -149,7 +149,7 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
         <option value="" disabled>Escolha o período da taxa</option>
         {(Object.keys(RATE_PERIODS) as (keyof typeof RATE_PERIODS)[]).map((period) => <option key={period} value={period}>{RATE_PERIODS[period]}</option>)}
       </select></label>
-      <label className="field"><span>Identificação do contrato (opcional)</span><input name="contractNumber" maxLength={40} placeholder="INV-2026/001" defaultValue={renewal ? "" : editing?.contractNumber ?? ""} /></label>
+      <div className="field"><span>Número do contrato</span><input value={editing ? editing.contractNumber ?? "Sem número (contrato anterior ao número automático)" : "Gerado pelo sistema ao salvar (ANO.MÊS.DIA-0001)"} readOnly aria-label="Número do contrato" /></div>
       <DateField label="Data da contratação (opcional)" name="contractedOn" defaultValue={renewal ? "" : editing?.contractedOn ?? ""} />
       {!renewal && <DateField label="Data em que o dinheiro foi recebido (opcional)" name="investedOn" defaultValue={editing?.investedOn ?? ""} />}
       <DateField label="Data de início" name="startDate" defaultValue={renewal?.startDate ?? editing?.startDate ?? today} required />

@@ -10,6 +10,7 @@ import { investmentCapitalEntries, investmentContractors, investmentContracts, i
 import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
 import { accountFitsMethod, bankAccountFields, bankAccountLabel, type BankAccountValues } from "@/lib/investors/bank-accounts";
 import { tenantFilter, withInvestorContext } from "@/lib/investors/access";
+import { formatContractNumber, nextContractSequence } from "@/lib/investors/contract-number";
 import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
 import { contractFonts } from "@/lib/investors/contract-fonts";
 import { renderContractPdf } from "@/lib/investors/contract-pdf";
@@ -159,6 +160,13 @@ async function accountLabels(tx: TenantTransaction, tenantId: string, ids: (stri
   return new Map(rows.map((row) => [row.id, bankAccountLabel(row)]));
 }
 
+// Número do contrato (ANO.MÊS.DIA-0001), gerado dentro da transação; o travamento por carteira impede dois contratos simultâneos com o mesmo número.
+async function generateContractNumber(tx: TenantTransaction, tenantId: string, startDate: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`contract-number:${tenantId}`}))`);
+  const rows = await tx.select({ number: investments.contractNumber }).from(investments).where(eq(investments.tenantId, tenantId));
+  return formatContractNumber(startDate, nextContractSequence(rows.map((row) => row.number)));
+}
+
 export async function createInvestmentAction(data: FormData): Promise<InvestorActionResult> {
   const read = reader(data);
   const investorId = read("investorId", 80);
@@ -173,9 +181,10 @@ export async function createInvestmentAction(data: FormData): Promise<InvestorAc
     if (!account.ok) return account;
     const investmentId = id("ivt");
     // O contrato fica sempre na carteira do investidor.
-    await tx.insert(investments).values({ id: investmentId, tenantId: investor.tenantId, investorId: investor.id, ...fields.values, createdByUserId: scope.user.id });
-    await audit(tx, scope, investor.tenantId, "INVESTMENT_CREATED", "investment", investmentId, null, { investorId: investor.id, investorName: investor.name, ...investmentSnapshot(fields.values) },
-      `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}`);
+    const values: InvestmentValues = { ...fields.values, contractNumber: fields.values.contractNumber ?? await generateContractNumber(tx, investor.tenantId, fields.values.startDate) };
+    await tx.insert(investments).values({ id: investmentId, tenantId: investor.tenantId, investorId: investor.id, ...values, createdByUserId: scope.user.id });
+    await audit(tx, scope, investor.tenantId, "INVESTMENT_CREATED", "investment", investmentId, null, { investorId: investor.id, investorName: investor.name, ...investmentSnapshot(values) },
+      `Investimento de ${formatMoney(values.amountCents)} cadastrado para ${investor.name}`);
     return { ok: true, message: `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}.`, id: investmentId };
   }).catch((error) => {
     if (duplicateContractNumber(error)) return CONTRACT_NUMBER_ERROR;
@@ -198,6 +207,8 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
       .where(and(eq(investments.id, investmentId), tenantFilter(scope, investments.tenantId))).for("no key update", { of: investments });
     if (!current) return { ok: false, error: "Investimento não encontrado." };
     const { investment } = current;
+    // O número do contrato é gerado pelo sistema na criação e não muda na edição.
+    fields.values.contractNumber = investment.contractNumber;
     const account = await checkBankAccount(tx, { id: investment.investorId, tenantId: investment.tenantId }, fields.values, investment.bankAccountId);
     if (!account.ok) return account;
     // O valor do contrato não pode ficar abaixo do principal já agendado no cronograma nem do principal já devolvido.
@@ -820,7 +831,7 @@ export async function renewInvestmentAction(data: FormData): Promise<InvestorAct
     if (remaining <= 0) return { ok: false, error: "Todo o principal deste contrato já foi devolvido: não há o que renovar." };
     if (shownAmount !== remaining) return { ok: false, error: "O principal a renovar mudou desde que o formulário foi aberto (houve uma baixa). Confira e confirme de novo. Nada foi gravado." };
     if (fields.values.startDate < previous.startDate) return { ok: false, error: `A renovação não pode começar antes do início do contrato anterior (${formatDate(previous.startDate)}).` };
-    const values: InvestmentValues = { ...fields.values, amountCents: remaining, investedOn: null };
+    const values: InvestmentValues = { ...fields.values, amountCents: remaining, investedOn: null, contractNumber: fields.values.contractNumber ?? await generateContractNumber(tx, previous.tenantId, fields.values.startDate) };
     const account = await checkBankAccount(tx, { id: previous.investorId, tenantId: previous.tenantId }, values);
     if (!account.ok) return account;
     const newId = id("ivt");
