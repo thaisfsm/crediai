@@ -41,6 +41,8 @@ export type PayableInvestment = {
   // Renovação (migração 0024): contrato que veio de outro (o dinheiro já está no capital pelo contrato de origem) e
   // contrato que já foi renovado (o principal não devolvido passou para a renovação; não recebe mais baixa de principal).
   renewedFrom?: string | null; originHasCapital?: boolean; renewed?: boolean;
+  // Forma de pagamento combinada no contrato (para o botão de pagar em um clique); null = não informada.
+  paymentMethod?: string | null;
 };
 export type PayableItem = { id: string; investmentId: string; number: number; dueDate: string; yieldCents: number; principalCents: number; description: string | null };
 export type PayablePayment = {
@@ -59,6 +61,8 @@ export type Obligation = {
   expectedCents: number; paidCents: number; balanceCents: number; status: ObligationStatus; payments: PayablePayment[];
   // Por que a baixa ainda não pode ser registrada (regra da entrada); null quando pode.
   paymentBlock: string | null;
+  // Forma de pagamento do contrato, usada no pagamento em um clique (sem ela, o botão registra como "Outro").
+  defaultMethod: PaymentMethod | null;
 };
 
 export const contractLabel = (investment: Pick<PayableInvestment, "contractNumber" | "amountCents" | "startDate">) =>
@@ -100,6 +104,7 @@ export function buildObligations({ investments, items, payments, today }: { inve
         number: item.number, dueDate: item.dueDate, description: item.description, kind, expectedCents, paidCents,
         balanceCents: Math.max(expectedCents - paidCents, 0), status: obligationStatus({ expectedCents, paidCents, dueDate: item.dueDate }, today), payments: list,
         paymentBlock: evidence.ok ? null : evidence.error,
+        defaultMethod: investment.paymentMethod && isPaymentMethod(investment.paymentMethod) ? investment.paymentMethod : null,
       });
     }
   }

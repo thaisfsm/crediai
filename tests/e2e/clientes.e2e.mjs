@@ -150,6 +150,15 @@ test("CE6. busca no servidor: nome sem acentos e em partes, CPF e telefone com o
   assert.deepEqual(archived.results.map((client) => [client.name, client.archived]), [["Arquivado Teste", true]]);
 });
 
+test("CE6b. busca por e-mail: com @, parte do e-mail sem acento e só na própria carteira", async () => {
+  await admin(`update client set email = 'joao.silva@exemplo.com' where tenant_id = 'ten_roberio' and name = 'João da Conceição Silva'`);
+  for (const query of ["joao.silva@exemplo.com", "@exemplo", "SILVA@", "silva@exemplo.com", "joao.silva", "exemplo"]) assert.deepEqual(names(await search(robério, query)), ["João da Conceição Silva"], query);
+  assert.deepEqual((await search(robério, "@")).results, []);
+  assert.deepEqual((await search(robério, "@naoexiste")).results, []);
+  assert.deepEqual((await search(fernando, "joao.silva@exemplo.com")).results, [], "outra carteira não encontra");
+  assert.equal((await search(robério, "@exemplo")).results[0].email, "joao.silva@exemplo.com");
+});
+
 test("CE7. isolamento: a busca de um tenant nunca devolve clientes do outro", async () => {
   assert.deepEqual(names(await search(fernando, "joao")), ["João Conceição da Carteira B"]);
   assert.deepEqual(names(await search(fernando, "52998224725")), ["João Conceição da Carteira B"]);

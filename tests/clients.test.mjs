@@ -67,12 +67,15 @@ test("CL4. chave Pix por tipo", () => {
 
 test("CL5. busca: nome sem acentos, palavras em qualquer ordem; CPF e telefone com ou sem máscara", () => {
   assert.equal(normalizeName("  JOÃO   da  Conceição "), "joao da conceicao");
-  assert.deepEqual(clientSearchTerms("joão  SOUZA"), { kind: "name", words: ["joao", "souza"] });
-  assert.deepEqual(clientSearchTerms("Ana"), { kind: "name", words: ["ana"] });
+  assert.deepEqual(clientSearchTerms("joão  SOUZA"), { kind: "name", words: ["joao", "souza"], email: "joão  souza" });
+  assert.deepEqual(clientSearchTerms("Ana"), { kind: "name", words: ["ana"], email: "ana" });
   assert.deepEqual(clientSearchTerms("529.982.247-25"), { kind: "digits", digits: "52998224725" });
   assert.deepEqual(clientSearchTerms("(11) 98765-4321"), { kind: "digits", digits: "11987654321" });
   assert.deepEqual(clientSearchTerms("98"), { kind: "none" });
   assert.deepEqual(clientSearchTerms("   "), { kind: "none" });
+  assert.deepEqual(clientSearchTerms("Ana@Exemplo.com"), { kind: "email", email: "ana@exemplo.com" }, "com @ procura no e-mail");
+  assert.deepEqual(clientSearchTerms("@gmail"), { kind: "email", email: "@gmail" });
+  assert.deepEqual(clientSearchTerms("@"), { kind: "none" });
   assert.deepEqual(clientSearchTerms("%_"), { kind: "none" });
 });
 
