@@ -94,7 +94,9 @@ test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avi
     calls += 1;
     return route.request().url().endsWith("/11222333000181")
       ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ razao_social: "EMPRESA EXEMPLO LTDA", nome_fantasia: "Exemplo", cep: "01310100", descricao_tipo_de_logradouro: "AVENIDA", logradouro: "PAULISTA", numero: "1578", complemento: "ANDAR 2", bairro: "BELA VISTA", municipio: "SAO PAULO", uf: "SP" }) })
-      : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+      : route.request().url().endsWith("/11444777000161")
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ razao_social: "OUTRA EMPRESA SA", cep: "20040020", descricao_tipo_de_logradouro: "RUA", logradouro: "DA ASSEMBLEIA", numero: "10", complemento: "", bairro: "CENTRO", municipio: "RIO DE JANEIRO", uf: "RJ" }) })
+        : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
   });
   const cnpj = page.locator('input[name="businessCnpj"]');
   const company = page.locator('input[name="businessCompanyName"]');
@@ -111,6 +113,17 @@ test("nome da empresa pelo CNPJ: só com CNPJ válido, só no campo vazio, e avi
   assert.match(await page.locator('input[name="businessStreet"]').inputValue(), /PAULISTA/i);
   assert.equal(await page.locator('input[name="businessCep"]').inputValue(), "01310-100");
   assert.equal(await page.locator('input[name="residentialStreet"]').inputValue(), "", "o endereço residencial não é tocado");
+  // Segundo CNPJ na mesma tela: troca o que o primeiro preencheu (inclusive o que o novo CNPJ deixa vazio).
+  await cnpj.fill("11.444.777/0001-61");
+  await page.getByText("preenchidos pela base pública (OUTRA EMPRESA SA)").waitFor();
+  assert.equal(await company.inputValue(), "OUTRA EMPRESA SA");
+  assert.equal(await page.locator('input[name="businessNumber"]').inputValue(), "10");
+  assert.equal(await page.locator('input[name="businessComplement"]').inputValue(), "", "complemento do CNPJ anterior sai");
+  assert.equal(await page.locator('input[name="businessCity"]').inputValue(), "RIO DE JANEIRO");
+  assert.equal(await page.locator('select[name="businessState"]').inputValue(), "RJ");
+  assert.equal(await page.locator('input[name="businessCep"]').inputValue(), "20040-020");
+  await cnpj.fill("11.222.333/0001-81");
+  await page.getByText("preenchidos pela base pública (EMPRESA EXEMPLO LTDA)").waitFor();
   await company.fill("Nome digitado");
   await cnpj.fill("");
   await cnpj.fill("11.222.333/0001-81");
