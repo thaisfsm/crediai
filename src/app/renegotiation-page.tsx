@@ -21,6 +21,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const [adjustmentKind, setAdjustmentKind] = useState<"NONE" | "DISCOUNT" | "ADDITION">("NONE");
   const [adjustment, setAdjustment] = useState("");
   const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [penalty, setPenalty] = useState("");
   const [modality, setModality] = useState<RenegotiationModality>("INSTALLMENT");
   const [frequency, setFrequency] = useState<RenegotiationFrequency>("MONTHLY");
   const [rate, setRate] = useState("");
@@ -35,22 +36,24 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const rateBps = parseLoanRateToBps(rate);
   const adjustmentCents = adjustmentKind === "NONE" ? 0 : parseMoneyToCents(adjustment);
   const periods = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(count) ? Number(count) : NaN) : 1;
-  // Desconto ou acréscimo só entra com motivo (D-H1).
-  const reasonMissing = adjustmentKind !== "NONE" && adjustmentReason.trim().length < 3;
-  const ready = chosen.length > 0 && !reasonMissing && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
-  const result = ready ? simulateRenegotiation(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number) }) : null;
-  const contract = result ? renegotiationContract(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number) }, portfolio.today) : null;
+  const penaltyCents = penalty.trim() ? parseMoneyToCents(penalty) : 0;
+  // Desconto, acréscimo ou multa só entram com motivo (D-H1).
+  const needsReason = adjustmentKind !== "NONE" || (penaltyCents ?? 0) > 0;
+  const reasonMissing = needsReason && adjustmentReason.trim().length < 3;
+  const ready = chosen.length > 0 && !reasonMissing && penaltyCents !== null && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
+  const result = ready ? simulateRenegotiation(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number), penaltyCents: penaltyCents as number }) : null;
+  const contract = result ? renegotiationContract(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number), penaltyCents: penaltyCents as number }, portfolio.today) : null;
   const save = () => {
     const data = new FormData();
     data.set("clientId", clientId);
     for (const operation of chosen) data.append("operationIds", operation.id);
     data.set("modality", modality); data.set("frequency", frequency); data.set("rate", rate); data.set("count", String(periods)); data.set("firstDueDate", firstDueDate);
-    data.set("adjustmentKind", adjustmentKind); data.set("adjustment", adjustment); data.set("reason", adjustmentReason); data.set("confirm", confirmed ? "1" : "0");
+    data.set("adjustmentKind", adjustmentKind); data.set("adjustment", adjustment); data.set("penalty", penalty); data.set("reason", adjustmentReason); data.set("confirm", confirmed ? "1" : "0");
     setFeedback(null);
     startTransition(async () => {
       try {
         const saved = await renegotiateAction(data);
-        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); }
+        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); setPenalty(""); }
         else setFeedback({ tone: "error", text: saved.error });
       } catch { setFeedback({ tone: "error", text: "Não foi possível gravar a renegociação. Nada foi alterado; tente novamente." }); }
     });
@@ -101,12 +104,14 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
               <option value="NONE">Sem ajuste</option><option value="DISCOUNT">Desconto</option><option value="ADDITION">Acréscimo</option>
             </select></label>
             {adjustmentKind !== "NONE" && <label className="field"><span>{adjustmentKind === "DISCOUNT" ? "Valor do desconto (R$)" : "Valor do acréscimo (R$)"}</span><input inputMode="decimal" placeholder="0,00" value={adjustment} onChange={(event) => setAdjustment(event.target.value)} /></label>}
-            {adjustmentKind !== "NONE" && <label className="field field-wide"><span>{adjustmentKind === "DISCOUNT" ? "Motivo do desconto" : "Motivo do acréscimo"}</span><input maxLength={300} placeholder="Ex.: acordo para quitar em 3 meses" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} /></label>}
+            <label className="field"><span>Multa na última parcela (R$)</span><input inputMode="decimal" placeholder="0,00" value={penalty} onChange={(event) => setPenalty(event.target.value)} /></label>
+            {needsReason && <label className="field field-wide"><span>{adjustmentKind === "NONE" ? "Motivo da multa" : adjustmentKind === "DISCOUNT" ? "Motivo do desconto" : "Motivo do acréscimo"}</span><input maxLength={300} placeholder="Ex.: parcela em atraso jogada para o final" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} /></label>}
             <label className="field"><span>{`Taxa de juros por ${periodWord} (%)`}</span><input inputMode="decimal" placeholder="5" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
             {modality === "INSTALLMENT" && <label className="field"><span>{frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Quantidade de parcelas (meses)"}</span><input inputMode="numeric" maxLength={3} value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
             <DateField label={modality === "INSTALLMENT" ? "Primeiro vencimento" : "Vencimento"} name="simulationFirstDue" defaultValue={firstDueDate} onChange={setFirstDueDate} />
           </div>
-          {reasonMissing && <p className="form-feedback form-feedback-warning">{`Informe o motivo do ${adjustmentKind === "DISCOUNT" ? "desconto" : "acréscimo"} para ver a simulação.`}</p>}
+          <p className="capital-note">{"A multa é somada só à última parcela (a parcela em atraso que vai para o final). As demais parcelas ficam iguais."}</p>
+          {reasonMissing && <p className="form-feedback form-feedback-warning">Informe o motivo para ver a simulação.</p>}
         </section>
       )}
 
@@ -118,6 +123,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <div><dt>Principal em aberto (base dos juros)</dt><dd>{formatMoney(result.baseCents)}</dd></div>
             <div><dt>Juros em aberto incorporados</dt><dd>{formatMoney(result.carriedInterestCents)}</dd></div>
             <div><dt>{result.adjustmentCents < 0 ? "Desconto" : "Acréscimo"}</dt><dd>{formatMoney(Math.abs(result.adjustmentCents))}</dd></div>
+            {result.penaltyCents > 0 && <div><dt>Multa (na última parcela)</dt><dd>{formatMoney(result.penaltyCents)}</dd></div>}
             <div><dt>Valor renegociado</dt><dd>{formatMoney(result.renegotiatedCents)}</dd></div>
             <div><dt>{`Juros novos (${formatRate(rateBps as number)} por ${periodWord}${modality === "INSTALLMENT" ? ` × ${periods}` : ""})`}</dt><dd>{formatMoney(result.newInterestCents)}</dd></div>
             <div className="payment-balance"><dt>Total a receber (depois)</dt><dd>{formatMoney(result.totalCents)}</dd></div>
@@ -127,7 +133,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <p><strong>{modality === "INSTALLMENT" ? "Parcelas simuladas" : "Pagamento simulado"}</strong>{modality === "SINGLE" ? ` · pagando só os juros (${formatMoney(result.periodInterestCents)}), o período renovaria, como nas operações de hoje` : ""}</p>
             <ol>{result.payments.map((payment) => <li key={payment.number}><span>{modality === "INSTALLMENT" ? `Parcela ${payment.number}` : "Quitação"}</span><strong>{formatDate(payment.dueDate)}</strong><span>{formatMoney(payment.amountCents)}</span></li>)}</ol>
           </div>
-          {adjustmentKind !== "NONE" && <p className="muted-cell">{`Motivo do ${adjustmentKind === "DISCOUNT" ? "desconto" : "acréscimo"}: ${adjustmentReason.trim()}`}</p>}
+          {needsReason && <p className="muted-cell">{`Motivo: ${adjustmentReason.trim()}`}</p>}
           <div className="table-scroll"><table className="data-table renegotiation-compare" aria-label="Atual e proposta">
             <thead><tr><th>Comparação</th><th>Hoje</th><th>Proposta</th></tr></thead>
             <tbody>

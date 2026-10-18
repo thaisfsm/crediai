@@ -1,0 +1,8 @@
+-- Renegociação com multa na última parcela: no parcelado, o total pode ser maior que parcela × quantidade (a última parcela leva a multa).
+-- Só amplia o que é aceito (toda linha válida antes continua válida); nenhuma linha existente é alterada.
+ALTER TABLE "loan_operation" DROP CONSTRAINT "loan_operation_modality_valid";--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_modality_valid" CHECK (("loan_operation"."modality" = 'SINGLE' and "loan_operation"."frequency" in ('MONTHLY', 'BIWEEKLY') and "loan_operation"."installment_count" is null and "loan_operation"."installment_cents" is null)
+    or ("loan_operation"."modality" = 'SINGLE' and "loan_operation"."frequency" = 'DAILY' and "loan_operation"."installment_count" >= 1 and "loan_operation"."installment_cents" > 0 and "loan_operation"."first_due_date" is not null
+      and "loan_operation"."total_cents" >= "loan_operation"."installment_count" * "loan_operation"."installment_cents" and "loan_operation"."total_cents" < "loan_operation"."installment_count" * "loan_operation"."installment_cents" + "loan_operation"."installment_count")
+    or ("loan_operation"."modality" = 'INSTALLMENT' and "loan_operation"."frequency" in ('MONTHLY', 'BIWEEKLY') and "loan_operation"."installment_count" >= 1 and "loan_operation"."installment_cents" > 0 and "loan_operation"."first_due_date" is not null
+      and "loan_operation"."total_cents" >= "loan_operation"."installment_count" * "loan_operation"."installment_cents"));

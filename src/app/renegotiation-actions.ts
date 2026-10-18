@@ -36,8 +36,10 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
   const adjustmentKind = text(data, "adjustmentKind", 10);
   const adjustmentInput = adjustmentKind === "DISCOUNT" || adjustmentKind === "ADDITION" ? parseMoneyToCents(text(data, "adjustment", 40)) : 0;
   if (adjustmentInput === null || adjustmentInput < 0) return { ok: false, error: "Informe o valor do ajuste em reais, por exemplo 100,00." };
+  const penaltyInput = text(data, "penalty", 40) ? parseMoneyToCents(text(data, "penalty", 40)) : 0;
+  if (penaltyInput === null || penaltyInput < 0) return { ok: false, error: "Informe o valor da multa em reais, por exemplo 100,00." };
   const reason = text(data, "reason", 300);
-  if (adjustmentInput > 0 && reason.length < 3) return { ok: false, error: "Informe o motivo do desconto ou do acréscimo." };
+  if ((adjustmentInput > 0 || penaltyInput > 0) && reason.length < 3) return { ok: false, error: "Informe o motivo do desconto, do acréscimo ou da multa." };
   const adjustmentCents = adjustmentKind === "DISCOUNT" ? -adjustmentInput : adjustmentInput;
   const loanDate = todayIso();
 
@@ -55,7 +57,7 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
     if (chosen.some((operation) => operation.clientId !== clientId)) return { ok: false, error: "Todas as operações precisam ser do mesmo cliente." };
     if (chosen.some((operation) => operation.status !== "OPEN")) return { ok: false, error: "Só operações em aberto podem ser renegociadas. Atualize a tela e confira." };
     const position = renegotiationPosition(chosen);
-    const built = renegotiationContract(position, { modality, frequency, rateBps, count, firstDueDate, adjustmentCents }, loanDate);
+    const built = renegotiationContract(position, { modality, frequency, rateBps, count, firstDueDate, adjustmentCents, penaltyCents: penaltyInput }, loanDate);
     if (!built.ok) return built;
 
     const renegotiatedAt = new Date();
@@ -76,7 +78,7 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
     await recordAdminAudit(tx, session, {
       action: "OPERATION_RENEGOTIATED", entity: "loan_operation", entityId: newId, tenantId, tenantName: tenant?.name ?? null,
       before: { operations: chosen.map((operation) => ({ id: operation.id, code: operation.code, principalOpenCents: operation.principalRemainingCents, interestOpenCents: operation.interestRemainingCents, balanceCents: operation.balanceCents })) },
-      after: { newOperationId: newId, newOperationCode: newCode, ...built.contract, adjustmentCents, roundingCents: built.roundingCents, reason: reason || null },
+      after: { newOperationId: newId, newOperationCode: newCode, ...built.contract, adjustmentCents, penaltyCents: penaltyInput, roundingCents: built.roundingCents, reason: reason || null },
       description: `Renegociação de ${client.name}: ${chosen.map((operation) => `#${operation.code}`).join(", ")} → #${newCode}`,
     });
     return {
