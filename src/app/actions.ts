@@ -187,7 +187,7 @@ export async function loadAllCyclesReportAction(): Promise<{ ok: true; operation
   return { ok: true, operations: await loadAllCyclesOperations() };
 }
 
-// Busca rápida de clientes por nome (sem acentos, partes do nome), CPF ou telefone, formatados ou não. Roda no servidor e
+// Busca rápida de clientes por nome (sem acentos, partes do nome), CPF, telefone ou e-mail, formatados ou não. Roda no servidor e
 // só na carteira da sessão (tenant_id explícito além do RLS); arquivados aparecem marcados. Não grava nada.
 export async function searchClientsAction(query: string): Promise<{ ok: true; results: ClientSearchResult[] } | { ok: false; error: string }> {
   const terms = clientSearchTerms(String(query ?? ""));
@@ -195,10 +195,12 @@ export async function searchClientsAction(query: string): Promise<{ ok: true; re
   return withTenantContext(async (tx, { tenantId }) => {
     const plainName = sql`lower(translate(regexp_replace(${clients.name}, '\\s+', ' ', 'g'), ${ACCENTED}, ${PLAIN}))`;
     const escape = (value: string) => value.replace(/[\\%_]/g, (match) => `\\${match}`);
-    const match = terms.kind === "name"
-      ? and(...terms.words.map((word) => sql`${plainName} like ${`%${escape(word)}%`}`))
+    const match = terms.kind === "email"
+      ? sql`lower(${clients.email}) like ${`%${escape(terms.email)}%`}`
+      : terms.kind === "name"
+      ? or(and(...terms.words.map((word) => sql`${plainName} like ${`%${escape(word)}%`}`)), sql`lower(${clients.email}) like ${`%${escape(terms.email)}%`}`)
       : or(sql`${clients.document} like ${`%${terms.digits}%`}`, sql`${clients.phone} like ${`%${terms.digits}%`}`, sql`${clients.whatsapp} like ${`%${terms.digits}%`}`);
-    const rows = await tx.select({ id: clients.id, name: clients.name, document: clients.document, phone: clients.phone, whatsapp: clients.whatsapp, archivedAt: clients.archivedAt })
+    const rows = await tx.select({ id: clients.id, name: clients.name, document: clients.document, phone: clients.phone, whatsapp: clients.whatsapp, email: clients.email, archivedAt: clients.archivedAt })
       .from(clients).where(and(eq(clients.tenantId, tenantId), match))
       .orderBy(sql`${clients.archivedAt} is not null`, asc(clients.name), asc(clients.id)).limit(CLIENT_SEARCH_LIMIT);
     return { ok: true as const, results: rows.map(({ archivedAt, ...row }) => ({ ...row, archived: archivedAt !== null })) };

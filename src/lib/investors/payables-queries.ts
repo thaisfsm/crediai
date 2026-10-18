@@ -42,7 +42,7 @@ export async function loadEntryEvidence(tx: TenantTransaction, tenantId: string,
 export async function loadTenantObligations(tx: TenantTransaction, tenantId: string, today: string) {
   const investmentRows = await tx.select({
     id: investments.id, investorId: investments.investorId, investorName: investors.name, contractNumber: investments.contractNumber, status: investments.status,
-    startDate: investments.startDate, amountCents: investments.amountCents, capitalEntryRule: investments.capitalEntryRule, renewedFrom: investments.renewedFromInvestmentId,
+    startDate: investments.startDate, amountCents: investments.amountCents, capitalEntryRule: investments.capitalEntryRule, renewedFrom: investments.renewedFromInvestmentId, paymentMethod: investments.paymentMethod,
     originHasCapital: sql<boolean>`crediai_investment_has_capital(investment.tenant_id, investment.id)`,
     renewed: sql<boolean>`exists (select 1 from investment r where r.renewed_from_investment_id = investment.id and r.tenant_id = investment.tenant_id)`,
   }).from(investments).innerJoin(investors, and(eq(investors.id, investments.investorId), eq(investors.tenantId, investments.tenantId)))

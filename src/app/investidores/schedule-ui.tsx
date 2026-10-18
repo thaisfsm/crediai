@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { centsToInput, formatDate, formatMoney, parseMoneyToCents } from "@/lib/finance/format";
 import { LINE_STATUS, type LineStatus } from "@/lib/investors/position";
+import type { Obligation } from "@/lib/investors/payables";
 import type { InvestmentDetail } from "@/lib/investors/queries";
 import { LINE_KINDS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, applyRedemptionDate, defaultModelPlan, redemptionDate, suggestScheduleLines, type LineKind, type PaymentFrequency, type ScheduleLineInput } from "@/lib/investors/rules";
 import { DateField } from "../date-field";
+import { QuickPayButton } from "../contas-a-pagar/payables-ui";
 import { EmptyPanel, Feedback, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
 import { addInvestmentScheduleItemAction, deleteInvestmentScheduleItemAction, saveInvestmentScheduleLinesAction, updateInvestmentScheduleItemAction } from "./actions";
@@ -92,6 +94,7 @@ export function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDo
             <thead><tr><th>#</th><th>Vencimento</th><th>Tipo</th><th>Rendimento</th><th>Principal</th><th>Total</th><th>Pago</th><th>Última baixa</th><th>Situação</th><th>Observação</th>{editable && <th />}</tr></thead>
             <tbody>{lines.map((line, index) => (
               <ScheduleRow key={line.id} line={line} position={index + 1} investmentId={investment.id} editable={editable} editing={editingId === line.id}
+                payable={data.cash.obligations.filter((obligation) => obligation.scheduleItemId === line.id && obligation.balanceCents > 0 && !obligation.paymentBlock)} today={data.cash.today}
                 onEdit={() => setEditingId(editingId === line.id ? null : line.id)} onDone={done} />
             ))}</tbody>
           </table></div>
@@ -102,7 +105,7 @@ export function ScheduleSection({ data, onDone }: { data: InvestmentDetail; onDo
   );
 }
 
-function ScheduleRow({ line, position, investmentId, editable, editing, onEdit, onDone }: { line: Line; position: number; investmentId: string; editable: boolean; editing: boolean; onEdit: () => void; onDone: () => void }) {
+function ScheduleRow({ line, position, investmentId, editable, editing, payable, today, onEdit, onDone }: { line: Line; position: number; investmentId: string; editable: boolean; editing: boolean; payable: Obligation[]; today: string; onEdit: () => void; onDone: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const remove = useFormAction(deleteInvestmentScheduleItemAction, onDone);
   const locked = line.payments.length > 0;
@@ -119,9 +122,12 @@ function ScheduleRow({ line, position, investmentId, editable, editing, onEdit, 
         <td>{line.lastPaidOn ? formatDate(line.lastPaidOn) : "—"}</td>
         <td><LineStatusChip status={line.status} /></td>
         <td>{line.description ?? "—"}</td>
-        {editable && locked && <td className="actions-cell"><span className="status-chip status-paid"><i />Com pagamento</span></td>}
+        {editable && locked && <td className="actions-cell"><span className="row-actions">
+          {payable.map((obligation) => <QuickPayButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}
+          <span className="status-chip status-paid"><i />Com pagamento</span></span></td>}
         {editable && !locked && (
           <td className="actions-cell">
+            {payable.length > 0 && <span className="row-actions">{payable.map((obligation) => <QuickPayButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}</span>}
             <form className="row-actions" onSubmit={remove.onSubmit}>
               <input type="hidden" name="investmentId" value={investmentId} /><input type="hidden" name="itemId" value={line.id} />
               <button type="button" className="outline-button" onClick={onEdit}>{editing ? "Fechar" : "Editar"}</button>

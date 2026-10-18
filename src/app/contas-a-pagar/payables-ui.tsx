@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fragment, useRef, useState, type FormEvent } from "react";
+import { Fragment, useRef, useState, useTransition, type FormEvent } from "react";
 import { formatDate, formatMoney, parseMoneyToCents, centsToInput } from "@/lib/finance/format";
 import {
   LEGACY_EVIDENCE_ERROR, OBLIGATION_KINDS, OBLIGATION_SOURCES, OBLIGATION_STATUS, PAYABLE_TABS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, obligationDescription, statusSlug,
@@ -77,6 +77,44 @@ export function PaymentForm({ obligation, today, minDate, availableCents, onDone
   );
 }
 
+// Pagar em um clique: registra a baixa do saldo inteiro da obrigação, hoje, na forma de pagamento combinada no contrato
+// (sem ela, como "Outro"). É a mesma ação e as mesmas conferências do formulário: o servidor recusa se o capital não
+// cobre, se a entrada do contrato não foi registrada etc. A chave do envio evita pagamento em dobro no clique duplo.
+export function QuickPayButton({ obligation, today, onDone }: { obligation: Pick<Obligation, "scheduleItemId" | "kind" | "balanceCents" | "defaultMethod">; today: string; onDone: () => void }) {
+  const requestId = useRef<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const pay = () => {
+    requestId.current ??= newRequestId();
+    const data = new FormData();
+    data.set("scheduleItemId", obligation.scheduleItemId);
+    data.set("kind", obligation.kind);
+    data.set("amount", centsToInput(obligation.balanceCents));
+    data.set("paidOn", today);
+    data.set("method", obligation.defaultMethod ?? "OTHER");
+    data.set("requestId", requestId.current);
+    setFeedback(null);
+    startTransition(async () => {
+      try {
+        const result = await registerInvestmentPaymentAction(data);
+        if (result.ok) { requestId.current = null; setFeedback({ tone: "ok", text: result.message }); onDone(); }
+        else setFeedback({ tone: "error", text: result.error });
+      } catch {
+        setFeedback({ tone: "error", text: "Não foi possível registrar o pagamento. Confira a lista antes de tentar de novo." });
+      }
+    });
+  };
+  const method = PAYMENT_METHODS[obligation.defaultMethod ?? "OTHER"];
+  return (
+    <>
+      <button type="button" className="primary-button" disabled={pending} onClick={pay} title={`Registra ${formatMoney(obligation.balanceCents)} como pago hoje (${method}) e tira do capital`}>
+        <Icon name="check" size={15} /> {pending ? "Pagando…" : `Pagar ${formatMoney(obligation.balanceCents)}`}
+      </button>
+      <Feedback feedback={feedback} />
+    </>
+  );
+}
+
 // Detalhe da obrigação: previsto, pago, saldo e as baixas já registradas (que não se alteram nem se apagam).
 export function ObligationDetail({ obligation }: { obligation: Obligation }) {
   return (
@@ -129,7 +167,10 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
               <td className="actions-cell"><span className="row-actions">
                 <button type="button" className="outline-button" aria-expanded={open} onClick={() => { setOpenKey(open ? null : obligation.key); setPaying(false); }}>{open ? "Fechar" : "Detalhes"}</button>
                 {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && !obligation.paymentBlock && (
-                  <button type="button" className="primary-button" onClick={() => { setOpenKey(obligation.key); setPaying(true); }}>Registrar baixa</button>
+                  <>
+                    <QuickPayButton obligation={obligation} today={today} onDone={onDone} />
+                    <button type="button" className="outline-button" onClick={() => { setOpenKey(obligation.key); setPaying(true); }}>Pagar parte</button>
+                  </>
                 )}
               </span>
               {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (

@@ -247,7 +247,7 @@ export async function loadInvestmentDetail(investmentId: string) {
     const obligations = buildObligations({
       investments: [{ id: row.investment.id, investorId: row.investor.id, investorName: row.investor.name, contractNumber: row.investment.contractNumber, status: row.investment.status, startDate: row.investment.startDate, amountCents: row.investment.amountCents,
         capitalEntryRule: row.investment.capitalEntryRule, hasEntry: Boolean(cash.entry), hasPriorContribution: Boolean(cash.prior),
-        renewedFrom: row.investment.renewedFromInvestmentId, originHasCapital: renewal.originHasCapital, renewed: Boolean(renewal.child) }],
+        renewedFrom: row.investment.renewedFromInvestmentId, originHasCapital: renewal.originHasCapital, renewed: Boolean(renewal.child), paymentMethod: row.investment.paymentMethod }],
       items: scheduleRows.map((item) => ({ ...item, investmentId: row.investment.id })), payments: cash.payments, today: todayIso(),
     });
     const today = todayIso();

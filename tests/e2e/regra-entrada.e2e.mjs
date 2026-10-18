@@ -117,7 +117,7 @@ test("RE1. contrato novo sem entrada: baixa bloqueada na tela, no servidor e no 
   assert.match(result.error, /Registre primeiro a entrada deste investimento no capital/);
   const { html } = await page(robério, "/contas-a-pagar?q=RE-NOVO");
   assert.ok(html.includes("Baixa bloqueada") && html.includes("registre a entrada no capital"), "a tela explica o bloqueio");
-  assert.ok(!html.includes("Registrar baixa"), "sem botão de baixa no contrato novo sem entrada");
+  assert.ok(!html.includes("Registrar baixa") && !html.includes("Pagar parte"), "sem botão de baixa no contrato novo sem entrada");
   const detail = await page(robério, `/investidores/investimentos/${ids.novo.id}`);
   assert.ok(detail.html.includes("ficam bloqueadas até a entrada do investimento ser registrada no capital"));
   // Direto no banco (papel dono, sem RLS), com a saída certa: o gatilho recusa.

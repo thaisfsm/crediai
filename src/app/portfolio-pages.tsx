@@ -839,7 +839,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
       <div className="client-search" role="search">
         <label className="client-search-box">
           <span className="search-icon"><Icon name="search" size={16} /></span>
-          <input type="search" aria-label="Buscar cliente por nome, CPF ou telefone" placeholder="Buscar por nome, CPF ou telefone" value={query} maxLength={120} onChange={(event) => setQuery(event.target.value)} />
+          <input type="search" aria-label="Buscar cliente por nome, CPF, telefone ou e-mail" placeholder="Buscar por nome, CPF, telefone ou e-mail" value={query} maxLength={120} onChange={(event) => setQuery(event.target.value)} />
           {query && <button type="button" className="search-clear" aria-label="Limpar busca" onClick={() => setQuery("")}>×</button>}
         </label>
         {trimmed && <p className="client-search-status" role="status">{tooShort ? "Digite ao menos 3 números do CPF ou do telefone." : !shown || pending ? "Buscando…" : shown.error ?? `${shown.results.length === 0 ? "Nenhum cliente encontrado" : plural(shown.results.length, "cliente encontrado", "clientes encontrados")} para "${trimmed}".`}</p>}
@@ -849,7 +849,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
           <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Situação</th><th /></tr></thead>
           <tbody>{shown.results.map((client) => (
             <tr key={client.id}>
-              <td><strong>{client.name}</strong></td><td>{formatCpf(client.document) ?? "—"}</td>
+              <td><strong>{client.name}</strong>{client.email && <small className="admin-cell-note">{client.email}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td>
               <td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td>
               <td>{client.archived ? <span className="status-chip status-muted"><i />Arquivado</span> : <span className="status-chip status-active"><i />Ativo</span>}</td>
               <td className="actions-cell">{client.archived ? <small>Histórico em Operações</small> : <button className="outline-button" onClick={() => onOpen(client.id)}>Abrir</button>}</td>
