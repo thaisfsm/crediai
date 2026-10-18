@@ -32,7 +32,7 @@ function BankAccountForm({ investorId, accountId, initial, locked, onDone, onCan
         <input type="hidden" name="investorId" value={investorId} />
         {accountId && <input type="hidden" name="accountId" value={accountId} />}
         <p className="capital-note field-wide">Informe a conta bancária (banco, agência e conta), a chave Pix ou os dois. Para usar só Pix, deixe os campos do banco em branco.{locked ? " Esta conta está ligada a um contrato: banco, agência, conta e chave Pix não mudam mais (cadastre outra conta se precisar)." : ""}</p>
-        <label className="field"><span>Código do banco</span><input name="bankCode" inputMode="numeric" maxLength={3} placeholder="341" defaultValue={initial?.bankCode ?? ""} readOnly={locked} /></label>
+        {locked && initial?.bankCode ? <input type="hidden" name="bankCode" value={initial.bankCode} /> : null}
         <label className="field"><span>Nome do banco</span><BankNameInput name="bankName" maxLength={120} placeholder="Nome ou código, ex.: 341 Itaú" defaultValue={initial?.bankName ?? ""} readOnly={locked} /></label>
         <label className="field"><span>Agência (sem dígito)</span><input name="branch" inputMode="numeric" maxLength={5} placeholder="1234" defaultValue={initial?.branch ?? ""} readOnly={locked} /></label>
         <label className="field"><span>Dígito da agência</span><input name="branchDigit" maxLength={1} placeholder="Opcional" defaultValue={initial?.branchDigit ?? ""} readOnly={locked} /></label>
