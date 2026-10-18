@@ -379,12 +379,18 @@ export function AddressFieldset({ legend, nameOf, initialOf }: { legend: string;
 // Preenchimento pelo CPF: ao completar um CPF válido, procura o CPF nos cadastros da própria carteira (cliente e investidor)
 // e preenche só os campos ainda vazios do formulário, sem apagar o que a pessoa já digitou. Não consulta serviço externo.
 // No formulário de cliente um CPF já cliente só avisa (CPF é único por carteira); o mesmo vale para o de investidor.
-function setEmptyField(form: HTMLFormElement, name: string, value: string) {
+function setEmptyField(form: HTMLFormElement, name: string, value: string, replaceable?: string): boolean {
   const element = form.elements.namedItem(name);
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement) || element.value) return;
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLSelectElement)) return false;
+  // Só campo vazio, ou o que ainda tem exatamente o valor que o preenchimento automático anterior pôs (o usuário não mexeu).
+  // O CEP tem máscara: compara só os dígitos.
+  const same = (a: string, b: string) => a === b || (name.endsWith("Cep") && onlyDigits(a) === onlyDigits(b));
+  if (element.value && !(replaceable !== undefined && same(element.value, replaceable))) return false;
+  if (same(element.value, value) && element.value) return true;
   const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(element, value);
   element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+  return true;
 }
 export function usePersonPrefill(target: "client" | "investor") {
   const [notice, setNotice] = useState<string | null>(null);
@@ -419,6 +425,8 @@ export function usePersonPrefill(target: "client" | "investor") {
 export function useCompanyNamePrefill() {
   const [notice, setNotice] = useState<string | null>(null);
   const last = useRef("");
+  // Valor que o preenchimento automático pôs em cada campo: um segundo CNPJ pode trocá-lo, desde que o usuário não tenha editado.
+  const filled = useRef<Record<string, string>>({});
   const onInput = (event: FormEvent<HTMLFormElement>) => {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || input.name !== "businessCnpj") return;
@@ -434,12 +442,16 @@ export function useCompanyNamePrefill() {
       const data = await response.json() as { razao_social?: string; nome_fantasia?: string; cep?: string; descricao_tipo_de_logradouro?: string; logradouro?: string; numero?: string; complemento?: string; bairro?: string; municipio?: string; uf?: string };
       const name = String(data.razao_social || data.nome_fantasia || "").trim();
       if (!name) return setNotice("A base pública não trouxe o nome. Digite o nome da empresa.");
-      setEmptyField(form, "businessCompanyName", name.slice(0, 160));
+      const fill = (field: string, value: string) => {
+        if (setEmptyField(form, field, value, filled.current[field])) filled.current[field] = value;
+        else delete filled.current[field];
+      };
+      fill("businessCompanyName", name.slice(0, 160));
       // Endereço comercial pelos dados da empresa; só campos vazios. O CEP vai por último: ele dispara a busca de CEP padrão.
       const text = (value?: string) => String(value ?? "").trim();
       const street = [text(data.descricao_tipo_de_logradouro), text(data.logradouro)].filter(Boolean).join(" ");
       const address: Record<string, string> = { Street: street, Number: text(data.numero) === "S/N" ? "" : text(data.numero), Complement: text(data.complemento), District: text(data.bairro), City: text(data.municipio), State: text(data.uf), Cep: onlyDigits(text(data.cep)) };
-      for (const part of ["Street", "Number", "Complement", "District", "City", "State", "Cep"]) if (address[part]) setEmptyField(form, `business${part}`, address[part].slice(0, 160));
+      for (const part of ["Street", "Number", "Complement", "District", "City", "State", "Cep"]) if (address[part] || filled.current[`business${part}`]) fill(`business${part}`, address[part].slice(0, 160));
       setNotice(`Nome da empresa e endereço comercial preenchidos pela base pública (${name}). Confira antes de gravar.`);
     }).catch(() => { if (last.current === digits) setNotice("Não foi possível consultar o CNPJ agora. Digite o nome da empresa."); });
   };
