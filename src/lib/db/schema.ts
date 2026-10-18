@@ -361,7 +361,7 @@ export const loanOperations = pgTable("loan_operation", {
     or (${table.modality} = 'SINGLE' and ${table.frequency} = 'DAILY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
       and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents} and ${table.totalCents} < ${table.installmentCount} * ${table.installmentCents} + ${table.installmentCount})
     or (${table.modality} = 'INSTALLMENT' and ${table.frequency} in ('MONTHLY', 'BIWEEKLY') and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
-      and ${table.totalCents} = ${table.installmentCount} * ${table.installmentCents})`),
+      and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents})`),
   ...tenantPolicies("loan_operation", table.tenantId),
 ]).enableRLS();
 

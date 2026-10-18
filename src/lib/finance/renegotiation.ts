@@ -14,6 +14,8 @@ export type RenegotiationTerms = {
   modality: RenegotiationModality; frequency: RenegotiationFrequency; rateBps: number; count: number; firstDueDate: string;
   // Positivo = acréscimo; negativo = desconto.
   adjustmentCents: number;
+  // Multa somada só à ÚLTIMA parcela (a parcela pulada que vai para o final). Opcional; conta como juros do contrato.
+  penaltyCents?: number;
 };
 
 // Posição atual das operações escolhidas (só as em aberto entram).
@@ -40,9 +42,11 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
   const periods = terms.modality === "INSTALLMENT" ? terms.count : 1;
   // Juros novos: taxa simples do período sobre o principal em aberto, vezes a quantidade de períodos.
   const newInterestCents = simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps, periods });
-  const totalCents = renegotiatedCents + newInterestCents;
+  const penaltyCents = Math.max(0, terms.penaltyCents ?? 0);
+  const totalCents = renegotiatedCents + newInterestCents + penaltyCents;
   const dates = dueDates(terms.frequency, terms.firstDueDate, periods);
-  const installmentCents = Math.floor(totalCents / periods);
+  // As parcelas iguais dividem o total sem a multa; a última leva o resto e a multa.
+  const installmentCents = Math.floor((totalCents - penaltyCents) / periods);
   const payments = dates.map((dueDate, index) => ({ number: index + 1, dueDate, amountCents: index === periods - 1 ? totalCents - installmentCents * (periods - 1) : installmentCents }));
   const warnings: string[] = [];
   if (renegotiatedCents < baseCents) warnings.push("O desconto passa dos juros em aberto: parte do principal emprestado deixaria de voltar.");
@@ -52,7 +56,7 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
   const interestAfterAdjustment = carriedInterestCents + terms.adjustmentCents;
   const comparison = {
     principal: { current: baseCents, proposal: baseCents + Math.min(0, interestAfterAdjustment) },
-    interest: { current: carriedInterestCents, proposal: Math.max(0, interestAfterAdjustment) + newInterestCents },
+    interest: { current: carriedInterestCents, proposal: Math.max(0, interestAfterAdjustment) + newInterestCents + penaltyCents },
     total: { current: position.balanceCents, proposal: totalCents },
     // Lucro realizado não muda na renegociação: os juros recebidos continuam nas antigas e os novos só contam quando pagos.
     realizedProfit: { current: position.interestReceivedCents, proposal: position.interestReceivedCents },
@@ -60,7 +64,7 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
   };
   return {
     comparison,
-    baseCents, carriedInterestCents, adjustmentCents: terms.adjustmentCents, renegotiatedCents, newInterestCents, totalCents, payments,
+    baseCents, carriedInterestCents, adjustmentCents: terms.adjustmentCents, penaltyCents, renegotiatedCents, newInterestCents, totalCents, payments,
     // Na renovação do pagamento único, cada novo período cobraria de novo a taxa sobre o principal em aberto.
     periodInterestCents: simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps }),
     warnings,
@@ -78,8 +82,9 @@ export function renegotiationContract(position: RenegotiationPosition, terms: Re
   if (terms.firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes de hoje." };
   const principalCents = sim.baseCents;
   if (terms.modality === "INSTALLMENT") {
-    const installmentCents = Math.ceil(sim.totalCents / terms.count);
-    const totalCents = installmentCents * terms.count;
+    // Parcela fixa para cima; a multa (se houver) vai inteira na última, que a agenda calcula como total − parcela × (n − 1).
+    const installmentCents = Math.ceil((sim.totalCents - sim.penaltyCents) / terms.count);
+    const totalCents = installmentCents * terms.count + sim.penaltyCents;
     const interestCents = totalCents - principalCents;
     return {
       ok: true as const, roundingCents: totalCents - sim.totalCents, sim,

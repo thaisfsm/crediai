@@ -132,7 +132,7 @@ test("RG3. repetir, editar, excluir e pagar ficam recusados; o banco recusa rene
 
 test("RG4. o novo contrato recebe pagamento normal e o capital soma só o recebido", async () => {
   const [{ installment }] = await admin(`select installment_cents::int installment from loan_operation where id = '${newId}'`);
-  const paid = await action(robério, "registerPaymentAction", { operationId: newId, amount: (installment / 100).toFixed(2).replace(".", ","), paidAt: "2026-10-17" });
+  const paid = await action(robério, "registerPaymentAction", { operationId: newId, amount: (installment / 100).toFixed(2).replace(".", ","), paidAt: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) });
   assert.equal(paid?.ok, true, JSON.stringify(paid));
   assert.equal(Number(await available()), capitalBefore + installment);
 });
@@ -190,6 +190,19 @@ test("RG6. tela: gravar exige a confirmação, mostra o resultado, o vínculo na
     await page.getByText(/Principal levado à renegociação/).locator("visible=true").first().waitFor();
     await context.close();
   }
+});
+
+test("RG8. multa na última parcela: exige motivo, grava a parcela final = parcela + multa e o total com a multa", async () => {
+  await admin(`insert into client(id, tenant_id, name) values ('c_e2e_rg4', 'ten_roberio', 'Cliente Multa')`);
+  const created = await action(robério, "createOperationAction", { clientId: "c_e2e_rg4", modality: "SINGLE", frequency: "MONTHLY", principal: "900,00", rate: "10", loanDate: "2026-10-08", dueDate: "2026-11-08" });
+  assert.equal(created?.ok, true);
+  const [{ id }] = await admin(`select id from loan_operation where client_id = 'c_e2e_rg4'`);
+  const semMotivo = await renegotiate(robério, { clientId: "c_e2e_rg4", penalty: "100,00" }, [id]);
+  assert.equal(semMotivo?.ok, false, "multa sem motivo é recusada");
+  const done = await renegotiate(robério, { clientId: "c_e2e_rg4", penalty: "100,00", reason: "parcela em atraso jogada para o final" }, [id]);
+  assert.equal(done?.ok, true, JSON.stringify(done));
+  const [contract] = await admin(`select installment_count c, installment_cents i, principal_cents + interest_cents t from loan_operation where client_id = 'c_e2e_rg4' and status = 'OPEN'`);
+  assert.equal(Number(contract.t), Number(contract.i) * Number(contract.c) + 10_000, "total = parcelas iguais + multa");
 });
 
 test("RG7. o tenant B não vê as renegociações do A", async () => {

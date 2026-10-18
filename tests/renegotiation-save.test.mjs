@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPortfolio } from "../src/lib/finance/portfolio.ts";
 import { renegotiationContract, renegotiationPosition } from "../src/lib/finance/renegotiation.ts";
+import { amortizedSchedule } from "../src/lib/finance/rules.ts";
 import { profitabilityReport } from "../src/lib/finance/report.ts";
 
 // Gravação da renegociação: contrato derivado, capital líquido zero, vínculo e relatório sem contar o principal duas vezes.
@@ -63,4 +64,22 @@ test("RS3. capital: o principal em aberto volta e sai de novo, então o disponí
   const report = profitabilityReport(after.operations, { period: "CYCLE", from: "", to: "", status: "ALL" }, TODAY);
   assert.equal(report.totals.principalLentCents, 100_000);
   assert.equal(after.profitability.principalCents, 100_000);
+});
+
+test("RS4. multa vai só na última parcela: demais iguais, última = parcela + multa, total e juros incluem a multa", () => {
+  const position = renegotiationPosition(build([old("op_a", 100_000)]).operations);
+  const terms = { modality: "INSTALLMENT", frequency: "MONTHLY", rateBps: 500, count: 3, firstDueDate: "2026-11-10", adjustmentCents: 0 };
+  const plain = renegotiationContract(position, terms, TODAY);
+  const fined = renegotiationContract(position, { ...terms, penaltyCents: 10_000 }, TODAY);
+  assert.ok(plain.ok && fined.ok);
+  assert.equal(fined.contract.installmentCents, plain.contract.installmentCents, "parcelas normais não mudam");
+  assert.equal(fined.contract.totalCents, plain.contract.totalCents + 10_000);
+  assert.equal(fined.contract.interestCents, plain.contract.interestCents + 10_000);
+  const schedule = amortizedSchedule({ ...fined.contract, paidCents: 0 }, 0);
+  assert.equal(schedule.reduce((sum, item) => sum + item.amountCents, 0), fined.contract.totalCents);
+  assert.equal(schedule[0].amountCents, schedule[1].amountCents);
+  assert.equal(schedule[2].amountCents, schedule[1].amountCents + 10_000);
+  // A simulação divide para baixo (a sobra dos centavos cai na última); o contrato arredonda para cima.
+  const diff = fined.sim.payments[2].amountCents - fined.sim.payments[1].amountCents;
+  assert.ok(diff >= 10_000 && diff < 10_000 + 3);
 });
