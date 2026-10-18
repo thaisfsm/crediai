@@ -129,10 +129,12 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
   const legacyTerm = editing && !editing.termCount && editing.termMonths ? { count: String(editing.termMonths), unit: "MONTHS" as TermUnit } : null;
   const [method, setMethod] = useState<InvestmentPaymentMethod | "">(editing?.paymentMethod ?? "");
   const [redemption, setRedemption] = useState<RedemptionRule | "">(editing?.redemptionRule ?? "");
-  const [yieldPayment, setYieldPayment] = useState(editing?.yieldPaymentCents ? centsToInput(editing.yieldPaymentCents) : "");
+  // null = automático (valor investido x taxa mensal); texto = o que a pessoa digitou ou o contrato já tinha.
+  const [yieldPayment, setYieldPayment] = useState<string | null>(editing?.yieldPaymentCents ? centsToInput(editing.yieldPaymentCents) : null);
   const [rateText, setRateText] = useState(editing ? String(editing.agreedRateBps / 100).replace(".", ",") : "");
   const [amountText, setAmountText] = useState(renewal ? centsToInput(renewal.principalCents) : editing ? centsToInput(editing.amountCents) : "");
   const [ratePeriodValue, setRatePeriodValue] = useState<string>(editing?.ratePeriod ?? "");
+  const autoYield = suggestedYield(amountText, rateText, ratePeriodValue);
   const usable = accounts.filter((account) => !account.archivedAt || account.id === editing?.bankAccountId);
   const preferred = accounts.find((account) => account.isPreferred && !account.archivedAt);
   const fits = (account: AccountOption) => (method === "PIX" ? account.hasPix : method === "TRANSFER" ? account.hasTransfer : true);
@@ -175,9 +177,9 @@ function InvestmentFields({ editing, today, accounts, renewal }: { editing?: Inv
           {(Object.keys(INVESTMENT_STATUS) as InvestmentStatus[]).filter((status) => !renewal || status !== "CANCELED").map((status) => <option key={status} value={status}>{INVESTMENT_STATUS[status]}</option>)}
         </select></label>
       )}
-      <label className="field"><span>Rendimento de cada pagamento (R$, opcional)</span><input name="yieldPayment" inputMode="decimal" placeholder="Ex.: 500,00" value={yieldPayment} onChange={(event) => setYieldPayment(event.target.value)} aria-describedby="yield-payment-help" />
-        <small id="yield-payment-help" className="admin-cell-note">Você define o valor. Ele preenche o cronograma e as contas a pagar, e você pode alterar cada data depois.{" "}
-          {suggestedYield(amountText, rateText, ratePeriodValue) && <button type="button" className="text-link" onClick={() => setYieldPayment(suggestedYield(amountText, rateText, ratePeriodValue) as string)}>Sugerir {suggestedYield(amountText, rateText, ratePeriodValue)} pela taxa mensal</button>}</small></label>
+      <label className="field"><span>Rendimento de cada pagamento (R$, opcional)</span><MoneyInput name="yieldPayment" placeholder="Ex.: 500,00" value={yieldPayment ?? autoYield ?? ""} onChange={(event) => setYieldPayment(event.target.value)} aria-describedby="yield-payment-help" />
+        <small id="yield-payment-help" className="admin-cell-note">{autoYield && yieldPayment === null ? `Calculado pelo valor investido e a taxa mensal (${autoYield}); você pode trocar o valor.` : "Você define o valor. Ele preenche o cronograma e as contas a pagar, e você pode alterar cada data depois."}{" "}
+          {autoYield && yieldPayment !== null && yieldPayment !== autoYield && <button type="button" className="text-link" onClick={() => setYieldPayment(null)}>Usar {autoYield} pela taxa mensal</button>}</small></label>
       <label className="field"><span>Liquidez: quando o crédito pode ser resgatado</span><select name="redemptionRule" value={redemption} onChange={(event) => setRedemption(event.target.value as RedemptionRule | "")}>
         <option value="">Não informada</option>{(Object.keys(REDEMPTION_RULES) as RedemptionRule[]).map((key) => <option key={key} value={key}>{REDEMPTION_RULES[key]}</option>)}
       </select></label>
