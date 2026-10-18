@@ -1,8 +1,8 @@
 import "server-only";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { investmentContractors, type investments, type investors } from "@/lib/db/schema";
+import { investmentContractors, investmentScheduleItems, type investments, type investors } from "@/lib/db/schema";
 import type { Address } from "./address";
 import { contractFingerprint, type ContractorData, type ContractSource } from "./contract";
 import { investorAddress, type InvestmentStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule } from "./rules";
@@ -27,7 +27,15 @@ export async function loadContractor(tx: TenantTransaction, tenantId: string) {
   return row ?? null;
 }
 
-export function contractSource(investment: typeof investments.$inferSelect, investor: typeof investors.$inferSelect, contractor: ContractorRow | null): ContractSource {
+// Datas do cronograma do investimento (para o primeiro e o último pagamento do contrato).
+export async function loadPaymentDates(tx: TenantTransaction, tenantId: string, investmentId: string) {
+  const rows = await tx.select({ dueDate: investmentScheduleItems.dueDate }).from(investmentScheduleItems)
+    .where(and(eq(investmentScheduleItems.tenantId, tenantId), eq(investmentScheduleItems.investmentId, investmentId)));
+  return rows.map((row) => row.dueDate);
+}
+
+export function contractSource(investment: typeof investments.$inferSelect, investor: typeof investors.$inferSelect, contractor: ContractorRow | null, paymentDates: string[] = []): ContractSource {
+  const dates = [...paymentDates].sort();
   return {
     contractor: contractorData(contractor),
     investor: { name: investor.name, document: investor.document, address: investorAddress(investor) },
@@ -36,6 +44,7 @@ export function contractSource(investment: typeof investments.$inferSelect, inve
       startDate: investment.startDate, maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status as InvestmentStatus,
       paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, yieldPaymentCents: investment.yieldPaymentCents,
       redemptionRule: investment.redemptionRule as RedemptionRule | null, redemptionDays: investment.redemptionDays,
+      firstPaymentDate: dates[0] ?? null, lastPaymentDate: dates[dates.length - 1] ?? null,
     },
   };
 }

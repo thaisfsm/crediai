@@ -14,7 +14,7 @@ import { formatContractNumber, nextContractSequence } from "@/lib/investors/cont
 import { CONTRACT_TEMPLATE_VERSION, buildContract, contractFileName, contractorFields, missingContractData } from "@/lib/investors/contract";
 import { contractFonts } from "@/lib/investors/contract-fonts";
 import { renderContractPdf } from "@/lib/investors/contract-pdf";
-import { contractDataHash, contractSource, loadContractor } from "@/lib/investors/contract-source";
+import { contractDataHash, contractSource, loadContractor, loadPaymentDates } from "@/lib/investors/contract-source";
 import {
   DOCUMENT_KINDS, INVESTOR_DOCUMENT_KINDS, MAX_SCHEDULE_ITEMS, investmentChanges, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, parseInvestorDocumentKind,
   scheduleDateProblem, scheduleItemFields, scheduleLinesFields, scheduleSummary, scheduleVersion,
@@ -597,7 +597,7 @@ export async function generateContractAction(data: FormData): Promise<InvestorAc
     const row = await investmentInScope(tx, scope, investmentId, true);
     if (!row) return { ok: false, error: "Investimento não encontrado." };
     const { investment, investor } = row;
-    const source = contractSource(investment, investor, await loadContractor(tx, investment.tenantId));
+    const source = contractSource(investment, investor, await loadContractor(tx, investment.tenantId), await loadPaymentDates(tx, investment.tenantId, investment.id));
     const missing = missingContractData(source, includeNotes);
     if (missing.length) return { ok: false, error: `Não é possível gerar a versão final do contrato. Falta: ${missing.map((item) => `${item.section}: ${item.item}`).join("; ")}.` };
 
