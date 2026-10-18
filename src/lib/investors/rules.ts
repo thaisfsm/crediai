@@ -156,18 +156,20 @@ export function addMonthsIso(iso: string, months: number) {
   const targetYear = Math.floor(total / 12), targetMonth = total % 12;
   return isoOf(targetYear, targetMonth, Math.min(day, daysIn(targetYear, targetMonth)));
 }
+// A data de início é a do primeiro pagamento: o último cai (prazo − 1) meses depois (12 meses a partir de 06/08/2026 = 06/07/2027).
 export function addTermIso(startIso: string, count: number, unit: TermUnit) {
-  if (unit === "MONTHS") return addMonthsIso(startIso, count);
-  if (unit === "YEARS") return addMonthsIso(startIso, count * 12);
+  if (unit === "MONTHS") return addMonthsIso(startIso, count - 1);
+  if (unit === "YEARS") return addMonthsIso(startIso, count * 12 - 1);
   const [year, month, day] = startIso.split("-").map(Number);
   return isoOf(year, month - 1, day + count);
 }
-// Prazo entre início e vencimento: em meses quando o vencimento cai no mesmo dia (ou no último dia do mês); senão em dias.
+// Prazo entre início (primeiro pagamento) e vencimento (último): em meses, contando o mês do início, quando o vencimento cai
+// no mesmo dia (ou no último dia do mês); senão em dias.
 export function termFromDates(startIso: string, endIso: string): { count: number; unit: TermUnit } | null {
-  if (!isIsoDate(startIso) || !isIsoDate(endIso) || endIso <= startIso) return null;
+  if (!isIsoDate(startIso) || !isIsoDate(endIso) || endIso < startIso) return null;
   const [sy, sm] = startIso.split("-").map(Number), [ey, em] = endIso.split("-").map(Number);
   const months = (ey - sy) * 12 + (em - sm);
-  if (months > 0 && addMonthsIso(startIso, months) === endIso) return { count: months, unit: "MONTHS" };
+  if (addMonthsIso(startIso, months) === endIso) return { count: months + 1, unit: "MONTHS" };
   return { count: Math.round((Date.parse(endIso) - Date.parse(startIso)) / 86_400_000), unit: "DAYS" };
 }
 // Parcelas = prazo em meses / meses entre pagamentos (só quando fecha certo); pagamento único = 1.
