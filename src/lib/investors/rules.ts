@@ -146,6 +146,38 @@ export const INVESTMENT_PAYMENT_METHODS = { PIX: "Pix", TRANSFER: "Transferênci
 export type InvestmentPaymentMethod = keyof typeof INVESTMENT_PAYMENT_METHODS;
 const TERM_MAX: Record<TermUnit, number> = { DAYS: 18250, MONTHS: 600, YEARS: 50 };
 
+// Fórmulas do formulário do contrato (datas, prazo e parcelas): só sugestões, a pessoa pode digitar outro valor.
+const isoOf = (year: number, month0: number, day: number) => new Date(Date.UTC(year, month0, day)).toISOString().slice(0, 10);
+const daysIn = (year: number, month0: number) => new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
+// Soma meses mantendo o dia; mês sem esse dia usa o último dia (31/01 + 1 mês = 28/02).
+export function addMonthsIso(iso: string, months: number) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const total = year * 12 + (month - 1) + months;
+  const targetYear = Math.floor(total / 12), targetMonth = total % 12;
+  return isoOf(targetYear, targetMonth, Math.min(day, daysIn(targetYear, targetMonth)));
+}
+export function addTermIso(startIso: string, count: number, unit: TermUnit) {
+  if (unit === "MONTHS") return addMonthsIso(startIso, count);
+  if (unit === "YEARS") return addMonthsIso(startIso, count * 12);
+  const [year, month, day] = startIso.split("-").map(Number);
+  return isoOf(year, month - 1, day + count);
+}
+// Prazo entre início e vencimento: em meses quando o vencimento cai no mesmo dia (ou no último dia do mês); senão em dias.
+export function termFromDates(startIso: string, endIso: string): { count: number; unit: TermUnit } | null {
+  if (!isIsoDate(startIso) || !isIsoDate(endIso) || endIso <= startIso) return null;
+  const [sy, sm] = startIso.split("-").map(Number), [ey, em] = endIso.split("-").map(Number);
+  const months = (ey - sy) * 12 + (em - sm);
+  if (months > 0 && addMonthsIso(startIso, months) === endIso) return { count: months, unit: "MONTHS" };
+  return { count: Math.round((Date.parse(endIso) - Date.parse(startIso)) / 86_400_000), unit: "DAYS" };
+}
+// Parcelas = prazo em meses / meses entre pagamentos (só quando fecha certo); pagamento único = 1.
+export function installmentsFor(count: number, unit: TermUnit, frequency: PaymentFrequency | "") {
+  if (frequency === "AT_MATURITY") return 1;
+  const step = frequency ? FREQUENCY_MONTHS[frequency] : undefined;
+  const months = unit === "MONTHS" ? count : unit === "YEARS" ? count * 12 : null;
+  return step && months !== null && months % step === 0 ? months / step : null;
+}
+
 export function termLabel(values: { termCount: number | null; termUnit: string | null; termMonths: number | null }) {
   const unit = values.termUnit as TermUnit | null;
   if (values.termCount && unit && TERM_UNITS[unit]) return `${values.termCount} ${TERM_UNITS[unit][values.termCount === 1 ? 0 : 1]}`;
