@@ -204,6 +204,13 @@
       "when": 1792368963301,
       "tag": "0029_liquidacao_antecipada",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792378613329,
+      "tag": "0030_parcela_renegociada",
+      "breakpoints": true
     }
   ]
 }

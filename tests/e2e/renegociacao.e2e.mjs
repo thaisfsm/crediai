@@ -72,7 +72,7 @@ test("RN1. tela: posição, desconto de R$ 100 com motivo, 3 parcelas mensais a 
     await terms.getByLabel("Primeiro vencimento").fill("15/11/2026");
     await terms.getByLabel("Primeiro vencimento").press("Tab");
     // Sem motivo, o desconto não é simulado.
-    await terms.getByText("Informe o motivo do desconto para ver a simulação.").waitFor();
+    await terms.getByText("Informe o motivo para ver a simulação.").waitFor();
     assert.equal(await page.getByRole("region", { name: "Resultado da simulação" }).count(), 0);
     await terms.getByLabel("Motivo do desconto").fill("acordo para quitar em 3 meses");
     const result = page.getByRole("region", { name: "Resultado da simulação" });
@@ -89,7 +89,7 @@ test("RN1. tela: posição, desconto de R$ 100 com motivo, 3 parcelas mensais a 
     assert.match(await line("Último vencimento"), /05\/11\/2026 15\/01\/2027/);
     assert.match(await line("Lucro realizado"), /R\$ 0,00 R\$ 0,00/);
     assert.match(await line("Saída de caixa"), /R\$ 0,00/);
-    await result.getByText("Motivo do desconto: acordo para quitar em 3 meses").waitFor();
+    await result.getByText("Motivo: acordo para quitar em 3 meses").waitFor();
     const payments = result.getByLabel("Pagamentos simulados");
     assert.deepEqual(await payments.locator("li strong").allInnerTexts(), ["15/11/2026", "15/12/2026", "15/01/2027"]);
     assert.equal((await payments.locator("li").allInnerTexts()).filter((text) => /R\$\s750,00/.test(text)).length, 3);

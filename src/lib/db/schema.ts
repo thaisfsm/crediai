@@ -461,6 +461,33 @@ export const loanRenewals = pgTable("loan_renewal", {
   ...tenantPolicies("loan_renewal", table.tenantId),
 ]).enableRLS();
 
+// Parcela renegociada para o final (empréstimo parcelado). A parcela original continua no histórico, com número, vencimento e
+// valor originais, e deixa de ser cobrada no lugar; a nova obrigação (valor original + acréscimo) vence ao fim do cronograma.
+// Não é pagamento, recebimento nem lucro: o acréscimo só vira juros recebidos quando for pago. Cálculo em rules.ts (ledger).
+export const installmentDeferrals = pgTable("installment_deferral", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  operationId: text("operation_id").notNull(),
+  // Número histórico da parcela (1..N do contrato original), seu vencimento e valor originais.
+  originalNumber: integer("original_number").notNull(),
+  originalDueDate: date("original_due_date", { mode: "string" }).notNull(),
+  originalAmountCents: bigint("original_amount_cents", { mode: "number" }).notNull(),
+  // Acréscimo ou multa negociada, a nova data e o novo valor (original + acréscimo) da obrigação no final.
+  additionCents: bigint("addition_cents", { mode: "number" }).notNull().default(0),
+  newDueDate: date("new_due_date", { mode: "string" }).notNull(),
+  newAmountCents: bigint("new_amount_cents", { mode: "number" }).notNull(),
+  // Motivo opcional (auditoria), separado da configuração financeira.
+  reason: text("reason"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("installment_deferral_operation_id_idx").on(table.operationId),
+  uniqueIndex("installment_deferral_operation_number_unique").on(table.operationId, table.originalNumber),
+  foreignKey({ name: "installment_deferral_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
+  check("installment_deferral_valid", sql`${table.originalNumber} >= 1 and ${table.originalAmountCents} > 0 and ${table.additionCents} >= 0 and ${table.newAmountCents} = ${table.originalAmountCents} + ${table.additionCents} and ${table.newDueDate} > ${table.originalDueDate}`),
+  ...tenantPolicies("installment_deferral", table.tenantId),
+]).enableRLS();
+
 // Documentos anexados ao cliente. O arquivo fica no banco, sempre ligado a um cliente do mesmo tenant.
 export const clientDocuments = pgTable("client_document", {
   id: text("id").primaryKey(),
@@ -998,4 +1025,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

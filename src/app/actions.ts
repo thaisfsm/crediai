@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -16,7 +16,7 @@ import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -346,7 +346,9 @@ async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: 
   if (await isRenegotiationContract(tx, tenantId, operation.id)) return { ok: false as const, error: RENEGOTIATION_LOCKED };
   const [paid] = await tx.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(eq(payments.operationId, operation.id), eq(payments.tenantId, tenantId)));
   const [renewed] = await tx.select({ count: sql<number>`count(*)::int` }).from(loanRenewals).where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId)));
+  const [deferred] = await tx.select({ count: sql<number>`count(*)::int` }).from(installmentDeferrals).where(and(eq(installmentDeferrals.operationId, operation.id), eq(installmentDeferrals.tenantId, tenantId)));
   if (paid.count > 0 || renewed.count > 0) return { ok: false as const, error: "Correção bloqueada para preservar o histórico financeiro: esta operação já tem pagamento ou renovação registrados." };
+  if (deferred.count > 0) return { ok: false as const, error: "Correção bloqueada para preservar o histórico: esta operação tem parcela renegociada para o final." };
   const terms = operationTermsFromForm(data);
   if (!terms.ok) return terms;
   if (terms.values.modality !== operation.modality || terms.values.frequency !== operation.frequency) {
@@ -595,6 +597,8 @@ type OperationRow = typeof loanOperations.$inferSelect;
 async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation: OperationRow): Promise<LedgerTerms> {
   const renewals = await tx.select().from(loanRenewals)
     .where(and(eq(loanRenewals.operationId, operation.id), eq(loanRenewals.tenantId, tenantId))).orderBy(asc(loanRenewals.periodNumber));
+  const deferrals = await tx.select().from(installmentDeferrals)
+    .where(and(eq(installmentDeferrals.operationId, operation.id), eq(installmentDeferrals.tenantId, tenantId))).orderBy(asc(installmentDeferrals.createdAt));
   const modality = operation.modality === "INSTALLMENT" ? "INSTALLMENT" : "SINGLE";
   const frequency: Frequency = operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY";
   return {
@@ -603,6 +607,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents,
     renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),
     settlementPaymentId: operation.settlementPaymentId,
+    deferrals: deferrals.map((item) => ({ originalNumber: item.originalNumber, additionCents: item.additionCents, newDueDate: item.newDueDate, newAmountCents: item.newAmountCents })),
   };
 }
 
@@ -739,6 +744,51 @@ export async function settleOperationEarlyAction(data: FormData): Promise<Action
 // Correção de um pagamento já registrado (valor, data e observação). O pagamento continua sendo o mesmo (nada é duplicado)
 // e os valores de antes ficam em payment_revision. Saldo, juros e principal recebidos, situação da operação e capital
 // disponível são recalculados a partir dos pagamentos, pela mesma regra de rules.ts.
+// Renegociar UMA parcela (modalidade 1): "Jogar para o final". A parcela original fica no histórico como renegociada (não paga) e
+// nasce uma obrigação no fim do cronograma, com o valor original + o acréscimo negociado. Não registra pagamento, recebimento,
+// lucro nem movimento de capital: o acréscimo só vira juros recebidos quando for pago. A prévia é calculada no cliente com o
+// mesmo operationLedger; aqui tudo é revalidado sob trava da operação.
+export async function deferInstallmentAction(data: FormData): Promise<ActionResult> {
+  const operationId = text(data, "operationId", 80);
+  const number = Number(text(data, "number", 6));
+  const additionInput = text(data, "addition", 40);
+  const addition = additionInput ? parseMoneyToCents(additionInput) : 0;
+  const reason = optional(text(data, "reason", 300));
+  if (!operationId || !Number.isInteger(number) || number < 1) return { ok: false, error: "Escolha a parcela a renegociar." };
+  if (addition === null || addition < 0 || addition > 100_000_000_00) return { ok: false, error: "Informe o acréscimo ou a multa em reais, por exemplo 100,00 (ou deixe vazio para nenhum)." };
+  if (text(data, "confirm", 3) !== "yes") return { ok: false, error: "Confirme a renegociação da parcela para gravar." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    // Mesma trava do pagamento: pagamento simultâneo ou outra renegociação desta operação esperam e são revalidados.
+    const [operation] = await tx.select().from(loanOperations)
+      .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))))
+      .for("update");
+    if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
+    const terms = await ledgerTermsOf(tx, tenantId, operation);
+    const ledger = operationLedger(terms, await operationPayments(tx, tenantId, operation.id), todayIso());
+    const item = ledger.schedule.find((entry) => entry.originalNumber === number && entry.deferredFrom === null);
+    const eligible = deferralEligibility({ status: operation.status, modality: terms.modality, settlementPaymentId: operation.settlementPaymentId }, item);
+    if (!eligible.ok || !item) return { ok: false, error: eligible.ok ? "Parcela não encontrada neste contrato." : eligible.error };
+    const newDueDate = deferralDueDate(terms, ledger.schedule);
+    const newAmountCents = item.amountCents + addition;
+    const deferralId = id("def");
+    await tx.insert(installmentDeferrals).values({
+      id: deferralId, tenantId, operationId: operation.id, originalNumber: item.originalNumber, originalDueDate: item.dueDate, originalAmountCents: item.amountCents,
+      additionCents: addition, newDueDate, newAmountCents, reason, createdByUserId: session.user.id,
+    });
+    await tx.update(loanOperations).set({ updatedAt: sql`now()` }).where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    const tenant = await tx.query.tenants.findFirst({ where: eq(tenants.id, tenantId), columns: { name: true } });
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_INSTALLMENT_DEFERRED", entity: "loan_operation", entityId: operation.id, tenantId, tenantName: tenant?.name ?? null,
+      before: { installment: item.originalNumber, dueDate: item.dueDate, amountCents: item.amountCents, totalCents: ledger.totalCents },
+      after: { deferralId, newDueDate, newAmountCents, additionCents: addition, totalCents: ledger.totalCents + addition, reason },
+      description: `Parcela ${item.originalNumber} jogada para o final (${formatDate(newDueDate)}, ${formatMoney(newAmountCents)})`,
+    });
+    return { ok: true, message: `Parcela ${item.originalNumber} renegociada para o final: nova obrigação de ${formatMoney(newAmountCents)} em ${formatDate(newDueDate)}. Nenhum pagamento foi registrado.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
 export async function editPaymentAction(data: FormData): Promise<ActionResult> {
   const paymentId = text(data, "paymentId", 80);
   const amountCents = parseMoneyToCents(text(data, "amount", 40));

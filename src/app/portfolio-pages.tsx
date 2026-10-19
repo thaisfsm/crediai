@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -13,7 +13,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
@@ -118,7 +118,7 @@ const percent = (fraction: number) => `${(fraction * 100).toLocaleString("pt-BR"
 // valores contratados (as operações parceladas antigas têm outra taxa gravada, que não é usada em nenhum cálculo).
 function rateLabel(operation: OperationView) {
   if (operation.modality === "INSTALLMENT") {
-    return `${percent(simpleMonthlyRate({ principalCents: operation.principalCents, interestCents: operation.originalInterestCents, months: operation.installments.length }))} ${operation.frequency === "BIWEEKLY" ? "por quinzena" : "ao mês"}`;
+    return `${percent(simpleMonthlyRate({ principalCents: operation.principalCents, interestCents: operation.originalInterestCents, months: operation.installmentCount ?? operation.installmentTotal }))} ${operation.frequency === "BIWEEKLY" ? "por quinzena" : "ao mês"}`;
   }
   if (operation.frequency === "DAILY") return `${formatRate(operation.interestRateBps)} em ${operation.installments.length} dias`;
   if (operation.ledgerTerms.interestMode === "FIXED") return `${formatMoney(operation.periodInterestCents)} por quinzena (≈ ${formatRate(operation.interestRateBps)})`;
@@ -126,7 +126,7 @@ function rateLabel(operation: OperationView) {
 }
 const amortized = (operation: OperationView) => operation.modality === "INSTALLMENT" || operation.frequency === "DAILY";
 function modalityLabel(operation: OperationView) {
-  if (operation.modality === "INSTALLMENT") return `Parcelado${operation.frequency === "BIWEEKLY" ? " quinzenal" : ""} em ${operation.installments.length}x de ${formatMoney(operation.installmentCents ?? 0)}`;
+  if (operation.modality === "INSTALLMENT") return `Parcelado${operation.frequency === "BIWEEKLY" ? " quinzenal" : ""} em ${operation.installmentCount ?? operation.installmentTotal}x de ${formatMoney(operation.installmentCents ?? 0)}`;
   if (operation.frequency === "DAILY") return `Pagamento único · Diário · ${operation.installments.length} pagamentos`;
   return `Pagamento único · ${frequencyLabels[operation.frequency]}`;
 }
@@ -610,7 +610,7 @@ function operationPhrases(operation: OperationView) {
   const phrases = [`Emprestou ${formatMoney(operation.principalCents)} para ${operation.clientName} em ${formatDate(operation.loanDate)}.`];
   if (amortized(operation)) {
     phrases.push(`${modalityLabel(operation)} (taxa de ${rateLabel(operation)}, lucro previsto de ${formatMoney(operation.interestCents)}).`,
-      `${operation.installments.filter((item) => item.state === "PAID").length} de ${plural(operation.installments.length, "parcela paga", "parcelas pagas")}.`);
+      `${operation.installments.filter((item) => item.state === "PAID").length} de ${plural(operation.installmentTotal, "parcela paga", "parcelas pagas")}.`);
   } else {
     phrases.push(`${modalityLabel(operation)}. Juros por período: ${formatMoney(operation.periodInterestCents)} (${rateLabel(operation)} sobre ${formatMoney(operation.principalRemainingCents || operation.principalCents)}).`);
   }
@@ -1148,6 +1148,106 @@ function EarlySettlementForm({ operation, today, onClose, onChanged }: { operati
   );
 }
 
+// Situação de uma parcela na tabela do contrato.
+function installmentStatus(item: OperationView["installments"][number], today: string) {
+  if (item.state === "DEFERRED") return "Renegociada para o final";
+  if (item.state === "PAID") return "Paga";
+  if (item.state === "CLOSED") return "Encerrada na liquidação";
+  return item.dueDate < today ? (item.state === "PARTIAL" ? "Parcial, em atraso" : "Em atraso") : item.state === "PARTIAL" ? "Parcial" : "Em aberto";
+}
+
+// Tabela completa do cronograma. Número atual = posição entre as obrigações ativas; a parcela renegociada continua na tabela
+// (número original, situação "Renegociada para o final") e a obrigação criada no final mostra de onde veio.
+function ScheduleTable({ items, today, label, onDefer }: { items: OperationView["installments"]; today: string; label: string; onDefer?: (item: OperationView["installments"][number]) => (() => void) | null }) {
+  const total = items.filter((item) => item.state !== "DEFERRED").length;
+  const originalTotal = items.filter((item) => item.deferredFrom === null).length;
+  const byOriginal = (number: number) => items.find((item) => item.originalNumber === number && item.deferredFrom === null);
+  const history = (item: OperationView["installments"][number]) => {
+    if (item.state === "DEFERRED") {
+      const target = items.find((other) => other.deferredFrom === item.originalNumber);
+      return target ? `Vai para a parcela ${target.number}/${total}: ${formatDate(target.dueDate)}, ${formatMoney(target.amountCents)}${target.additionCents > 0 ? ` (acréscimo de ${formatMoney(target.additionCents)})` : ""}` : "";
+    }
+    if (item.deferredFrom !== null) {
+      const origin = byOriginal(item.deferredFrom);
+      return `Veio da parcela ${item.deferredFrom}/${originalTotal}${origin ? ` (venc. ${formatDate(origin.dueDate)}, ${formatMoney(origin.amountCents)})` : ""}${item.additionCents > 0 ? ` + acréscimo de ${formatMoney(item.additionCents)}` : ""}`;
+    }
+    return "";
+  };
+  return (
+    <table className="data-table" aria-label={label}>
+      <thead><tr><th>Parcela atual</th><th>Parcela original</th><th>Vencimento</th><th>Valor</th><th>Pago</th><th>Situação</th><th>Histórico</th>{onDefer && <th>Ação</th>}</tr></thead>
+      <tbody>{items.map((item) => {
+        const defer = onDefer?.(item) ?? null;
+        return (
+          <tr key={`${item.originalNumber}-${item.deferredFrom ?? "o"}`} className={item.state === "DEFERRED" ? "row-deferred" : undefined}>
+            <td>{item.state === "DEFERRED" ? "—" : `${item.number}/${total}`}</td><td>{`${item.originalNumber}/${originalTotal}`}</td>
+            <td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.amountCents)}</td><td>{formatMoney(item.paidCents)}</td>
+            <td>{installmentStatus(item, today)}</td><td>{history(item) || "—"}</td>
+            {onDefer && <td>{defer && <button type="button" className="outline-button" onClick={defer}>Renegociar parcela</button>}</td>}
+          </tr>
+        );
+      })}</tbody>
+    </table>
+  );
+}
+
+// Modalidade 1: renegociar UMA parcela (jogar para o final). Prévia pelo mesmo extrato do servidor; nada é gravado até confirmar.
+function DeferInstallmentForm({ operation, number, today, onClose, onDone }: { operation: OperationView; number: number; today: string; onClose: () => void; onDone: (message: string) => void }) {
+  const [addition, setAddition] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const { pending, feedback, onSubmit } = useFormAction(async (data) => {
+    const result = await deferInstallmentAction(data);
+    if (result.ok) { setConfirmed(false); onDone(result.message); }
+    return result;
+  });
+  const item = operation.installments.find((entry) => entry.originalNumber === number && entry.deferredFrom === null);
+  const additionCents = addition.trim() ? parseMoneyToCents(addition) : 0;
+  const eligible = deferralEligibility(operation, item);
+  const valid = eligible.ok && item !== undefined && additionCents !== null && additionCents >= 0;
+  const newDueDate = item ? deferralDueDate(operation.ledgerTerms, operation.installments) : "";
+  const after = valid && item ? operationLedger({ ...operation.ledgerTerms, deferrals: [...(operation.ledgerTerms.deferrals ?? []), { originalNumber: item.originalNumber, additionCents: additionCents as number, newDueDate, newAmountCents: item.amountCents + (additionCents as number) }] }, operation.payments, today) : null;
+  const moved = after?.schedule.find((entry) => entry.deferredFrom === number);
+  const paidCount = operation.installments.filter((entry) => entry.state === "PAID").length;
+  return (
+    <form className="form-grid" onSubmit={onSubmit} aria-label="Renegociar parcela">
+      <input type="hidden" name="operationId" value={operation.id} />
+      <input type="hidden" name="number" value={number} />
+      <input type="hidden" name="confirm" value={confirmed ? "yes" : "no"} />
+      <div className="field-full">
+        <p className="capital-note"><strong>{`Renegociar a parcela ${item ? `${item.number}/${operation.installmentTotal}` : number}`}</strong>{" · Ação: "}<span className="modality-switch" role="radiogroup" aria-label="Ação"><button type="button" role="radio" aria-checked="true" className="is-active">Jogar para o final</button></span></p>
+        <p className="muted-cell">Adiamento pontual desta parcela: ela vai para o fim do cronograma, sem pagamento, sem lucro realizado e sem mexer no capital. Para refazer o contrato inteiro, use a página Renegociação.</p>
+      </div>
+      <label className="field"><span>Acréscimo ou multa (R$)</span><MoneyInput name="addition" inputMode="decimal" placeholder="0,00" value={addition} onChange={(event) => setAddition(event.target.value)} autoFocus /></label>
+      <label className="field field-wide"><span>Motivo (opcional)</span><input name="reason" maxLength={300} placeholder="Opcional" /></label>
+      {!eligible.ok && <p className="form-feedback form-feedback-warning field-full">{eligible.error}</p>}
+      {additionCents === null && <p className="form-feedback form-feedback-warning field-full">Informe o acréscimo em reais, por exemplo 100,00.</p>}
+      {after && item && moved && (
+        <div className="field-full" aria-live="polite">
+          <dl className="payment-summary" aria-label="Resumo da renegociação">
+            <div><dt>Parcela original renegociada</dt><dd>{`${item.originalNumber}/${operation.installmentTotal} · ${formatDate(item.dueDate)} · ${formatMoney(item.amountCents)}`}</dd></div>
+            <div><dt>Situação da original</dt><dd>Renegociada para o final</dd></div>
+            <div><dt>Nova data da obrigação</dt><dd>{formatDate(moved.dueDate)}</dd></div>
+            <div><dt>Acréscimo informado</dt><dd>{formatMoney(additionCents ?? 0)}</dd></div>
+            <div><dt>Novo valor</dt><dd>{formatMoney(moved.amountCents)}</dd></div>
+            <div><dt>Já pago pela cliente</dt><dd>{`${formatMoney(operation.paidCents)} (${paidCount} ${paidCount === 1 ? "parcela" : "parcelas"})`}</dd></div>
+            <div><dt>Total previsto do contrato, antes</dt><dd>{formatMoney(operation.totalCents)}</dd></div>
+            <div><dt>Total previsto do contrato, depois</dt><dd>{formatMoney(after.totalCents)}</dd></div>
+            <div className="payment-balance"><dt>Saldo a receber, depois</dt><dd>{formatMoney(after.balanceCents)}</dd></div>
+          </dl>
+          <p className="muted-cell"><strong>Cronograma depois da renegociação</strong></p>
+          <div className="table-scroll"><ScheduleTable items={after.schedule} today={today} label="Cronograma simulado" /></div>
+        </div>
+      )}
+      <label className="field-check field-full"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>Confirmo: jogar esta parcela para o final do contrato. Nenhum pagamento será registrado.</span></label>
+      <div className="form-actions">
+        <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
+        <button className="primary-button" disabled={pending || !valid || !confirmed}><Icon name="check" size={16} /> {pending ? "Gravando…" : "Confirmar renegociação"}</button>
+      </div>
+      <Feedback feedback={feedback} />
+    </form>
+  );
+}
+
 // readOnly: operação de ciclo encerrado aberta pelo relatório; só consulta (o servidor também recusa alterações).
 function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void; readOnly?: boolean }) {
   const [amount, setAmount] = useState("");
@@ -1166,6 +1266,8 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
   const renews = renewal !== null;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
+  const [deferring, setDeferring] = useState<number | null>(null);
+  const [deferNotice, setDeferNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -1177,7 +1279,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
     <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Pagamentos de ${operation.clientName}`}>
         <div className="panel-header">
-          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installments.length} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
+          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installmentTotal} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <OperationProfitHero operation={operation} />
@@ -1202,7 +1304,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             </>
           ) : (
             <>
-              <div><dt>Parcelas pagas</dt><dd>{operation.installments.filter((item) => item.state === "PAID").length} de {operation.installments.length}</dd></div>
+              <div><dt>Parcelas pagas</dt><dd>{operation.installments.filter((item) => item.state === "PAID").length} de {operation.installmentTotal}</dd></div>
               <div><dt>Taxa de juros</dt><dd>{rateLabel(operation)}</dd></div>
               <div><dt>Próxima parcela</dt><dd>{next ? `${next.number}ª · ${formatMoney(next.remainingCents)} em ${formatDate(next.dueDate)}` : "—"}</dd></div>
             </>
@@ -1258,17 +1360,11 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           </form>
         )}
         <Feedback feedback={feedback} />
+        {deferNotice && <p className="form-feedback" role="status">{deferNotice}</p>}
+        {isOpen && deferring !== null && <DeferInstallmentForm operation={operation} number={deferring} today={today} onClose={() => setDeferring(null)} onDone={(message) => { setDeferring(null); setDeferNotice(message); onChanged(); }} />}
         {!recurringOp && (
           <div className="table-scroll installment-table">
-            <table className="data-table" aria-label="Parcelas">
-              <thead><tr><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Pago</th><th>Situação</th></tr></thead>
-              <tbody>{operation.installments.map((item) => (
-                <tr key={item.number}>
-                  <td>{item.number}/{operation.installments.length}</td><td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.amountCents)}</td><td>{formatMoney(item.paidCents)}</td>
-                  <td>{item.state === "PAID" ? "Paga" : item.state === "CLOSED" ? "Encerrada na liquidação" : item.dueDate < today ? (item.state === "PARTIAL" ? "Parcial, em atraso" : "Em atraso") : item.state === "PARTIAL" ? "Parcial" : "Em aberto"}</td>
-                </tr>
-              ))}</tbody>
-            </table>
+            <ScheduleTable items={operation.installments} today={today} label="Parcelas" onDefer={isOpen && operation.modality === "INSTALLMENT" ? (item) => deferralEligibility(operation, item).ok ? () => setDeferring(item.originalNumber) : null : undefined} />
           </div>
         )}
         <div className="payment-history">
@@ -1467,7 +1563,7 @@ function OperationsTable({ operations, clients, today, onChanged }: { operations
           <td data-label="Cliente"><strong>{operation.clientName}</strong><small>#{operation.code} · emprestado em {formatDate(operation.loanDate)} · {operationAge(operation)}</small></td>
           <td data-label="Principal e juros">{formatMoney(operation.principalCents)}<small>juros {formatMoney(operation.interestCents)} · {rateLabel(operation)} · {operation.modality === "INSTALLMENT" ? `parcelado ${operation.frequency === "BIWEEKLY" ? "quinzenal" : "mensal"}` : frequencyLabels[operation.frequency].toLowerCase()}</small></td>
           <td data-label="Total">{formatMoney(operation.totalCents)}</td><td data-label="Recebido">{formatMoney(operation.paidCents)}</td><td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
-          <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installments.length}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
+          <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installmentTotal}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
           <td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>
         </tr>
       ))}</tbody>

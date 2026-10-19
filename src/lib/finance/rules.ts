@@ -56,7 +56,7 @@ export function installmentDueDate(firstDueDate: string, number: number, frequen
   return dueDates(frequency, firstDueDate, number)[number - 1];
 }
 
-export type InstallmentState = "PAID" | "PARTIAL" | "OPEN" | "CLOSED";
+export type InstallmentState = "PAID" | "PARTIAL" | "OPEN" | "CLOSED" | "DEFERRED";
 // RENOVAÇÃO — REGRA OFICIAL (modalidade pagamento único). Exemplo: R$ 1.000 a 30% ao mês, juros R$ 300, quitação R$ 1.300.
 //  • Pagar R$ 1.300 quita: R$ 300 são juros (lucro) e R$ 1.000 voltam como principal.
 //  • Pagar só os R$ 300 de juros NÃO é pagamento de principal: é "Juros / Renovação". Juros recebidos +300, principal em
@@ -215,6 +215,8 @@ export function simpleMonthlyRate({ principalCents, interestCents, months }: { p
 // Uma função só calcula, a partir dos dados gravados e dos pagamentos, tudo o que a tela, os cards e o servidor usam:
 // quanto de cada pagamento foi juros e principal, o período atual, o próximo vencimento, o saldo e a situação.
 export type LedgerRenewal = { paymentId: string; periodNumber: number; previousDueDate: string; newDueDate: string; principalBaseCents: number; interestCents: number };
+// Parcela renegociada para o final (installment_deferral): a original fica no histórico e nasce uma obrigação no fim do cronograma.
+export type LedgerDeferral = { originalNumber: number; additionCents: number; newDueDate: string; newAmountCents: number };
 export type LedgerTerms = {
   modality: "SINGLE" | "INSTALLMENT"; frequency: Frequency;
   principalCents: number; interestRateBps: number;
@@ -229,10 +231,15 @@ export type LedgerTerms = {
   // Liquidação antecipada: o pagamento final negociado. Ele quita o principal em aberto primeiro; o que sobrar é juros e os
   // juros/parcelas que faltavam são perdoados (não são lucro nem dívida). Os demais pagamentos seguem a regra normal.
   settlementPaymentId?: string | null;
+  // Parcelado: parcelas jogadas para o final. interestCents continua sendo o do contrato original; o acréscimo entra só no extrato.
+  deferrals?: LedgerDeferral[];
 };
 export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string };
 export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null };
-export type ScheduleItem = { number: number; dueDate: string; amountCents: number; paidCents: number; remainingCents: number; state: InstallmentState };
+// number = número ATUAL entre as obrigações ativas (a parcela renegociada mantém o número original, que é o histórico);
+// originalNumber = número no contrato original; deferredTo = número atual da obrigação para onde a parcela foi; deferredFrom =
+// número original da parcela que originou esta obrigação do final; additionCents = acréscimo dessa obrigação.
+export type ScheduleItem = { number: number; originalNumber: number; dueDate: string; amountCents: number; paidCents: number; remainingCents: number; state: InstallmentState; deferredTo: number | null; deferredFrom: number | null; additionCents: number };
 export type LedgerItem<T> = T & { interestCents: number; principalCents: number; kind: PaymentKind; balanceBeforeCents: number; renewedPeriod: LedgerPeriod | null };
 export type LedgerState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID";
 
@@ -248,20 +255,61 @@ export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "princi
 }
 
 // Parcelas do contrato amortizado: todas iguais; no diário a última leva o ajuste para fechar o total.
-export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality">, paidCents: number): ScheduleItem[] {
+export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals">, paidCents: number): ScheduleItem[] {
   const count = terms.installmentCount ?? 0, base = terms.installmentCents ?? 0;
   const totalCents = terms.principalCents + terms.interestCents;
   // Parcelado: mensal ou quinzenal (operações antigas são todas mensais); diário: um vencimento por dia.
   const frequency: Frequency = terms.modality === "INSTALLMENT" ? (terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") : terms.frequency;
   const dates = dueDates(frequency, terms.firstDueDate, count);
+  const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: index === count - 1 ? totalCents - base * (count - 1) : base }));
+  // Parcelas renegociadas para o final, na ordem em que foram feitas (cada nova data vem depois da anterior).
+  const deferrals = [...(terms.deferrals ?? [])].filter((item) => original.some((entry) => entry.originalNumber === item.originalNumber))
+    .sort((a, b) => a.newDueDate.localeCompare(b.newDueDate) || a.originalNumber - b.originalNumber);
+  const deferred = new Set(deferrals.map((item) => item.originalNumber));
+  // Obrigações ativas, em ordem: as parcelas que continuam e, no fim, as obrigações criadas pela renegociação.
+  const active = [
+    ...original.filter((entry) => !deferred.has(entry.originalNumber)).map((entry) => ({ ...entry, deferredFrom: null as number | null, additionCents: 0 })),
+    ...deferrals.map((item) => ({ originalNumber: item.originalNumber, dueDate: item.newDueDate, amountCents: item.newAmountCents, deferredFrom: item.originalNumber as number | null, additionCents: item.additionCents })),
+  ];
   let covered = 0;
-  return dates.map((dueDate, index) => {
-    const amountCents = index === count - 1 ? totalCents - base * (count - 1) : base;
-    const paid = Math.min(Math.max(paidCents - covered, 0), amountCents);
-    covered += amountCents;
-    const state: InstallmentState = paid === amountCents ? "PAID" : paid > 0 ? "PARTIAL" : "OPEN";
-    return { number: index + 1, dueDate, amountCents, paidCents: paid, remainingCents: amountCents - paid, state };
+  const current = active.map((entry, index): ScheduleItem => {
+    const paid = Math.min(Math.max(paidCents - covered, 0), entry.amountCents);
+    covered += entry.amountCents;
+    const state: InstallmentState = paid === entry.amountCents ? "PAID" : paid > 0 ? "PARTIAL" : "OPEN";
+    return { number: index + 1, originalNumber: entry.originalNumber, dueDate: entry.dueDate, amountCents: entry.amountCents, paidCents: paid, remainingCents: entry.amountCents - paid, state, deferredTo: null, deferredFrom: entry.deferredFrom, additionCents: entry.additionCents };
   });
+  if (deferrals.length === 0) return current;
+  // Tabela completa: cada parcela original na sua posição (a renegociada fica como histórico, sem valor a cobrar) e, depois,
+  // as obrigações criadas no final.
+  const keepers = current.filter((item) => item.deferredFrom === null);
+  const targets = current.filter((item) => item.deferredFrom !== null);
+  return [
+    ...original.map((entry): ScheduleItem => {
+      const moved = targets.find((item) => item.deferredFrom === entry.originalNumber);
+      if (moved) return { number: entry.originalNumber, originalNumber: entry.originalNumber, dueDate: entry.dueDate, amountCents: entry.amountCents, paidCents: 0, remainingCents: 0, state: "DEFERRED", deferredTo: moved.number, deferredFrom: null, additionCents: moved.additionCents };
+      return keepers.find((item) => item.originalNumber === entry.originalNumber) as ScheduleItem;
+    }),
+    ...targets,
+  ];
+}
+
+// Data da obrigação que uma parcela renegociada passa a ter: o período seguinte ao último vencimento ativo do cronograma,
+// pela periodicidade do contrato e mantendo o dia combinado.
+export function deferralDueDate(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "modality">, schedule: ScheduleItem[]) {
+  const frequency: Frequency = terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
+  const last = schedule.filter((item) => item.state !== "DEFERRED").reduce((date, item) => (item.dueDate > date ? item.dueDate : date), "");
+  return nextDueDate(frequency, last, Number(terms.firstDueDate.slice(8, 10)));
+}
+
+// Elegível para "Jogar para o final": parcela em aberto (vencida ou a vencer), sem nenhum pagamento, que ainda não foi
+// renegociada nem é uma obrigação criada por renegociação. Só empréstimo parcelado em aberto, sem liquidação antecipada.
+export function deferralEligibility(operation: { status: string; modality: "SINGLE" | "INSTALLMENT"; settlementPaymentId?: string | null }, item: ScheduleItem | undefined) {
+  if (operation.modality !== "INSTALLMENT" || operation.status !== "OPEN" || operation.settlementPaymentId) return { ok: false as const, error: "Só empréstimos parcelados em aberto têm parcelas para renegociar." };
+  if (!item) return { ok: false as const, error: "Parcela não encontrada neste contrato." };
+  if (item.state === "DEFERRED") return { ok: false as const, error: "Esta parcela já foi renegociada para o final." };
+  if (item.deferredFrom !== null) return { ok: false as const, error: "Esta é a obrigação criada por uma renegociação; ela não pode ser jogada para o final de novo." };
+  if (item.state !== "OPEN") return { ok: false as const, error: item.state === "PAID" ? "Esta parcela já foi paga." : "Esta parcela já tem pagamento parcial e não pode ser renegociada." };
+  return { ok: true as const };
 }
 
 const byDate = <T extends LedgerPayment>(a: T, b: T) => a.paidAt.localeCompare(b.paidAt) || (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
@@ -291,7 +339,7 @@ function settledLedger<T extends LedgerPayment>(base: (list: T[], date: string) 
     interestRemainingCents: 0, principalRemainingCents: Math.max(prior.principalRemainingCents - principalPart, 0), balanceCents: 0,
     amountDueCents: 0, nextItem: null,
     // Parcelas que faltavam ficam encerradas na liquidação: sem valor em aberto e sem data de cobrança.
-    schedule: prior.schedule.map((entry) => (entry.state === "PAID" ? entry : { ...entry, state: "CLOSED" as const, remainingCents: 0 })),
+    schedule: prior.schedule.map((entry) => (entry.state === "PAID" || entry.state === "DEFERRED" ? entry : { ...entry, state: "CLOSED" as const, remainingCents: 0 })),
     forgivenCents: Math.max(prior.balanceCents - settlement.amountCents, 0),
     state: "PAID" as LedgerState, daysUntilDue: 0,
   };
@@ -315,23 +363,31 @@ export function amortizedInterestPaid(paidCents: number, terms: Pick<LedgerTerms
   return Math.min(terms.interestCents, Math.round((paidCents * terms.interestCents) / Math.max(totalCents, 1)));
 }
 
-function amortizedLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T[], asOf: string) {
+function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered: T[], asOf: string) {
+  // O acréscimo das parcelas renegociadas é juros do contrato (só vira recebido quando pago, pela mesma proporção).
+  const additionsCents = (contract.deferrals ?? []).reduce((total, item) => total + item.additionCents, 0);
+  const terms: LedgerTerms = additionsCents > 0 ? { ...contract, interestCents: contract.interestCents + additionsCents } : contract;
   const totalCents = terms.principalCents + terms.interestCents;
+  // Juros acumulados após pagar `paid`: a proporção do contrato ORIGINAL até o total original e, daí em diante, só o acréscimo
+  // das parcelas renegociadas (que fica no fim). Assim os pagamentos já feitos nunca mudam de divisão quando há renegociação.
+  const originalTotalCents = contract.principalCents + contract.interestCents;
+  const interestAt = (paid: number) => paid >= totalCents ? terms.interestCents
+    : Math.min(terms.interestCents, paid <= originalTotalCents ? amortizedInterestPaid(paid, contract) : contract.interestCents + (paid - originalTotalCents));
   let interestPaidCents = 0, principalPaidCents = 0;
   const items: LedgerItem<T>[] = ordered.map((payment) => {
     const balanceBeforeCents = Math.max(totalCents - interestPaidCents - principalPaidCents, 0);
     const interestLeft = Math.max(terms.interestCents - interestPaidCents, 0);
     const finishes = payment.amountCents >= balanceBeforeCents;
     const paidAfter = interestPaidCents + principalPaidCents + payment.amountCents;
-    const interestPart = finishes ? interestLeft : Math.min(interestLeft, payment.amountCents, Math.max(amortizedInterestPaid(paidAfter, terms) - interestPaidCents, 0));
+    const interestPart = finishes ? interestLeft : Math.min(interestLeft, payment.amountCents, Math.max(interestAt(paidAfter) - interestPaidCents, 0));
     const principalPart = payment.amountCents - interestPart;
     interestPaidCents += interestPart;
     principalPaidCents += principalPart;
     return { ...payment, interestCents: interestPart, principalCents: principalPart, kind: finishes ? "SETTLEMENT" : "INSTALLMENT", balanceBeforeCents, renewedPeriod: null };
   });
   const paidCents = interestPaidCents + principalPaidCents;
-  const schedule = amortizedSchedule(terms, paidCents);
-  const nextItem = schedule.find((item) => item.state !== "PAID") ?? null;
+  const schedule = amortizedSchedule(contract, paidCents);
+  const nextItem = schedule.find((item) => item.state !== "PAID" && item.state !== "DEFERRED") ?? null;
   const balanceCents = Math.max(totalCents - paidCents, 0);
   const nextDue = nextItem?.dueDate ?? schedule.at(-1)?.dueDate ?? terms.firstDueDate;
   return {

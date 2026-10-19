@@ -7,6 +7,7 @@ import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, typ
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED" | "RENEGOTIATED";
 
 export type ClientRecord = ClientProfile & { id: string; name: string; document: string | null; phone: string | null; notes: string | null; archivedAt: string | null; createdAt: string };
+export type DeferralRecord = { id: string; originalNumber: number; originalDueDate: string; originalAmountCents: number; additionCents: number; newDueDate: string; newAmountCents: number; reason: string | null; createdAt: string };
 export type OperationCorrection = { id: string; reason: string; changes: { field: string; before: string | null; after: string | null }[]; editedAt: string; editedBy: string | null };
 export type OperationRecord = {
   id: string; clientId: string; clientName: string; principalCents: number; interestRateBps: number; interestCents: number; totalCents: number;
@@ -22,6 +23,8 @@ export type OperationRecord = {
   cycleNumber?: number;
   // Renovações por pagamento só dos juros. interestCents/totalCents acima são sempre os do período original.
   renewals?: RenewalRecord[];
+  // Parcelas jogadas para o final (só empréstimo parcelado), em ordem de criação.
+  deferrals?: DeferralRecord[];
   // Modalidade: pagamento único (padrão) ou parcelado com parcela fixa.
   modality?: OperationModality; installmentCount?: number | null; installmentCents?: number | null; firstDueDate?: string | null;
   // Periodicidade do pagamento único (mensal, quinzenal ou diário). Operações antigas: mensal.
@@ -58,7 +61,7 @@ export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = {
 };
 
 export type OperationState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID" | "CANCELED" | "RENEGOTIATED";
-export type OperationView = Omit<OperationRecord, "renewals"> & {
+export type OperationView = Omit<OperationRecord, "renewals" | "deferrals"> & {
   // Na visão, interestCents e totalCents são os contratados até agora (período original + renovações); os do
   // período original ficam em originalInterestCents e originalTotalCents.
   originalInterestCents: number; originalTotalCents: number; renewals: RenewalRecord[]; renewalCount: number;
@@ -67,6 +70,8 @@ export type OperationView = Omit<OperationRecord, "renewals"> & {
   modality: OperationModality; frequency: Frequency;
   // Parcelado e diário: as parcelas com o que já foi pago em cada uma e a próxima em aberto (null quando tudo foi pago).
   installments: ScheduleItem[]; nextInstallment: ScheduleItem | null;
+  // Obrigações ativas do cronograma (a parcela renegociada fica só no histórico) e as renegociações feitas.
+  installmentTotal: number; deferrals: DeferralRecord[];
   // Mensal e quinzenal: os períodos (o 1º é o do contrato; os seguintes vieram de renovações).
   periods: LedgerPeriod[];
   // Próximo vencimento: no pagamento único é o vencimento do período atual; no parcelado/diário, o da próxima parcela.
@@ -183,7 +188,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const paymentsByOperation = new Map<string, PaymentRecord[]>();
   for (const payment of payments) paymentsByOperation.set(payment.operationId, [...(paymentsByOperation.get(payment.operationId) ?? []), payment]);
 
-  const views: OperationView[] = operations.map(({ renewals: renewalRows = [], ...operation }) => {
+  const views: OperationView[] = operations.map(({ renewals: renewalRows = [], deferrals: deferralRows = [], ...operation }) => {
     const renewals = [...renewalRows].sort((a, b) => a.periodNumber - b.periodNumber);
     const modality: OperationModality = operation.modality ?? "SINGLE";
     const frequency: Frequency = operation.frequency ?? "MONTHLY";
@@ -194,6 +199,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
       firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, renewals,
       settlementPaymentId: operation.settlementPaymentId ?? null,
+      deferrals: deferralRows.map((item) => ({ originalNumber: item.originalNumber, additionCents: item.additionCents, newDueDate: item.newDueDate, newAmountCents: item.newAmountCents })),
     };
     // Toda a conta (juros/principal de cada pagamento, período, vencimento, saldo e situação) vem do extrato em rules.ts.
     const ledger = operationLedger(ledgerTerms, paymentsByOperation.get(operation.id) ?? [], today);
@@ -204,7 +210,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       ...operation, code: operationCode(operation.id), state, daysUntilDue,
       interestCents: ledger.interestCents, totalCents: ledger.totalCents, originalInterestCents: operation.interestCents, originalTotalCents: operation.totalCents,
       renewals, renewalCount: ledger.renewalCount, periodNumber: ledger.periodNumber, modality, frequency, periods: ledger.periods,
-      installments: ledger.schedule, nextInstallment: ledger.nextItem, nextDueDate: ledger.nextDueDate,
+      installments: ledger.schedule, installmentTotal: ledger.schedule.filter((item) => item.state !== "DEFERRED").length, deferrals: deferralRows, nextInstallment: ledger.nextItem, nextDueDate: ledger.nextDueDate,
       nextOpenDueDate: open && ledger.balanceCents > 0 ? ledger.nextItem?.dueDate ?? ledger.nextDueDate : null,
       periodInterestCents: ledger.periodInterestCents, originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
       paidCents: ledger.paidCents, interestPaidCents: ledger.interestPaidCents, principalPaidCents: ledger.principalPaidCents,
@@ -276,7 +282,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
   const toCharge = (operation: OperationView): ChargeItem => ({
     key: operation.id, operationId: operation.id, clientName: operation.clientName, initials: initialsOf(operation.clientName), color: colorFor(operation.clientId),
     detail: operation.nextInstallment
-      ? `Op. #${operation.code} · Parcela ${operation.nextInstallment.number}/${operation.installments.length} · Vence ${formatDate(operation.nextDueDate)}`
+      ? `Op. #${operation.code} · Parcela ${operation.nextInstallment.number}/${operation.installmentTotal} · Vence ${formatDate(operation.nextDueDate)}`
       : `Op. #${operation.code}${operation.periodNumber > 1 ? ` · ${operation.periodNumber}º período` : ""} · Vence ${formatDate(operation.nextDueDate)}`,
     amountCents: operation.nextInstallment ? operation.nextInstallment.remainingCents : operation.balanceCents,
     status: relativeDue(operation.daysUntilDue), tone: operation.daysUntilDue < 0 ? "late" : "due",

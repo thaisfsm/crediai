@@ -1,11 +1,11 @@
 import "server-only";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { withTenantContext } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, investmentPriorContributions, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { capitalMovements, clientDocuments, clients, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
-import { buildPortfolio, summarizeOperations, type ClientRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
-import { toMovementRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
+import { buildPortfolio, summarizeOperations, type ClientRecord, type DeferralRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
+import { toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
 // para que o isolamento não dependa só do papel de banco usado em produção.
@@ -40,6 +40,10 @@ export async function loadTenantPortfolio() {
       .innerJoin(loanOperations, eq(loanOperations.id, loanRenewals.operationId))
       .where(and(eq(loanRenewals.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
       .orderBy(asc(loanRenewals.periodNumber));
+    const deferralRows = await tx.select({ deferral: installmentDeferrals }).from(installmentDeferrals)
+      .innerJoin(loanOperations, eq(loanOperations.id, installmentDeferrals.operationId))
+      .where(and(eq(installmentDeferrals.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .orderBy(asc(installmentDeferrals.createdAt));
     // Correções de operação (Etapa G): motivo, campos alterados e quem corrigiu (usuário do mesmo tenant).
     const correctionRows = await tx.select({ revision: loanOperationRevisions, editorName: users.name }).from(loanOperationRevisions)
       .innerJoin(loanOperations, eq(loanOperations.id, loanOperationRevisions.operationId))
@@ -61,7 +65,7 @@ export async function loadTenantPortfolio() {
       paymentCount: sql<string>`(select count(*) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
       receivedCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
     }).from(walletCycles).where(eq(walletCycles.tenantId, tenantId)).orderBy(desc(walletCycles.cycleNumber));
-    return { wallet, cycleNumber, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
   });
 
   const revisionsByPayment = new Map<string, PaymentRevisionRecord[]>();
@@ -74,6 +78,10 @@ export async function loadTenantPortfolio() {
   const renewalsByOperation = new Map<string, RenewalRecord[]>();
   for (const { renewal } of data.renewalRows) {
     renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), toRenewalRecord(renewal)]);
+  }
+  const deferralsByOperation = new Map<string, DeferralRecord[]>();
+  for (const { deferral } of data.deferralRows) {
+    deferralsByOperation.set(deferral.operationId, [...(deferralsByOperation.get(deferral.operationId) ?? []), toDeferralRecord(deferral)]);
   }
   const correctionsByOperation = new Map<string, OperationCorrection[]>();
   for (const { revision, editorName } of data.correctionRows) {
@@ -96,7 +104,7 @@ export async function loadTenantPortfolio() {
     cycleNumber: data.cycleNumber,
     capitalMovements: data.movementRows.map(toMovementRecord),
     today: todayIso(),
-    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? []), corrections: correctionsByOperation.get(operation.id) ?? [] })),
+    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [], deferralsByOperation.get(operation.id) ?? []), corrections: correctionsByOperation.get(operation.id) ?? [] })),
     payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, revisionsByPayment.get(payment.id) ?? [])),
   });
   // Contagens por cliente para a exclusão: operações visíveis, em aberto e qualquer histórico (inclusive excluídas).
@@ -150,15 +158,22 @@ export async function loadAllCyclesOperations() {
     const renewalRows = await tx.select({ renewal: loanRenewals }).from(loanRenewals)
       .where(eq(loanRenewals.tenantId, tenantId))
       .orderBy(asc(loanRenewals.periodNumber));
-    return { operationRows, paymentRows, renewalRows };
+    const deferralRows = await tx.select({ deferral: installmentDeferrals }).from(installmentDeferrals)
+      .where(eq(installmentDeferrals.tenantId, tenantId))
+      .orderBy(asc(installmentDeferrals.createdAt));
+    return { operationRows, paymentRows, renewalRows, deferralRows };
   });
   const renewalsByOperation = new Map<string, RenewalRecord[]>();
   for (const { renewal } of data.renewalRows) {
     renewalsByOperation.set(renewal.operationId, [...(renewalsByOperation.get(renewal.operationId) ?? []), toRenewalRecord(renewal)]);
   }
+  const deferralsByOperation = new Map<string, DeferralRecord[]>();
+  for (const { deferral } of data.deferralRows) {
+    deferralsByOperation.set(deferral.operationId, [...(deferralsByOperation.get(deferral.operationId) ?? []), toDeferralRecord(deferral)]);
+  }
   const { operations } = buildPortfolio({
     hasWallet: true, initialCapitalCents: 0, today: todayIso(),
-    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? []), cycleNumber: operation.cycleNumber })),
+    operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [], deferralsByOperation.get(operation.id) ?? []), cycleNumber: operation.cycleNumber })),
     payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName)),
   });
   return operations;

@@ -61,7 +61,8 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const periodWord = frequency === "BIWEEKLY" ? "quinzena" : "mês";
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · RENEGOCIAÇÃO" title="Renegociação" description="Escolha as operações em aberto de um cliente, simule as novas condições e grave: as antigas ficam como renegociadas e o novo contrato guarda o vínculo." />
+      <PageHeading eyebrow="CREDIAI · RENEGOCIAÇÃO" title="Renegociação" description="Renegociação integral do contrato: escolha as operações em aberto de um cliente, simule as novas condições e grave. As antigas ficam como renegociadas e o novo contrato guarda o vínculo." />
+      <p className="capital-note">Para adiar só UMA parcela para o final do contrato (com acréscimo ou multa), não use esta página: abra a operação (botão “Registrar pagamento” em Operações): na tabela de parcelas use “Renegociar parcela”. O contrato não é refeito.</p>
       {feedback && <p className={`form-feedback ${feedback.tone === "ok" ? "" : "form-feedback-error"}`} role="status">{feedback.text}</p>}
       <section className="panel form-panel" aria-label="Operações a renegociar">
         <div className="panel-header"><div><h2>1. Cliente e operações</h2><p>Só operações em aberto do ciclo atual.</p></div></div>
