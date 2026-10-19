@@ -1,9 +1,9 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clients, loanOperations, loanRenewals, payments, wallets } from "@/lib/db/schema";
+import { capitalMovements, clients, installmentDeferrals, loanOperations, loanRenewals, payments, wallets } from "@/lib/db/schema";
 import { todayIso } from "./format";
-import { buildPortfolio, type CapitalMovementRecord, type OperationRecord, type PaymentRecord, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
+import { buildPortfolio, type CapitalMovementRecord, type OperationRecord, type PaymentRecord, type PaymentRevisionRecord, type DeferralRecord, type RenewalRecord } from "./portfolio";
 
 // Conversão das linhas do banco para os registros de buildPortfolio. Usada pelo dashboard do tenant e pela
 // administração da plataforma, para que os indicadores dos dois lados saiam exatamente do mesmo cálculo.
@@ -11,6 +11,7 @@ type MovementRow = typeof capitalMovements.$inferSelect;
 type OperationRow = typeof loanOperations.$inferSelect;
 type PaymentRow = typeof payments.$inferSelect;
 type RenewalRow = typeof loanRenewals.$inferSelect;
+type DeferralRow = typeof installmentDeferrals.$inferSelect;
 
 export function toMovementRecord(movement: MovementRow): CapitalMovementRecord {
   return {
@@ -26,14 +27,21 @@ export function toRenewalRecord(renewal: RenewalRow): RenewalRecord {
   };
 }
 
-export function toOperationRecord(operation: OperationRow, clientName: string, renewals: RenewalRecord[]): OperationRecord {
+export function toDeferralRecord(row: DeferralRow): DeferralRecord {
+  return {
+    id: row.id, originalNumber: row.originalNumber, originalDueDate: row.originalDueDate, originalAmountCents: row.originalAmountCents, additionCents: row.additionCents,
+    newDueDate: row.newDueDate, newAmountCents: row.newAmountCents, reason: row.reason, createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function toOperationRecord(operation: OperationRow, clientName: string, renewals: RenewalRecord[], deferrals: DeferralRecord[] = []): OperationRecord {
   return {
     id: operation.id, clientId: operation.clientId, clientName, principalCents: operation.principalCents, interestRateBps: operation.interestRateBps,
     interestCents: operation.interestCents, totalCents: operation.totalCents, loanDate: operation.loanDate, dueDate: operation.dueDate,
     renegotiatedIntoId: operation.renegotiatedIntoId, renegotiatedOn: operation.renegotiatedOn, renegotiatedAt: operation.renegotiatedAt?.toISOString() ?? null,
     renegotiatedPrincipalCents: operation.renegotiatedPrincipalCents, renegotiatedInterestCents: operation.renegotiatedInterestCents,
     status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(), updatedAt: operation.updatedAt.toISOString(),
-    renewals,
+    renewals, deferrals,
     settlementPaymentId: operation.settlementPaymentId, settlementBalanceCents: operation.settlementBalanceCents, settlementDiscountCents: operation.settlementDiscountCents,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate,
@@ -75,12 +83,18 @@ export async function loadTenantPortfolios(tx: TenantTransaction, tenantIds: str
     .where(and(inArray(loanRenewals.tenantId, tenantIds), sql`${loanOperations.cycleNumber} = ${currentCycle("loan_operation.tenant_id")}`))
     .orderBy(asc(loanRenewals.periodNumber));
 
+  const deferralRows = await tx.select({ deferral: installmentDeferrals }).from(installmentDeferrals)
+    .innerJoin(loanOperations, eq(loanOperations.id, installmentDeferrals.operationId))
+    .where(and(inArray(installmentDeferrals.tenantId, tenantIds), sql`${loanOperations.cycleNumber} = ${currentCycle("loan_operation.tenant_id")}`))
+    .orderBy(asc(installmentDeferrals.createdAt));
+
   const group = <T,>(rows: T[], key: (row: T) => string) => {
     const map = new Map<string, T[]>();
     for (const row of rows) map.set(key(row), [...(map.get(key(row)) ?? []), row]);
     return map;
   };
   const renewalsByOperation = group(renewalRows.map(({ renewal }) => renewal), (renewal) => renewal.operationId);
+  const deferralsByOperation = group(deferralRows.map(({ deferral }) => deferral), (deferral) => deferral.operationId);
   const movementsByTenant = group(movementRows, (movement) => movement.tenantId);
   const operationsByTenant = group(operationRows, (row) => row.operation.tenantId);
   const paymentsByTenant = group(paymentRows, (row) => row.payment.tenantId);
@@ -97,7 +111,7 @@ export async function loadTenantPortfolios(tx: TenantTransaction, tenantIds: str
       capitalMovements: (movementsByTenant.get(tenantId) ?? []).map(toMovementRecord),
       today,
       operations: (operationsByTenant.get(tenantId) ?? []).map(({ operation, clientName }) =>
-        toOperationRecord(operation, clientName, (renewalsByOperation.get(operation.id) ?? []).map(toRenewalRecord))),
+        toOperationRecord(operation, clientName, (renewalsByOperation.get(operation.id) ?? []).map(toRenewalRecord), (deferralsByOperation.get(operation.id) ?? []).map(toDeferralRecord))),
       payments: tenantPayments,
     });
     result.set(tenantId, { ...portfolio, payments: tenantPayments });

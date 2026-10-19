@@ -105,21 +105,3 @@ export function renegotiationContract(position: RenegotiationPosition, terms: Re
     },
   };
 }
-
-// "Jogar a parcela para o final": a parcela pulada vai para o fim do cronograma e as demais mantêm as datas. Só vale para a
-// primeira parcela ainda não paga (assim as datas das seguintes continuam seguidas, sem buraco). O contrato novo tem as
-// parcelas que faltam (a pulada inclusive), taxa 0 (nada de juros novos) e a multa na última; o saldo vem da operação.
-export function skipInstallmentPlan(operation: Pick<OperationView, "status" | "modality" | "frequency" | "installments">, number: number) {
-  if (operation.status !== "OPEN" || operation.modality !== "INSTALLMENT" || operation.installments.length === 0) return { ok: false as const, error: "Só parcelados em aberto têm parcelas para jogar para o final." };
-  const unpaid = operation.installments.filter((item) => item.state !== "PAID");
-  const target = unpaid[0];
-  if (!target) return { ok: false as const, error: "Todas as parcelas já foram pagas." };
-  if (target.number !== number) return { ok: false as const, error: `Jogue primeiro a parcela ${target.number}, a mais antiga em aberto. As datas das seguintes ficam em sequência.` };
-  const next = unpaid[1];
-  return {
-    ok: true as const, count: unpaid.length, frequency: (operation.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") as RenegotiationFrequency,
-    // Com parcelas seguintes, o contrato novo começa na próxima; se a pulada era a única, ela só muda de data (próximo período).
-    firstDueDate: next ? next.dueDate : dueDates(operation.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY", target.dueDate, 2)[1],
-    movedFrom: target.dueDate, movedAmountCents: target.amountCents, total: operation.installments.length,
-  };
-}
