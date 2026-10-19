@@ -156,3 +156,29 @@ test("EV7. migration 0024 só acrescenta: nenhuma linha existente é alterada ou
   assert.ok(audits.length > 10);
   for (const call of audits) assert.ok(!/\.(pixKey|account|accountDigit|branch|holderDocument|bankCode)\b/.test(call), `auditoria com dado bancário: ${call.slice(0, 120)}`);
 });
+
+test("EV8. cronograma montado a partir do contrato: início é o 1º pagamento, rendimento fixo, principal na última linha (ou em D+N)", async () => {
+  const { contractScheduleItems } = await import("../src/lib/investors/rules.ts");
+  const base = { startDate: "2026-08-06", maturityDate: "2027-07-06", dueDay: 6, paymentFrequency: "MONTHLY", installmentCount: 12, termCount: 12, termUnit: "MONTHS", yieldPaymentCents: 60_000, amountCents: 2_000_000, redemptionRule: "AT_MATURITY", redemptionDays: null };
+  const items = contractScheduleItems(base);
+  assert.equal(items.length, 12);
+  assert.equal(items[0].dueDate, "2026-08-06");
+  assert.equal(items[11].dueDate, "2027-07-06");
+  assert.ok(items.every((item) => item.yieldCents === 60_000));
+  assert.deepEqual(items.map((item) => item.principalCents), [...Array(11).fill(0), 2_000_000]);
+  // D+30: o principal vira uma linha própria na data de resgate.
+  const dplus = contractScheduleItems({ ...base, redemptionRule: "D_PLUS", redemptionDays: 30 });
+  assert.equal(dplus.length, 13);
+  assert.deepEqual({ dueDate: dplus[12].dueDate, yieldCents: dplus[12].yieldCents, principalCents: dplus[12].principalCents }, { dueDate: "2027-08-05", yieldCents: 0, principalCents: 2_000_000 });
+  // Trimestral: 12 meses → 4 pagamentos de rendimento (último em 06/05/2027); o principal fica na data de resgate (vencimento 06/07/2027).
+  const quarterly = contractScheduleItems({ ...base, paymentFrequency: "QUARTERLY", installmentCount: null });
+  assert.deepEqual(quarterly.map((item) => item.dueDate), ["2026-08-06", "2026-11-06", "2027-02-06", "2027-05-06", "2027-07-06"]);
+  assert.equal(quarterly[4].yieldCents, 0);
+  // Pagamento único no vencimento.
+  const single = contractScheduleItems({ ...base, paymentFrequency: "AT_MATURITY", installmentCount: null });
+  assert.deepEqual(single.map((item) => item.dueDate), ["2027-07-06"]);
+  // Sem rendimento de cada pagamento, sem periodicidade ou sem quantidade: nada é inventado.
+  assert.equal(contractScheduleItems({ ...base, yieldPaymentCents: null }), null);
+  assert.equal(contractScheduleItems({ ...base, paymentFrequency: null }), null);
+  assert.equal(contractScheduleItems({ ...base, installmentCount: null, termCount: null }), null);
+});

@@ -435,6 +435,41 @@ export function defaultModelPlan(investment: {
   return { frequency, firstDueDate, dueDay, count: count && count <= MAX_SCHEDULE_ITEMS ? count : null, principalAmount, yieldAmount };
 }
 
+// Cronograma montado sozinho a partir do contrato (sem digitar nada): a data de início é a do primeiro pagamento, as
+// demais seguem a periodicidade no dia combinado, o rendimento de cada pagamento é o do contrato e a devolução do
+// principal vai para a data de resgate (a última linha, ou uma linha própria se a liquidez for D+N). Sem periodicidade,
+// quantidade de pagamentos ou rendimento de cada pagamento o contrato não diz o bastante: devolve null (nada é inventado).
+export function contractScheduleItems(values: {
+  startDate: string; maturityDate: string | null; dueDay: number | null; paymentFrequency: string | null; installmentCount: number | null;
+  termCount: number | null; termUnit: string | null; yieldPaymentCents: number | null; amountCents: number; redemptionRule: string | null; redemptionDays: number | null;
+}): ScheduleItemValues[] | null {
+  const frequency = values.paymentFrequency as PaymentFrequency | null;
+  if (!frequency || !(frequency === "AT_MATURITY" || FREQUENCY_MONTHS[frequency]) || !values.yieldPaymentCents || values.yieldPaymentCents <= 0 || !isIsoDate(values.startDate)) return null;
+  let dates: string[];
+  if (frequency === "AT_MATURITY") {
+    if (!values.maturityDate || !isIsoDate(values.maturityDate)) return null;
+    dates = [values.maturityDate];
+  } else {
+    const count = values.installmentCount ?? (values.termCount && values.termUnit ? installmentsFor(values.termCount, values.termUnit as TermUnit, frequency) : null);
+    if (!count || count < 1 || count > MAX_SCHEDULE_ITEMS) return null;
+    dates = scheduleDates(values.startDate, count, frequency, values.dueDay);
+  }
+  const yieldAmount = centsToInput(values.yieldPaymentCents), principalAmount = centsToInput(values.amountCents);
+  const lines: ScheduleLineInput[] = dates.map((dueDate, index) => {
+    const last = index === dates.length - 1;
+    return { kind: last ? "COMBINED" : "YIELD", dueDate, yieldAmount, principalAmount: last ? principalAmount : "" };
+  });
+  const rule = values.redemptionRule as RedemptionRule | null;
+  const adjusted = applyRedemptionDate(lines, redemptionDate(values.maturityDate ?? dates[dates.length - 1], rule, values.redemptionDays));
+  const items: ScheduleItemValues[] = [];
+  for (const line of adjusted) {
+    const result = scheduleLineValues(line);
+    if (!result.ok) return null;
+    items.push(result.values);
+  }
+  return items;
+}
+
 // Datas das linhas comparadas com o contrato: antes do início é recusado na gravação; depois do vencimento do contrato
 // é apenas apontado (pode ser combinado assim), nunca corrigido.
 export function scheduleDateProblem(dueDate: string, investment: { startDate: string }) {

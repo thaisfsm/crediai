@@ -94,3 +94,27 @@ test("NC5. editar o contrato não muda o número; a tela mostra o número e não
   assert.ok(view.html.includes(before), "número aparece na lista de investimentos");
 });
 
+
+test("NC6. cronograma montado a partir do contrato ao cadastrar (e ao editar um contrato sem cronograma); sem dados suficientes não monta nada", async () => {
+  const full = contract({ investorId: ids.investor, startDate: "2026-08-06", paymentFrequency: "MONTHLY", installmentCount: "12", yieldPayment: "600,00", dueDay: "6", maturityDate: "2027-07-06", redemptionRule: "AT_MATURITY" });
+  const created = await investorAction(robério, "createInvestmentAction", full);
+  assert.equal(created?.ok, true, JSON.stringify(created));
+  assert.match(created.message, /Cronograma montado com 12 pagamentos/);
+  const rows = await admin(`select due_date::text d, yield_cents::int y, principal_cents::int p from investment_schedule_item where investment_id = '${created.id}' order by number`);
+  assert.equal(rows.length, 12);
+  assert.deepEqual([rows[0].d, rows[11].d], ["2026-08-06", "2027-07-06"]);
+  assert.ok(rows.every((row) => row.y === 60_000));
+  assert.deepEqual(rows.map((row) => row.p), [...Array(11).fill(0), 1_000_000]);
+  assert.equal(await one(`select count(*)::int from investment_revision where investment_id = '${created.id}' and kind = 'SCHEDULE'`), 1);
+  // Sem rendimento de cada pagamento: nada é inventado.
+  const bare = await investorAction(robério, "createInvestmentAction", contract({ investorId: ids.investor, startDate: "2026-08-06", paymentFrequency: "MONTHLY", installmentCount: "12" }));
+  assert.equal(bare?.ok, true, JSON.stringify(bare));
+  assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${bare.id}'`), 0);
+  // Editar o contrato sem cronograma, agora com rendimento, monta o cronograma; editar de novo não duplica.
+  const edited = await investorAction(robério, "updateInvestmentAction", { ...contract({ investorId: ids.investor, startDate: "2026-08-06", paymentFrequency: "MONTHLY", installmentCount: "12", yieldPayment: "500,00", status: "ACTIVE" }), investmentId: bare.id });
+  assert.equal(edited?.ok, true, JSON.stringify(edited));
+  assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${bare.id}'`), 12);
+  const again = await investorAction(robério, "updateInvestmentAction", { ...contract({ investorId: ids.investor, startDate: "2026-08-06", paymentFrequency: "MONTHLY", installmentCount: "12", yieldPayment: "550,00", status: "ACTIVE" }), investmentId: bare.id });
+  assert.equal(again?.ok, true, JSON.stringify(again));
+  assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${bare.id}'`), 12, "cronograma existente não é refeito");
+});
