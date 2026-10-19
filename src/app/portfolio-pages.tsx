@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { cancelOperationAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -1100,6 +1100,54 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
   );
 }
 
+// Liquidação antecipada: o cliente quita a operação com um valor total negociado. Mostra o resumo do contrato, o que ficou
+// de fora (desconto) e exige confirmação explícita antes de gravar. O servidor refaz todas as contas.
+function EarlySettlementForm({ operation, today, onClose, onChanged }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void }) {
+  const [amount, setAmount] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const { pending, feedback, onSubmit } = useFormAction(settleOperationEarlyAction, () => { setAmount(""); setConfirmed(false); onClose(); onChanged(); });
+  const amountCents = parseMoneyToCents(amount);
+  const tooLow = amountCents !== null && amountCents > 0 && amountCents < operation.principalRemainingCents;
+  const tooHigh = amountCents !== null && amountCents > operation.balanceCents;
+  const valid = amountCents !== null && amountCents > 0 && !tooLow && !tooHigh;
+  const after = valid ? operationLedger({ ...operation.ledgerTerms, settlementPaymentId: "preview" }, [...operation.payments, { id: "preview", amountCents: amountCents ?? 0, paidAt: today, createdAt: "9999" }], today) : null;
+  const closing = after?.items.find((item) => item.id === "preview");
+  const openInstallments = operation.installments.filter((item) => item.state !== "PAID");
+  return (
+    <form className="form-grid" onSubmit={onSubmit} aria-label="Liquidação antecipada">
+      <input type="hidden" name="operationId" value={operation.id} />
+      <input type="hidden" name="confirm" value={confirmed ? "yes" : "no"} />
+      <p className="capital-note field-wide">Informe o valor total negociado para encerrar esta operação hoje. As obrigações futuras deixam de ser cobradas; os pagamentos já feitos continuam como estão.</p>
+      <dl className="payment-summary field-wide">
+        <div><dt>Saldo do contrato hoje</dt><dd>{formatMoney(operation.balanceCents)}</dd></div>
+        <div><dt>Principal que ainda não voltou</dt><dd>{formatMoney(operation.principalRemainingCents)}</dd></div>
+        <div><dt>Já recebido</dt><dd>{formatMoney(operation.paidCents)}</dd></div>
+        <div><dt>Obrigações em aberto</dt><dd>{openInstallments.length > 0 ? plural(openInstallments.length, "parcela", "parcelas") : "Período atual"}</dd></div>
+      </dl>
+      <DateField label="Data da liquidação" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
+      <label className="field"><span>Valor total negociado (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
+      <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
+      {tooLow && <p className="form-feedback form-feedback-warning field-wide">O valor negociado precisa cobrir ao menos o principal que ainda não voltou ({formatMoney(operation.principalRemainingCents)}).</p>}
+      {tooHigh && <p className="form-feedback form-feedback-warning field-wide">O valor negociado não pode ser maior que o saldo do contrato ({formatMoney(operation.balanceCents)}).</p>}
+      {after && closing && (
+        <div className="operation-preview field-wide" aria-live="polite">
+          <div><span>Valor recebido (entra no capital)</span><strong>{formatMoney(closing.amountCents)}</strong></div>
+          <div><span>Para principal</span><strong>{formatMoney(closing.principalCents)}</strong></div>
+          <div><span>Para juros (lucro realizado)</span><strong>{formatMoney(closing.interestCents)}</strong></div>
+          <div><span>Desconto (não cobrado)</span><strong>{formatMoney(after.forgivenCents)}</strong></div>
+          <div><span>Saldo após</span><strong>{formatMoney(0)}</strong></div>
+        </div>
+      )}
+      <label className="field-check field-wide"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>Confirmo a liquidação antecipada desta operação pelo valor informado. Isso não pode ser desfeito.</span></label>
+      <div className="form-actions">
+        <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
+        <button className="primary-button" disabled={pending || !valid || !confirmed}><Icon name="check" size={16} /> {pending ? "Liquidando…" : "Liquidar operação"}</button>
+      </div>
+      <Feedback feedback={feedback} />
+    </form>
+  );
+}
+
 // readOnly: operação de ciclo encerrado aberta pelo relatório; só consulta (o servidor também recusa alterações).
 function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void; readOnly?: boolean }) {
   const [amount, setAmount] = useState("");
@@ -1117,6 +1165,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
   const renewal = check?.ok === true && amountCents !== null ? interestOnlyRenewal(operation.ledgerTerms, operation, amountCents) : null;
   const renews = renewal !== null;
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [settling, setSettling] = useState(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -1162,7 +1211,11 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           <div><dt>Pagamentos realizados</dt><dd>{operation.payments.length}</dd></div>
           <div><dt>Meses com pagamento</dt><dd>{operation.paymentMonths}</dd></div>
         </dl>
-        {isOpen && (
+        {operation.settlementPaymentId && (
+          <p className="capital-note">Liquidada antecipadamente em {operation.settledAt ? formatDate(operation.settledAt) : "—"}: saldo do contrato de {formatMoney(operation.settlementBalanceCents ?? 0)} encerrado com desconto de {formatMoney(operation.settlementDiscountCents ?? 0)}. O desconto não é lucro nem pendência.</p>
+        )}
+        {isOpen && settling && <EarlySettlementForm operation={operation} today={today} onClose={() => setSettling(false)} onChanged={onChanged} />}
+        {isOpen && !settling && (
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
@@ -1198,7 +1251,10 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
                 <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : `${stateLabels[after.state].label} · vence ${formatDate(after.nextDueDate)}`}</strong></div>
               </div>
             )}
-            <div className="form-actions"><button className="primary-button" disabled={pending || (check !== null && !check.ok)}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button></div>
+            <div className="form-actions">
+              <button type="button" className="outline-button" onClick={() => setSettling(true)}>Liquidação antecipada</button>
+              <button className="primary-button" disabled={pending || (check !== null && !check.ok)}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
+            </div>
           </form>
         )}
         <Feedback feedback={feedback} />
@@ -1209,7 +1265,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
               <tbody>{operation.installments.map((item) => (
                 <tr key={item.number}>
                   <td>{item.number}/{operation.installments.length}</td><td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.amountCents)}</td><td>{formatMoney(item.paidCents)}</td>
-                  <td>{item.state === "PAID" ? "Paga" : item.dueDate < today ? (item.state === "PARTIAL" ? "Parcial, em atraso" : "Em atraso") : item.state === "PARTIAL" ? "Parcial" : "Em aberto"}</td>
+                  <td>{item.state === "PAID" ? "Paga" : item.state === "CLOSED" ? "Encerrada na liquidação" : item.dueDate < today ? (item.state === "PARTIAL" ? "Parcial, em atraso" : "Em atraso") : item.state === "PARTIAL" ? "Parcial" : "Em aberto"}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -1221,7 +1277,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             <ul>{operation.payments.map((payment) => (
               <li key={payment.id}>
                 <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
-                {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
+                {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !operation.settlementPaymentId && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
                 {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}

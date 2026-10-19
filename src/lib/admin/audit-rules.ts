@@ -31,6 +31,7 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_CONTRACT_SENT: "Contrato marcado como enviado para assinatura",
   INVESTMENT_SCHEDULE_UPDATED: "Cronograma de pagamentos ao investidor alterado",
   OPERATION_UPDATED: "Operação corrigida (sem pagamentos)",
+  OPERATION_SETTLED_EARLY: "Empréstimo liquidado antecipadamente",
   OPERATION_RENEGOTIATED: "Operações renegociadas em um novo contrato",
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
   INVESTMENT_CAPITAL_ENTRY_REGISTERED: "Entrada do investimento registrada no capital",

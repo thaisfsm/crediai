@@ -14,6 +14,8 @@ export type OperationRecord = {
   // Operação RENEGOTIATED: contrato novo para onde foi, data, e o principal/juros em aberto que levou para ele.
   renegotiatedIntoId?: string | null; renegotiatedOn?: string | null; renegotiatedAt?: string | null;
   renegotiatedPrincipalCents?: number | null; renegotiatedInterestCents?: number | null;
+  // Liquidação antecipada: pagamento final negociado, saldo que a operação tinha antes dele e desconto (juros não cobrados).
+  settlementPaymentId?: string | null; settlementBalanceCents?: number | null; settlementDiscountCents?: number | null;
   // Para operação excluída (CANCELED): quando foi excluída. Só ela usa este campo.
   updatedAt?: string;
   // Ciclo da carteira em que a operação foi feita (só preenchido no relatório com todos os ciclos).
@@ -191,6 +193,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     const ledgerTerms: LedgerTerms = {
       modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
       firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, renewals,
+      settlementPaymentId: operation.settlementPaymentId ?? null,
     };
     // Toda a conta (juros/principal de cada pagamento, período, vencimento, saldo e situação) vem do extrato em rules.ts.
     const ledger = operationLedger(ledgerTerms, paymentsByOperation.get(operation.id) ?? [], today);

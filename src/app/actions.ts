@@ -602,6 +602,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
     firstDueDate: operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents,
     renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),
+    settlementPaymentId: operation.settlementPaymentId,
   };
 }
 
@@ -686,6 +687,55 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   return result;
 }
 
+// Liquidação antecipada: o cliente quita a operação com um valor negociado (já com a data e a confirmação explícita). O
+// saldo vem do extrato (rules.ts); o valor negociado precisa cobrir ao menos o principal que ainda não voltou, o resto é
+// juros e o que o contrato ainda cobraria além disso é perdoado. Grava UM pagamento (entra no capital uma vez), marca a
+// operação como quitada e guarda saldo e desconto. Pagamentos anteriores e termos do contrato não mudam.
+export async function settleOperationEarlyAction(data: FormData): Promise<ActionResult> {
+  const operationId = text(data, "operationId", 80);
+  const amountCents = parseMoneyToCents(text(data, "amount", 40));
+  const paidAt = text(data, "paidAt", 10) || todayIso();
+  const notes = optional(text(data, "notes", 500));
+  if (!operationId) return { ok: false, error: "Operação inválida." };
+  if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor total negociado para encerrar a operação, por exemplo 3.300,00." };
+  if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data da liquidação." };
+  if (paidAt > todayIso()) return { ok: false, error: "A data da liquidação não pode ser depois de hoje." };
+  if (text(data, "confirm", 3) !== "yes") return { ok: false, error: "Confirme a liquidação antecipada para continuar." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    // Mesma trava do pagamento: a operação fica bloqueada, então duas liquidações (ou uma liquidação e um pagamento) não se cruzam.
+    const [operation] = await tx.select().from(loanOperations)
+      .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))))
+      .for("update");
+    if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
+    if (operation.status !== "OPEN" || operation.settlementPaymentId) return { ok: false, error: "Esta operação já não está em aberto; não é possível liquidá-la de novo." };
+    if (paidAt < operation.loanDate) return { ok: false, error: "A liquidação não pode ser antes da data do empréstimo." };
+    const previous = await operationPayments(tx, tenantId, operation.id);
+    if (previous.some((payment) => payment.paidAt > paidAt)) return { ok: false, error: "Há pagamento registrado depois desta data. Use a data do último pagamento ou uma posterior." };
+    const terms = await ledgerTermsOf(tx, tenantId, operation);
+    const prior = operationLedger(terms, previous, paidAt);
+    if (prior.balanceCents <= 0) return { ok: false, error: "Esta operação não tem saldo em aberto." };
+    if (amountCents > prior.balanceCents) return { ok: false, error: `O valor negociado não pode ser maior que o saldo do contrato (${formatMoney(prior.balanceCents)}). Para receber o saldo inteiro, use Registrar pagamento.` };
+    if (amountCents < prior.principalRemainingCents) {
+      return { ok: false, error: `O valor negociado precisa cobrir ao menos o principal que ainda não voltou (${formatMoney(prior.principalRemainingCents)}). Desconto sobre o principal não é tratado aqui.` };
+    }
+    const paymentId = id("pay");
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes: notes ?? "Liquidação antecipada" });
+    const discountCents = prior.balanceCents - amountCents;
+    await tx.update(loanOperations).set({
+      status: "PAID", settledAt: paidAt, settlementPaymentId: paymentId, settlementBalanceCents: prior.balanceCents, settlementDiscountCents: discountCents,
+      settlementByUserId: session.user.id, updatedAt: sql`now()`,
+    }).where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    const tenant = await tx.query.tenants.findFirst({ where: eq(tenants.id, tenantId), columns: { name: true } });
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_SETTLED_EARLY", entity: "loan_operation", entityId: operation.id, tenantId, tenantName: tenant?.name ?? null,
+      before: { status: "OPEN", balanceCents: prior.balanceCents }, after: { status: "PAID", receivedCents: amountCents, discountCents, paymentId },
+    });
+    return { ok: true, message: `Operação liquidada com ${formatMoney(amountCents)}.${discountCents > 0 ? ` Desconto de ${formatMoney(discountCents)} sobre o saldo de ${formatMoney(prior.balanceCents)}.` : ""} As parcelas futuras foram encerradas.` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
 // Correção de um pagamento já registrado (valor, data e observação). O pagamento continua sendo o mesmo (nada é duplicado)
 // e os valores de antes ficam em payment_revision. Saldo, juros e principal recebidos, situação da operação e capital
 // disponível são recalculados a partir dos pagamentos, pela mesma regra de rules.ts.
@@ -708,6 +758,7 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
       .for("update");
     if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
     if (operation.status === "RENEGOTIATED") return { ok: false, error: "Esta operação foi renegociada; o histórico dela não pode mais ser alterado." };
+    if (operation.settlementPaymentId) return { ok: false, error: "Esta operação foi liquidada antecipadamente; os pagamentos dela não podem mais ser alterados." };
     if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
     if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
     const terms = await ledgerTermsOf(tx, tenantId, operation);

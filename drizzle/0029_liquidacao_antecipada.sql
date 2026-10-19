@@ -1,0 +1,5 @@
+ALTER TABLE "loan_operation" ADD COLUMN "settlement_payment_id" text;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD COLUMN "settlement_balance_cents" bigint;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD COLUMN "settlement_discount_cents" bigint;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD COLUMN "settlement_by_user_id" text;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_settlement_consistent" CHECK (("loan_operation"."settlement_payment_id" is null) = ("loan_operation"."settlement_balance_cents" is null) and ("loan_operation"."settlement_payment_id" is null) = ("loan_operation"."settlement_discount_cents" is null) and ("loan_operation"."settlement_payment_id" is null or ("loan_operation"."status"::text = 'PAID' and "loan_operation"."settlement_discount_cents" >= 0 and "loan_operation"."settlement_balance_cents" > 0)));
