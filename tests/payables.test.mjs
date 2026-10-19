@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { buildPortfolio } from "../src/lib/finance/portfolio.ts";
 import { checkOutflow, financeRows, financeStatement, statementCategoryLabels } from "../src/lib/finance/cashflow.ts";
 import {
-  INVESTOR_CATEGORIES, buildObligations, checkCapitalEntry, checkPayment, entryDateOf, filterObligations, maskReference, obligationStatus, parsePayablesFilters,
+  INVESTOR_CATEGORIES, buildObligations, checkCapitalEntry, checkPayment, entryDateOf, entryDuplicateConflict, filterObligations, maskReference, obligationStatus, parsePayablesFilters,
   parsePaymentFields, payablesSections, payablesTotals, paymentCategory,
 } from "../src/lib/investors/payables.ts";
 
@@ -128,6 +128,23 @@ test("CP9. entrada no capital: uma vez, nunca cancelado, data do investimento (o
   assert.match(checkCapitalEntry({ ...base, hasWallet: false }).error, /capital inicial/);
   assert.match(checkCapitalEntry({ ...base, enteredOn: "2026-10-14" }).error, /ainda não chegou/);
   assert.match(checkCapitalEntry({ ...base, cycleStartedOn: "2026-10-02" }).error, /ciclo atual/);
+});
+
+test("CP9b. entrada anterior ao ciclo: confirmação libera, duplicidade identificada bloqueia sempre", () => {
+  const base = { enteredOn: "2026-07-06", today: TODAY, cycleStartedOn: "2026-10-01", investmentStatus: "ACTIVE", hasWallet: true, alreadyRegistered: false };
+  assert.match(checkCapitalEntry(base).error, /Confirme que ele realmente entrou/);
+  assert.deepEqual(checkCapitalEntry({ ...base, confirmedBeforeCycle: true }), { ok: true });
+  const conflict = entryDuplicateConflict({ amountCents: 2_000_000, initialCapitalCents: 2_000_000, contributions: [] });
+  assert.match(conflict, /capital inicial/);
+  assert.match(checkCapitalEntry({ ...base, confirmedBeforeCycle: true, duplicateConflict: conflict }).error, /capital inicial/);
+  assert.match(entryDuplicateConflict({ amountCents: 2_000_000, initialCapitalCents: 0, contributions: [{ amountCents: 2_000_000, occurredAt: "2026-10-02" }] }), /aporte de/);
+  assert.equal(entryDuplicateConflict({ amountCents: 2_000_000, initialCapitalCents: 500_000, contributions: [{ amountCents: 1, occurredAt: "2026-10-02" }] }), null);
+  // Confirmação não atravessa as outras regras.
+  assert.match(checkCapitalEntry({ ...base, confirmedBeforeCycle: true, alreadyRegistered: true }).error, /já foi registrada/);
+  assert.match(checkCapitalEntry({ ...base, confirmedBeforeCycle: true, investmentStatus: "CANCELED" }).error, /cancelado/);
+  assert.match(checkCapitalEntry({ ...base, confirmedBeforeCycle: true, priorContributionDeclared: true }).error, /aporte anterior/);
+  // Dentro do ciclo não precisa de confirmação.
+  assert.deepEqual(checkCapitalEntry({ ...base, enteredOn: "2026-10-05" }), { ok: true });
 });
 
 test("CP10. extrato e capital: entrada soma, baixas subtraem uma vez, com categorias próprias e sem duplicar", () => {
