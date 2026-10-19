@@ -16,7 +16,7 @@ import { contractFonts } from "@/lib/investors/contract-fonts";
 import { renderContractPdf } from "@/lib/investors/contract-pdf";
 import { contractDataHash, contractSource, loadContractor, loadPaymentDates } from "@/lib/investors/contract-source";
 import {
-  DOCUMENT_KINDS, INVESTOR_DOCUMENT_KINDS, MAX_SCHEDULE_ITEMS, investmentChanges, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, parseInvestorDocumentKind,
+  DOCUMENT_KINDS, INVESTOR_DOCUMENT_KINDS, MAX_SCHEDULE_ITEMS, contractScheduleItems, investmentChanges, investmentFields, investorAddressKeys, investorFields, parseDocumentKind, parseInvestorDocumentKind,
   scheduleDateProblem, scheduleItemFields, scheduleLinesFields, scheduleSummary, scheduleVersion,
   type InvestmentValues, type InvestorValues, type PersonType, type ScheduleItemValues, type TermUnit, type InvestmentPaymentMethod,
 } from "@/lib/investors/rules";
@@ -167,6 +167,20 @@ async function generateContractNumber(tx: TenantTransaction, tenantId: string, s
   return formatContractNumber(startDate, nextContractSequence(rows.map((row) => row.number)));
 }
 
+// Cronograma montado a partir do contrato (ver contractScheduleItems): só quando o contrato diz o bastante e o investimento
+// ainda não tem cronograma. Mesma transação do contrato; grava o histórico visível e a auditoria como qualquer cronograma.
+async function createContractSchedule(tx: TenantTransaction, scope: Parameters<Parameters<typeof withInvestorContext>[0]>[1], investment: { id: string; tenantId: string }, investorName: string, values: InvestmentValues) {
+  const items = contractScheduleItems(values);
+  if (!items || items.length === 0) return 0;
+  const [existing] = await tx.select({ id: investmentScheduleItems.id }).from(investmentScheduleItems)
+    .where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, investment.tenantId))).limit(1);
+  if (existing) return 0;
+  await tx.insert(investmentScheduleItems).values(items.map((item, index) => ({ id: id("ivs"), tenantId: investment.tenantId, investmentId: investment.id, number: index + 1, ...item, createdByUserId: scope.user.id })));
+  const context = { investment, investorName, items: [] } as unknown as ScheduleContext;
+  await audit(tx, scope, ...(await recordScheduleRevision(tx, scope.user.id, context, items, "Cronograma montado a partir do contrato")));
+  return items.length;
+}
+
 export async function createInvestmentAction(data: FormData): Promise<InvestorActionResult> {
   const read = reader(data);
   const investorId = read("investorId", 80);
@@ -185,7 +199,8 @@ export async function createInvestmentAction(data: FormData): Promise<InvestorAc
     await tx.insert(investments).values({ id: investmentId, tenantId: investor.tenantId, investorId: investor.id, ...values, createdByUserId: scope.user.id });
     await audit(tx, scope, investor.tenantId, "INVESTMENT_CREATED", "investment", investmentId, null, { investorId: investor.id, investorName: investor.name, ...investmentSnapshot(values) },
       `Investimento de ${formatMoney(values.amountCents)} cadastrado para ${investor.name}`);
-    return { ok: true, message: `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}.`, id: investmentId };
+    const scheduled = await createContractSchedule(tx, scope, { id: investmentId, tenantId: investor.tenantId }, investor.name, values);
+    return { ok: true, message: `Investimento de ${formatMoney(fields.values.amountCents)} cadastrado para ${investor.name}.${scheduled ? ` Cronograma montado com ${scheduled} ${scheduled === 1 ? "pagamento" : "pagamentos"}.` : ""}`, id: investmentId };
   }).catch((error) => {
     if (duplicateContractNumber(error)) return CONTRACT_NUMBER_ERROR;
     throw error;
@@ -257,7 +272,9 @@ export async function updateInvestmentAction(data: FormData): Promise<InvestorAc
     }
     if (JSON.stringify(dataBefore) !== JSON.stringify(dataAfter)) await audit(tx, scope, investment.tenantId, "INVESTMENT_UPDATED", "investment", investment.id, dataBefore, dataAfter, `Investimento de ${current.investorName} alterado`);
     if (statusBefore !== statusAfter) await audit(tx, scope, investment.tenantId, "INVESTMENT_STATUS_CHANGED", "investment", investment.id, { status: statusBefore }, { status: statusAfter }, `Status do investimento de ${current.investorName} alterado`);
-    return { ok: true, message: "Investimento atualizado.", id: investment.id };
+    // Contrato sem cronograma e com dados suficientes: monta o cronograma (nunca mexe em um cronograma que já existe).
+    const autoCount = afterValues.status === "ACTIVE" ? await createContractSchedule(tx, scope, { id: investment.id, tenantId: investment.tenantId }, current.investorName, afterValues) : 0;
+    return { ok: true, message: `Investimento atualizado.${autoCount ? ` Cronograma montado com ${autoCount} ${autoCount === 1 ? "pagamento" : "pagamentos"}.` : ""}`, id: investment.id };
   }).catch((error) => {
     if (duplicateContractNumber(error)) return CONTRACT_NUMBER_ERROR;
     throw error;
