@@ -6,11 +6,12 @@ import { useState, useTransition } from "react";
 import { addDays, formatDate, formatMoney, formatRate, parseMoneyToCents, parseLoanRateToBps } from "@/lib/finance/format";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { renegotiateAction } from "./renegotiation-actions";
-import { renegotiationContract, renegotiationPosition, simulateRenegotiation, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
+import { renegotiationContract, renegotiationPosition, simulateRenegotiation, skipInstallmentPlan, type RenegotiationFrequency, type RenegotiationModality } from "@/lib/finance/renegotiation";
 import { DateField } from "./date-field";
 import { EmptyPanel, PageHeading } from "./portfolio-pages";
 
 const stateLabel: Record<string, string> = { ACTIVE: "Ativa", DUE_TODAY: "Vence hoje", OVERDUE: "Em atraso" };
+const installmentLabel: Record<string, string> = { PAID: "Paga", PARTIAL: "Paga em parte", OPEN: "Em aberto", CLOSED: "Encerrada" };
 
 export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio }) {
   const open = portfolio.operations.filter((operation) => operation.status === "OPEN");
@@ -28,6 +29,10 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const [count, setCount] = useState("3");
   const [firstDueDate, setFirstDueDate] = useState(addDays(portfolio.today, 30));
   const [confirmed, setConfirmed] = useState(false);
+  // Parcela escolhida para ir ao final (painel aberto), o que já foi aplicado ao formulário e a chave que refaz o campo de data.
+  const [skipTarget, setSkipTarget] = useState<{ operationId: string; number: number; penalty: string; reason: string } | null>(null);
+  const [applied, setApplied] = useState<{ code: string; number: number; total: number } | null>(null);
+  const [dateKey, setDateKey] = useState(0);
   const [pending, startTransition] = useTransition();
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const operations = open.filter((operation) => operation.clientId === clientId);
@@ -53,11 +58,27 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
     startTransition(async () => {
       try {
         const saved = await renegotiateAction(data);
-        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); setPenalty(""); }
+        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setApplied(null); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); setPenalty(""); }
         else setFeedback({ tone: "error", text: saved.error });
       } catch { setFeedback({ tone: "error", text: "Não foi possível gravar a renegociação. Nada foi alterado; tente novamente." }); }
     });
   };
+  const openSkip = (operationId: string, number: number, total: number) => setSkipTarget({ operationId, number, penalty: "", reason: `Parcela ${number}/${total} jogada para o final` });
+  // Aplica a escolha ao formulário de baixo (só esta operação, taxa 0, parcelas que faltam, multa na última); nada é gravado aqui.
+  const applySkip = () => {
+    const operation = operations.find((item) => item.id === skipTarget?.operationId);
+    if (!skipTarget || !operation) return;
+    const plan = skipInstallmentPlan(operation, skipTarget.number);
+    if (!plan.ok) { setFeedback({ tone: "error", text: plan.error }); return; }
+    setExcluded(operations.filter((item) => item.id !== operation.id).map((item) => item.id));
+    setModality("INSTALLMENT"); setFrequency(plan.frequency); setRate("0"); setCount(String(plan.count)); setFirstDueDate(plan.firstDueDate); setDateKey((key) => key + 1);
+    setAdjustmentKind("NONE"); setAdjustment(""); setPenalty(skipTarget.penalty); setAdjustmentReason(skipTarget.reason); setConfirmed(false);
+    setApplied({ code: operation.code, number: skipTarget.number, total: plan.total }); setSkipTarget(null); setFeedback(null);
+    setTimeout(() => document.getElementById("renegociacao-resultado")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+  const skipOperation = operations.find((item) => item.id === skipTarget?.operationId);
+  const skipPlan = skipTarget && skipOperation ? skipInstallmentPlan(skipOperation, skipTarget.number) : null;
+  const skipPenaltyCents = skipTarget?.penalty.trim() ? parseMoneyToCents(skipTarget.penalty) : 0;
   const periodWord = frequency === "BIWEEKLY" ? "quinzena" : "mês";
   return (
     <div className="workspace-page">
@@ -68,7 +89,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
         {clients.length === 0 ? <EmptyPanel icon="wallet" text="Nenhuma operação em aberto para renegociar." /> : (
           <>
             <div className="form-grid">
-              <label className="field field-wide"><span>Cliente</span><select value={clientId} onChange={(event) => { setClientId(event.target.value); setExcluded([]); }}>
+              <label className="field field-wide"><span>Cliente</span><select value={clientId} onChange={(event) => { setClientId(event.target.value); setExcluded([]); setApplied(null); setSkipTarget(null); }}>
                 <option value="">Escolha o cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
               </select></label>
             </div>
@@ -87,6 +108,50 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
           </>
         )}
       </section>
+
+      {operations.some((operation) => operation.modality === "INSTALLMENT" && operation.installments.length > 0) && (
+        <section className="panel form-panel" aria-label="Parcelas do cliente">
+          <div className="panel-header"><div><h2>Parcelas</h2><p>Para jogar uma parcela para o final, clique em “Jogar para o final” na parcela em aberto mais antiga. A multa entra nessa parcela.</p></div></div>
+          {operations.filter((operation) => operation.modality === "INSTALLMENT" && operation.installments.length > 0).map((operation) => {
+            const firstUnpaid = operation.installments.find((item) => item.state !== "PAID");
+            return (
+              <div key={operation.id} className="table-scroll">
+                <p className="muted-cell"><strong>{`Operação #${operation.code}`}</strong>{` · ${operation.installments.length} parcelas`}</p>
+                <table className="data-table" aria-label={`Parcelas da operação #${operation.code}`}>
+                  <thead><tr><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Pago</th><th>Situação</th><th>Ação</th></tr></thead>
+                  <tbody>{operation.installments.map((item) => {
+                    const late = item.state !== "PAID" && item.state !== "CLOSED" && item.dueDate < portfolio.today;
+                    return (
+                      <tr key={item.number}>
+                        <td>{`${item.number}/${operation.installments.length}`}</td><td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.amountCents)}</td><td>{formatMoney(item.paidCents)}</td>
+                        <td>{late ? "Em atraso" : installmentLabel[item.state] ?? item.state}</td>
+                        <td>{firstUnpaid?.number === item.number && <button type="button" className="outline-button" onClick={() => openSkip(operation.id, item.number, operation.installments.length)}>Jogar para o final</button>}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+              </div>
+            );
+          })}
+          {skipTarget && skipOperation && (
+            <div className="schedule-preview" role="group" aria-label="Jogar parcela para o final">
+              <p><strong>{`Jogar a parcela ${skipTarget.number}/${skipOperation.installments.length} (operação #${skipOperation.code}) para o final`}</strong></p>
+              <div className="form-grid">
+                <label className="field"><span>Multa (R$)</span><input inputMode="decimal" placeholder="0,00" value={skipTarget.penalty} onChange={(event) => setSkipTarget({ ...skipTarget, penalty: event.target.value })} /></label>
+                <label className="field field-wide"><span>Motivo</span><input maxLength={300} value={skipTarget.reason} onChange={(event) => setSkipTarget({ ...skipTarget, reason: event.target.value })} /></label>
+              </div>
+              {skipPlan && !skipPlan.ok && <p className="form-feedback form-feedback-error">{skipPlan.error}</p>}
+              {skipPlan?.ok && skipPenaltyCents !== null && (
+                <p className="capital-note">{`A parcela ${skipTarget.number} sai de ${formatDate(skipPlan.movedFrom)} e vai para o final. As outras ${skipPlan.count - 1} em aberto mantêm as datas${skipPenaltyCents > 0 ? `; a multa de ${formatMoney(skipPenaltyCents)} fica na parcela do final` : ""}. Sem juros novos.`}</p>
+              )}
+              <div className="form-actions">
+                <button type="button" className="primary-button" disabled={!skipPlan?.ok || skipPenaltyCents === null || (skipPenaltyCents > 0 && skipTarget.reason.trim().length < 3)} onClick={applySkip}>Ver simulação</button>
+                <button type="button" className="outline-button" onClick={() => setSkipTarget(null)}>Cancelar</button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {chosen.length > 0 && (
         <section className="panel form-panel" aria-label="Novas condições">
@@ -108,7 +173,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             {needsReason && <label className="field field-wide"><span>{adjustmentKind === "NONE" ? "Motivo da multa" : adjustmentKind === "DISCOUNT" ? "Motivo do desconto" : "Motivo do acréscimo"}</span><input maxLength={300} placeholder="Ex.: parcela em atraso jogada para o final" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} /></label>}
             <label className="field"><span>{`Taxa de juros por ${periodWord} (%)`}</span><input inputMode="decimal" placeholder="5" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
             {modality === "INSTALLMENT" && <label className="field"><span>{frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Quantidade de parcelas (meses)"}</span><input inputMode="numeric" maxLength={3} value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
-            <DateField label={modality === "INSTALLMENT" ? "Primeiro vencimento" : "Vencimento"} name="simulationFirstDue" defaultValue={firstDueDate} onChange={setFirstDueDate} />
+            <DateField key={dateKey} label={modality === "INSTALLMENT" ? "Primeiro vencimento" : "Vencimento"} name="simulationFirstDue" defaultValue={firstDueDate} onChange={setFirstDueDate} />
           </div>
           <p className="capital-note">{"A multa é somada só à última parcela (a parcela em atraso que vai para o final). As demais parcelas ficam iguais."}</p>
           {reasonMissing && <p className="form-feedback form-feedback-warning">Informe o motivo para ver a simulação.</p>}
@@ -116,7 +181,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
       )}
 
       {result && (
-        <section className="panel form-panel" aria-label="Resultado da simulação">
+        <section className="panel form-panel" id="renegociacao-resultado" aria-label="Resultado da simulação">
           <div className="panel-header"><div><h2>3. Resultado da simulação</h2><p>Juros simples sobre o principal em aberto; os juros em aberto entram como valor fixo, sem juros sobre juros.</p></div></div>
           <dl className="payment-summary">
             <div><dt>Saldo atual (antes)</dt><dd>{formatMoney(position.balanceCents)}</dd></div>
@@ -128,6 +193,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <div><dt>{`Juros novos (${formatRate(rateBps as number)} por ${periodWord}${modality === "INSTALLMENT" ? ` × ${periods}` : ""})`}</dt><dd>{formatMoney(result.newInterestCents)}</dd></div>
             <div className="payment-balance"><dt>Total a receber (depois)</dt><dd>{formatMoney(result.totalCents)}</dd></div>
           </dl>
+          {applied && result.payments.length > 0 && <p className="capital-note" role="status">{`Parcela ${applied.number}/${applied.total} da #${applied.code} jogada para o final: vence em ${formatDate(result.payments[result.payments.length - 1].dueDate)} e passa a ${formatMoney(result.payments[result.payments.length - 1].amountCents)}. As outras parcelas ficam como estão. Nada foi gravado ainda: confirme abaixo.`}</p>}
           {result.warnings.map((warning) => <p key={warning} className="form-feedback form-feedback-warning">{warning}</p>)}
           <div className="schedule-preview" aria-label="Pagamentos simulados">
             <p><strong>{modality === "INSTALLMENT" ? "Parcelas simuladas" : "Pagamento simulado"}</strong>{modality === "SINGLE" ? ` · pagando só os juros (${formatMoney(result.periodInterestCents)}), o período renovaria, como nas operações de hoje` : ""}</p>
