@@ -5,6 +5,7 @@ import { accountFitsMethod, bankAccountFields, bankAccountLabel, maskAccountNumb
 import { investmentDivergences, investmentPosition, scheduleLines } from "../src/lib/investors/position.ts";
 import { buildObligations, checkCapitalEntry, entryEvidence, RENEWAL_ORIGIN_ERROR } from "../src/lib/investors/payables.ts";
 import { personTypeOf } from "../src/lib/investors/rules.ts";
+import { contractPaymentDates } from "../src/lib/investors/rules.ts";
 
 const form = (values) => (key, max) => String(values[key] ?? "").trim().slice(0, max);
 
@@ -181,4 +182,18 @@ test("EV8. cronograma montado a partir do contrato: início é o 1º pagamento, 
   assert.equal(contractScheduleItems({ ...base, yieldPaymentCents: null }), null);
   assert.equal(contractScheduleItems({ ...base, paymentFrequency: null }), null);
   assert.equal(contractScheduleItems({ ...base, installmentCount: null, termCount: null }), null);
+});
+
+test("EV10. datas do primeiro e do último pagamento do PDF sem cronograma gravado: vêm do contrato (início, periodicidade, dia combinado, vencimento)", () => {
+  const base = { startDate: "2026-07-15", maturityDate: "2027-06-25", dueDay: 25, paymentFrequency: "MONTHLY", installmentCount: null, termCount: null, termUnit: null };
+  // Sem quantidade nem prazo: do início (1º pagamento) até o vencimento do contrato, no dia combinado, como o cronograma automático.
+  const open = contractPaymentDates(base);
+  assert.equal(open.length, 12);
+  assert.deepEqual([open[0], open.at(-1)], ["2026-07-15", "2027-06-25"]);
+  // Com quantidade de parcelas, ela manda.
+  const counted = contractPaymentDates({ ...base, startDate: "2026-08-06", maturityDate: null, dueDay: 6, installmentCount: 12 });
+  assert.deepEqual([counted[0], counted.at(-1), counted.length], ["2026-08-06", "2027-07-06", 12]);
+  // Sem periodicidade ou sem de onde tirar a quantidade: nada é inventado.
+  assert.equal(contractPaymentDates({ ...base, paymentFrequency: null }), null);
+  assert.equal(contractPaymentDates({ ...base, maturityDate: null }), null);
 });

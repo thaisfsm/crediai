@@ -5,7 +5,7 @@ import type { TenantTransaction } from "@/lib/auth/guards";
 import { investmentContractors, investmentScheduleItems, type investments, type investors } from "@/lib/db/schema";
 import type { Address } from "./address";
 import { contractFingerprint, type ContractorData, type ContractSource } from "./contract";
-import { investorAddress, type InvestmentStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule } from "./rules";
+import { contractPaymentDates, investorAddress, type InvestmentStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule } from "./rules";
 
 type ContractorRow = typeof investmentContractors.$inferSelect;
 
@@ -35,7 +35,12 @@ export async function loadPaymentDates(tx: TenantTransaction, tenantId: string, 
 }
 
 export function contractSource(investment: typeof investments.$inferSelect, investor: typeof investors.$inferSelect, contractor: ContractorRow | null, paymentDates: string[] = []): ContractSource {
-  const dates = [...paymentDates].sort();
+  // Sem cronograma gravado, as datas vêm das regras do contrato (início, periodicidade, quantidade e dia combinado).
+  const fromRules = paymentDates.length === 0;
+  const dates = [...(!fromRules ? paymentDates : contractPaymentDates({
+    startDate: investment.startDate, maturityDate: investment.maturityDate, dueDay: investment.dueDay, paymentFrequency: investment.paymentFrequency,
+    installmentCount: investment.installmentCount, termCount: investment.termCount, termUnit: investment.termUnit,
+  }) ?? [])].sort();
   return {
     contractor: contractorData(contractor),
     investor: { name: investor.name, document: investor.document, address: investorAddress(investor) },
@@ -44,7 +49,7 @@ export function contractSource(investment: typeof investments.$inferSelect, inve
       startDate: investment.startDate, maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: investment.notes, status: investment.status as InvestmentStatus,
       paymentFrequency: investment.paymentFrequency as PaymentFrequency | null, yieldPaymentCents: investment.yieldPaymentCents,
       redemptionRule: investment.redemptionRule as RedemptionRule | null, redemptionDays: investment.redemptionDays,
-      firstPaymentDate: dates[0] ?? null, lastPaymentDate: dates[dates.length - 1] ?? null,
+      firstPaymentDate: dates[0] ?? null, lastPaymentDate: dates[dates.length - 1] ?? null, paymentDatesFromRules: fromRules && dates.length > 0,
     },
   };
 }
