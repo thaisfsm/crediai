@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, isIsoDate, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
@@ -620,6 +620,7 @@ function ContractSection({ data, hasSignedContract, onDone }: { data: Investment
 // /investidores/investimentos/[id]: dados do contrato, painel, cronograma, capital e pagamentos, renovação e documentos.
 export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
   const router = useRouter();
+  const manualSchedule = useSearchParams().get("cronograma") === "manual";
   const [editing, setEditing] = useState(false);
   const [replacing, setReplacing] = useState<string | null>(null);
   const { investment, investor } = data;
@@ -678,7 +679,8 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
 
       <PositionSection data={data} />
 
-      <ScheduleSection data={data} onDone={refresh} />
+      {/* O bloco de cronograma manual saiu da tela (o cronograma é montado pelos dados do contrato); só abre com ?cronograma=manual. */}
+      {manualSchedule && <ScheduleSection data={data} onDone={refresh} />}
 
       <CashSection data={data} onDone={refresh} />
 

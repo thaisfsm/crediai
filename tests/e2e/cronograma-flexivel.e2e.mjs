@@ -127,7 +127,7 @@ test("CF1. contrato com início no dia 10 e pagamento todo dia 25: aceito e grav
   const row = (await admin(`select start_date::text, maturity_date::text, due_day, amount_cents::int as amount_cents, agreed_rate_bps from investment where id = '${ids.contract}'`))[0];
   assert.deepEqual({ ...row }, { start_date: START, maturity_date: MATURITY, due_day: 25, amount_cents: 1_000_000, agreed_rate_bps: 500 });
   assert.equal(await count("investment_schedule_item", `investment_id = '${ids.contract}'`), 0, "cadastrar o contrato não cria cronograma por conta própria");
-  const { html } = await page(robério, `/investidores/investimentos/${ids.contract}`);
+  const { html } = await page(robério, `/investidores/investimentos/${ids.contract}?cronograma=manual`);
   assert.ok(html.includes("Dia do pagamento Dia 25"), "o dia combinado aparece no contrato");
   assert.ok(html.includes("Nenhum pagamento no cronograma ainda."));
   // Contrato antigo (cadastrado antes da regra da entrada), como o caso real que motivou a correção.
@@ -177,7 +177,7 @@ test("CF4. origem do dinheiro: entrada com data anterior ao ciclo recusada com m
   assert.doesNotMatch(entry.error, /não existe|não está disponível|não está mais no capital/);
   assert.equal(await available("ten_roberio"), capital, "nada lançado no capital");
   // O aporte de 60 dias atrás é do ciclo atual (está no capital): pode ser indicado. Antes desta correção era recusado.
-  const page1 = (await page(robério, `/investidores/investimentos/${ids.contract}`)).html;
+  const page1 = (await page(robério, `/investidores/investimentos/${ids.contract}?cronograma=manual`)).html;
   assert.ok(page1.includes("O sistema não comprova sozinho de onde veio o dinheiro"), "a tela explica que o vínculo depende da confirmação");
   const declared = await action(robério, "declarePriorContributionAction", { investmentId: ids.contract, movementId: ids.aporte, confirm: "1", requestId: requestId() });
   assert.equal(declared?.ok, true, JSON.stringify(declared));
