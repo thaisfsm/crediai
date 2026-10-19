@@ -331,6 +331,13 @@ export const loanOperations = pgTable("loan_operation", {
   renegotiatedAt: timestamp("renegotiated_at", { withTimezone: true }),
   renegotiatedPrincipalCents: bigint("renegotiated_principal_cents", { mode: "number" }),
   renegotiatedInterestCents: bigint("renegotiated_interest_cents", { mode: "number" }),
+  // Liquidação antecipada: pagamento final negociado (um registro em payment, que entra no capital como qualquer outro), o
+  // saldo que a operação tinha antes dela e o desconto (juros que não serão cobrados). Os pagamentos anteriores e os termos
+  // do contrato não mudam. Sem chave estrangeira para payment (referência circular no schema); a ação grava os dois juntos. Migração 0029.
+  settlementPaymentId: text("settlement_payment_id"),
+  settlementBalanceCents: bigint("settlement_balance_cents", { mode: "number" }),
+  settlementDiscountCents: bigint("settlement_discount_cents", { mode: "number" }),
+  settlementByUserId: text("settlement_by_user_id"),
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
@@ -351,6 +358,7 @@ export const loanOperations = pgTable("loan_operation", {
   unique("loan_operation_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "loan_operation_client_same_tenant_fk", columns: [table.tenantId, table.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
   foreignKey({ name: "loan_operation_renegotiated_into_fk", columns: [table.tenantId, table.renegotiatedIntoId], foreignColumns: [table.tenantId, table.id] }).onDelete("restrict"),
+  check("loan_operation_settlement_consistent", sql`(${table.settlementPaymentId} is null) = (${table.settlementBalanceCents} is null) and (${table.settlementPaymentId} is null) = (${table.settlementDiscountCents} is null) and (${table.settlementPaymentId} is null or (${table.status}::text = 'PAID' and ${table.settlementDiscountCents} >= 0 and ${table.settlementBalanceCents} > 0))`),
   check("loan_operation_renegotiated_not_self", sql`${table.renegotiatedIntoId} is null or ${table.renegotiatedIntoId} <> ${table.id}`),
   check("loan_operation_renegotiated_consistent", sql`(${table.status}::text = 'RENEGOTIATED') = (${table.renegotiatedIntoId} is not null and ${table.renegotiatedOn} is not null and ${table.renegotiatedAt} is not null and ${table.renegotiatedPrincipalCents} >= 0 and ${table.renegotiatedInterestCents} >= 0)`),
   check("loan_operation_principal_positive", sql`${table.principalCents} > 0`),

@@ -56,7 +56,7 @@ export function installmentDueDate(firstDueDate: string, number: number, frequen
   return dueDates(frequency, firstDueDate, number)[number - 1];
 }
 
-export type InstallmentState = "PAID" | "PARTIAL" | "OPEN";
+export type InstallmentState = "PAID" | "PARTIAL" | "OPEN" | "CLOSED";
 // RENOVAÇÃO — REGRA OFICIAL (modalidade pagamento único). Exemplo: R$ 1.000 a 30% ao mês, juros R$ 300, quitação R$ 1.300.
 //  • Pagar R$ 1.300 quita: R$ 300 são juros (lucro) e R$ 1.000 voltam como principal.
 //  • Pagar só os R$ 300 de juros NÃO é pagamento de principal: é "Juros / Renovação". Juros recebidos +300, principal em
@@ -226,6 +226,9 @@ export type LedgerTerms = {
   firstDueDate: string;
   installmentCount: number | null; installmentCents: number | null;
   renewals: LedgerRenewal[];
+  // Liquidação antecipada: o pagamento final negociado. Ele quita o principal em aberto primeiro; o que sobrar é juros e os
+  // juros/parcelas que faltavam são perdoados (não são lucro nem dívida). Os demais pagamentos seguem a regra normal.
+  settlementPaymentId?: string | null;
 };
 export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string };
 export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null };
@@ -266,7 +269,32 @@ const byDate = <T extends LedgerPayment>(a: T, b: T) => a.paidAt.localeCompare(b
 // asOf = hoje (fuso de Brasília). Os pagamentos podem vir em qualquer ordem; são aplicados por data e registro.
 export function operationLedger<T extends LedgerPayment>(terms: LedgerTerms, payments: T[], asOf: string) {
   const ordered = [...payments].sort(byDate);
-  return isAmortized(terms) ? amortizedLedger(terms, ordered, asOf) : recurringLedger(terms, ordered, asOf);
+  const base = (list: T[], date: string) => (isAmortized(terms) ? amortizedLedger(terms, list, date) : recurringLedger(terms, list, date));
+  const settlement = terms.settlementPaymentId ? ordered.find((payment) => payment.id === terms.settlementPaymentId) : undefined;
+  if (!settlement) return base(ordered, asOf);
+  return settledLedger(base, settlement, ordered.filter((payment) => payment !== settlement));
+}
+
+// Liquidação antecipada: o extrato dos pagamentos anteriores é calculado pela regra normal até a data da liquidação. O
+// pagamento negociado vai primeiro para o principal em aberto e o resto é juros; o que o contrato ainda cobraria além disso
+// é perdoado (forgivenCents). Saldo, juros e parcelas em aberto zeram; nada dos pagamentos anteriores é reescrito.
+function settledLedger<T extends LedgerPayment>(base: (list: T[], date: string) => ReturnType<typeof amortizedLedger<T>> | ReturnType<typeof recurringLedger<T>>, settlement: T, others: T[]) {
+  const prior = base(others, settlement.paidAt);
+  const principalPart = Math.min(settlement.amountCents, prior.principalRemainingCents);
+  const interestPart = settlement.amountCents - principalPart;
+  const item: LedgerItem<T> = { ...settlement, interestCents: interestPart, principalCents: principalPart, kind: "SETTLEMENT", balanceBeforeCents: prior.balanceCents, renewedPeriod: null };
+  const interestPaidCents = prior.interestPaidCents + interestPart, principalPaidCents = prior.principalPaidCents + principalPart;
+  return {
+    ...prior,
+    items: [...prior.items, item],
+    paidCents: prior.paidCents + settlement.amountCents, interestPaidCents, principalPaidCents,
+    interestRemainingCents: 0, principalRemainingCents: Math.max(prior.principalRemainingCents - principalPart, 0), balanceCents: 0,
+    amountDueCents: 0, nextItem: null,
+    // Parcelas que faltavam ficam encerradas na liquidação: sem valor em aberto e sem data de cobrança.
+    schedule: prior.schedule.map((entry) => (entry.state === "PAID" ? entry : { ...entry, state: "CLOSED" as const, remainingCents: 0 })),
+    forgivenCents: Math.max(prior.balanceCents - settlement.amountCents, 0),
+    state: "PAID" as LedgerState, daysUntilDue: 0,
+  };
 }
 export type OperationLedger<T extends LedgerPayment = LedgerPayment> = ReturnType<typeof operationLedger<T>>;
 
@@ -312,7 +340,7 @@ function amortizedLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     interestRemainingCents: Math.max(terms.interestCents - interestPaidCents, 0),
     principalRemainingCents: Math.max(terms.principalCents - principalPaidCents, 0),
     balanceCents, schedule, nextItem, nextDueDate: nextDue,
-    periods: [] as LedgerPeriod[], periodNumber: 1, periodInterestCents: terms.interestCents, renewalCount: 0,
+    periods: [] as LedgerPeriod[], periodNumber: 1, periodInterestCents: terms.interestCents, renewalCount: 0, forgivenCents: 0,
     // Próximo valor a cobrar: o que falta da próxima parcela.
     amountDueCents: nextItem?.remainingCents ?? 0,
     ...stateFor(balanceCents, nextItem?.dueDate ?? null, asOf),
@@ -381,7 +409,7 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     interestCents, totalCents: terms.principalCents + interestCents,
     interestRemainingCents, principalRemainingCents: principalOpen, balanceCents,
     schedule: [] as ScheduleItem[], nextItem: null as ScheduleItem | null, nextDueDate: period.dueDate,
-    periods, periodNumber: period.number, periodInterestCents: period.interestCents, renewalCount: periods.length - 1,
+    periods, periodNumber: period.number, periodInterestCents: period.interestCents, renewalCount: periods.length - 1, forgivenCents: 0,
     // Próximo valor a cobrar: os juros que faltam do período (ou o saldo, se só restar principal).
     amountDueCents: interestRemainingCents > 0 ? interestRemainingCents : balanceCents,
     ...stateFor(balanceCents, period.dueDate, asOf),

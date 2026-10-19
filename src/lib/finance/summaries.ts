@@ -34,6 +34,7 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
     renegotiatedPrincipalCents: operation.renegotiatedPrincipalCents, renegotiatedInterestCents: operation.renegotiatedInterestCents,
     status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(), updatedAt: operation.updatedAt.toISOString(),
     renewals,
+    settlementPaymentId: operation.settlementPaymentId, settlementBalanceCents: operation.settlementBalanceCents, settlementDiscountCents: operation.settlementDiscountCents,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate,
     frequency: operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY",

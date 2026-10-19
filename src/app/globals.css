@@ -694,6 +694,7 @@ button { color:inherit; }
 .form-grid-inline { grid-template-columns:minmax(0,280px) auto; justify-content:start; }
 .field { display:grid; gap:6px; color:#a9bcc9; font-size:10px; font-weight:600; }
 .field-wide { grid-column:span 2; }
+.field-full { grid-column:1 / -1; }
 .field input,.field select { width:100%; min-height:38px; padding:0 11px; border:1px solid rgba(112,145,170,.22); border-radius:8px; color:#eef6fb; background-color:#07111f; font:inherit; font-size:12px; font-weight:500; outline:none; color-scheme:dark; }
 .field input::placeholder { color:#6d8394; }
 .field input:focus,.field select:focus { border-color:rgba(65,190,226,.68); box-shadow:0 0 0 3px rgba(65,190,226,.11); }
