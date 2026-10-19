@@ -439,6 +439,23 @@ export function defaultModelPlan(investment: {
 // demais seguem a periodicidade no dia combinado, o rendimento de cada pagamento é o do contrato e a devolução do
 // principal vai para a data de resgate (a última linha, ou uma linha própria se a liquidez for D+N). Sem periodicidade,
 // quantidade de pagamentos ou rendimento de cada pagamento o contrato não diz o bastante: devolve null (nada é inventado).
+// Datas de pagamento que o contrato define (primeiro ao último), sem precisar do rendimento: usadas no PDF quando o
+// investimento ainda não tem cronograma gravado. Sem periodicidade, início válido ou quantidade de pagamentos, devolve null.
+export function contractPaymentDates(values: {
+  startDate: string; maturityDate: string | null; dueDay: number | null; paymentFrequency: string | null; installmentCount: number | null;
+  termCount: number | null; termUnit: string | null;
+}): string[] | null {
+  const frequency = values.paymentFrequency as PaymentFrequency | null;
+  if (!frequency || !(frequency === "AT_MATURITY" || FREQUENCY_MONTHS[frequency]) || !isIsoDate(values.startDate)) return null;
+  if (frequency === "AT_MATURITY") return values.maturityDate && isIsoDate(values.maturityDate) ? [values.maturityDate] : null;
+  const count = values.installmentCount ?? (values.termCount && values.termUnit ? installmentsFor(values.termCount, values.termUnit as TermUnit, frequency) : null);
+  if (count && count >= 1 && count <= MAX_SCHEDULE_ITEMS) return scheduleDates(values.startDate, count, frequency, values.dueDay);
+  // Sem quantidade nem prazo: os pagamentos vão da data de início até o vencimento do contrato, na periodicidade combinada.
+  if (!values.maturityDate || !isIsoDate(values.maturityDate)) return null;
+  const upTo = scheduleDates(values.startDate, MAX_SCHEDULE_ITEMS, frequency, values.dueDay).filter((date) => date <= values.maturityDate!);
+  return upTo.length > 0 ? upTo : null;
+}
+
 export function contractScheduleItems(values: {
   startDate: string; maturityDate: string | null; dueDay: number | null; paymentFrequency: string | null; installmentCount: number | null;
   termCount: number | null; termUnit: string | null; yieldPaymentCents: number | null; amountCents: number; redemptionRule: string | null; redemptionDays: number | null;

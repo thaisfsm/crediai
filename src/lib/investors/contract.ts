@@ -63,6 +63,8 @@ export type ContractSource = {
     paymentFrequency: PaymentFrequency | null; yieldPaymentCents: number | null; redemptionRule: RedemptionRule | null; redemptionDays: number | null;
     // Primeira e última data do cronograma de pagamentos (quando há cronograma).
     firstPaymentDate?: string | null; lastPaymentDate?: string | null;
+    // Datas calculadas pelas regras do contrato (não há cronograma gravado): o vencimento cadastrado continua valendo.
+    paymentDatesFromRules?: boolean;
   };
 };
 
@@ -101,6 +103,7 @@ export function contractFingerprint(source: ContractSource, includeNotes: boolea
       maturityDate: investment.maturityDate, dueDay: investment.dueDay, notes: includeNotes ? investment.notes : null,
       paymentFrequency: investment.paymentFrequency, yieldPaymentCents: investment.yieldPaymentCents, redemptionRule: investment.redemptionRule, redemptionDays: investment.redemptionDays,
       firstPaymentDate: investment.firstPaymentDate ?? null, lastPaymentDate: investment.lastPaymentDate ?? null,
+      ...(investment.paymentDatesFromRules ? { paymentDatesFromRules: true } : {}),
     },
     includeNotes,
   });
@@ -229,7 +232,7 @@ export function buildContract(source: ContractSource, includeNotes: boolean, met
   if (investment.firstPaymentDate) paragraph({ text: `${sub()}Data do primeiro pagamento: ` }, { text: formatDate(investment.firstPaymentDate), bold: true }, { text: "." });
   if (investment.lastPaymentDate) paragraph({ text: `${sub()}Data do último pagamento: ` }, { text: formatDate(investment.lastPaymentDate), bold: true }, { text: "." });
   // O contrato termina no último pagamento do cronograma; sem cronograma vale o vencimento cadastrado.
-  const contractEnd = investment.lastPaymentDate ?? investment.maturityDate;
+  const contractEnd = investment.paymentDatesFromRules ? (investment.maturityDate ?? investment.lastPaymentDate) : (investment.lastPaymentDate ?? investment.maturityDate);
   if (contractEnd) paragraph({ text: `${sub()}Vencimento do contrato: ` }, { text: formatDate(contractEnd), bold: true }, { text: "." });
   if (investment.dueDay) paragraph({ text: `${sub()}Dia de vencimento combinado: ` }, { text: `dia ${investment.dueDay}`, bold: true }, { text: "." });
 
