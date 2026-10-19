@@ -151,11 +151,11 @@ test("RN3. depois da renovação: rendimento pendente do anterior ainda é pago;
   assert.equal((await pay(robério, { scheduleItemId: principal, kind: "PRINCIPAL", amount: "5.000,00", paidOn: TODAY }))?.ok, true, "devolução antecipada no contrato novo");
   assert.equal((await pay(robério, { scheduleItemId: principal, kind: "PRINCIPAL", amount: "0,01", paidOn: TODAY }))?.ok, false, "não passa do saldo");
   // Painéis: o anterior mostra o principal que passou para a renovação; o novo mostra a origem.
-  const old = await page(robério, `/investidores/investimentos/${ids.a}`);
+  const old = await page(robério, `/investidores/investimentos/${ids.a}?cronograma=manual`);
   for (const expected of ["Este contrato foi renovado", "Principal restante R$ 0,00", "R$ 10.000,00 passaram para a renovação", "Principal renovado"]) assert.ok(old.html.includes(expected), `anterior sem "${expected}"`);
   assert.ok(!old.html.includes("Renovar contrato"));
   assert.ok((await page(thais, `/investidores/investimentos/${ids.a2}`)).html.includes("Este contrato é a renovação de"), "o MASTER vê a renovação");
-  const fresh = await page(robério, `/investidores/investimentos/${ids.a2}`);
+  const fresh = await page(robério, `/investidores/investimentos/${ids.a2}?cronograma=manual`);
   for (const expected of ["Este contrato é a renovação de", "Veio da renovação", "Principal restante R$ 5.000,00", "Principal devolvido R$ 5.000,00", "Prazo 6 meses"]) assert.ok(fresh.html.includes(expected), `novo sem "${expected}"`);
   // Contas a Pagar: o principal que passou para a renovação não é mais dívida do contrato anterior.
   const payables = await page(robério, "/contas-a-pagar?q=rui&tipo=principal&situacao=vencida");

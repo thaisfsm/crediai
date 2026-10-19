@@ -252,7 +252,7 @@ test("IC5. incluir, editar e retirar um pagamento; cada alteração no históric
   const descriptions = (await admin(`select description from investment_revision where investment_id = '${ids.investment}' and kind = 'SCHEDULE' order by created_at`)).map((row) => row.description);
   assert.deepEqual(descriptions.slice(-3), ["Pagamento incluído no cronograma", "Pagamento do cronograma alterado", "Pagamento retirado do cronograma"]);
   assert.equal(await one(`select count(*)::int from admin_audit_log where entity_id = '${ids.investment}' and action = 'INVESTMENT_SCHEDULE_UPDATED' and tenant_id = 'ten_roberio'`), 5);
-  const detail = await page(robério, `/investidores/investimentos/${ids.investment}`);
+  const detail = await page(robério, `/investidores/investimentos/${ids.investment}?cronograma=manual`);
   assert.match(detail.html, /Rendimentos informados R\$ 9\.000,00/);
   assert.match(detail.html, /Devolução de principal informada R\$ 50\.000,00/);
   assert.match(detail.html, /Principal sem data de devolução R\$ 0,00/);
@@ -302,10 +302,14 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
     const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
     await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
     const browserPage = await context.newPage();
+    // O bloco "Cronograma de pagamentos" saiu da tela (a pedido da Thaís em 19/10/2026); só abre com ?cronograma=manual.
+    await browserPage.goto(`${BASE}/investidores/investimentos/${(await action(robério, "createInvestmentAction", { investorId: ids.investor, amount: "10.000,00", rate: "5", ratePeriod: "MONTHLY", startDate: "2026-11-01", termCount: "12", termUnit: "MONTHS", paymentFrequency: "MONTHLY", dueDay: "1", contractNumber: `OCULTO-${label}` })).id}`);
+    await browserPage.getByRole("region", { name: "Posição do contrato" }).getByText("Principal restante").waitFor();
+    assert.equal(await browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" }).count(), 0, "bloco de cronograma não aparece");
 
     // Sem dia do pagamento combinado e sem primeira data digitada, o modelo não presume a primeira data.
     const noDay = await create(`SEM-DIA-${label}`, {});
-    await browserPage.goto(`${BASE}/investidores/investimentos/${noDay}`);
+    await browserPage.goto(`${BASE}/investidores/investimentos/${noDay}?cronograma=manual`);
     let schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
     await schedule.getByRole("button", { name: "Montar cronograma" }).click();
     await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
@@ -314,7 +318,7 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
 
     // Início no dia 10 e pagamentos todo dia 25 até o vencimento final: sugestão no dia 25, editável, nada gravado.
     const day25 = await create(`DIA-25-${label}`, { dueDay: "25", termCount: "", termUnit: "", maturityDate: "2027-04-25", startDate: "2026-11-10" });
-    await browserPage.goto(`${BASE}/investidores/investimentos/${day25}`);
+    await browserPage.goto(`${BASE}/investidores/investimentos/${day25}?cronograma=manual`);
     schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
     await schedule.getByRole("button", { name: "Montar cronograma" }).click();
     assert.equal(await schedule.getByLabel("Dia do pagamento (opcional)").inputValue(), "25");
@@ -332,7 +336,7 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
     assert.equal(await one(`select count(*)::int from investment_schedule_item where investment_id = '${day25}'`), 0, "a sugestão não grava sozinha");
 
     // Modelo padrão: rendimento mensal digitado, principal integral na última data; revisão antes de gravar.
-    await browserPage.goto(`${BASE}/investidores/investimentos/${standard}`);
+    await browserPage.goto(`${BASE}/investidores/investimentos/${standard}?cronograma=manual`);
     schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
     await schedule.getByRole("button", { name: "Montar cronograma" }).click();
     await schedule.getByRole("button", { name: "Usar modelo padrão" }).click();
@@ -356,7 +360,7 @@ test("IC8. tela: modelo padrão e negociação personalizada (50% do principal n
 
     // Negociação personalizada: rendimentos mensais em obrigações próprias, 50% do principal no 6º mês e 50% no 12º, e
     // um rendimento com data irregular. Tudo pela tela.
-    await browserPage.goto(`${BASE}/investidores/investimentos/${custom}`);
+    await browserPage.goto(`${BASE}/investidores/investimentos/${custom}?cronograma=manual`);
     schedule = browserPage.getByRole("region", { name: "Cronograma de pagamentos ao investidor" });
     await schedule.getByRole("button", { name: "Montar cronograma" }).click();
     await schedule.getByLabel("Data do primeiro pagamento").fill("01/12/2026");
