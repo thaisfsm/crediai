@@ -1117,20 +1117,20 @@ function EarlySettlementForm({ operation, today, onClose, onChanged }: { operati
     <form className="form-grid" onSubmit={onSubmit} aria-label="Liquidação antecipada">
       <input type="hidden" name="operationId" value={operation.id} />
       <input type="hidden" name="confirm" value={confirmed ? "yes" : "no"} />
-      <p className="capital-note field-wide">Informe o valor total negociado para encerrar esta operação hoje. As obrigações futuras deixam de ser cobradas; os pagamentos já feitos continuam como estão.</p>
-      <dl className="payment-summary field-wide">
+      <p className="capital-note field-full">Informe o valor total negociado para encerrar esta operação hoje. As obrigações futuras deixam de ser cobradas; os pagamentos já feitos continuam como estão.</p>
+      <div className="field-full"><dl className="payment-summary">
         <div><dt>Saldo do contrato hoje</dt><dd>{formatMoney(operation.balanceCents)}</dd></div>
         <div><dt>Principal que ainda não voltou</dt><dd>{formatMoney(operation.principalRemainingCents)}</dd></div>
         <div><dt>Já recebido</dt><dd>{formatMoney(operation.paidCents)}</dd></div>
         <div><dt>Obrigações em aberto</dt><dd>{openInstallments.length > 0 ? plural(openInstallments.length, "parcela", "parcelas") : "Período atual"}</dd></div>
-      </dl>
+      </dl></div>
       <DateField label="Data da liquidação" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
       <label className="field"><span>Valor total negociado (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
-      <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
-      {tooLow && <p className="form-feedback form-feedback-warning field-wide">O valor negociado precisa cobrir ao menos o principal que ainda não voltou ({formatMoney(operation.principalRemainingCents)}).</p>}
-      {tooHigh && <p className="form-feedback form-feedback-warning field-wide">O valor negociado não pode ser maior que o saldo do contrato ({formatMoney(operation.balanceCents)}).</p>}
+      <label className="field field-full"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
+      {tooLow && <p className="form-feedback form-feedback-warning field-full">O valor negociado precisa cobrir ao menos o principal que ainda não voltou ({formatMoney(operation.principalRemainingCents)}).</p>}
+      {tooHigh && <p className="form-feedback form-feedback-warning field-full">O valor negociado não pode ser maior que o saldo do contrato ({formatMoney(operation.balanceCents)}).</p>}
       {after && closing && (
-        <div className="operation-preview field-wide" aria-live="polite">
+        <div className="operation-preview field-full" aria-live="polite">
           <div><span>Valor recebido (entra no capital)</span><strong>{formatMoney(closing.amountCents)}</strong></div>
           <div><span>Para principal</span><strong>{formatMoney(closing.principalCents)}</strong></div>
           <div><span>Para juros (lucro realizado)</span><strong>{formatMoney(closing.interestCents)}</strong></div>
@@ -1138,7 +1138,7 @@ function EarlySettlementForm({ operation, today, onClose, onChanged }: { operati
           <div><span>Saldo após</span><strong>{formatMoney(0)}</strong></div>
         </div>
       )}
-      <label className="field-check field-wide"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>Confirmo a liquidação antecipada desta operação pelo valor informado. Isso não pode ser desfeito.</span></label>
+      <label className="field-check field-full"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>Confirmo a liquidação antecipada desta operação pelo valor informado. Isso não pode ser desfeito.</span></label>
       <div className="form-actions">
         <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
         <button className="primary-button" disabled={pending || !valid || !confirmed}><Icon name="check" size={16} /> {pending ? "Liquidando…" : "Liquidar operação"}</button>
