@@ -751,6 +751,7 @@ function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => v
     declare.onSubmit(event);
   };
   const canDeclare = canRegister && cash.legacy;
+  const beforeCycle = Boolean(cash.cycleStartedOn && cash.entryDate < cash.cycleStartedOn);
   const hasOpen = cash.obligations.some((obligation) => obligation.balanceCents > 0);
   return (
     <section className="panel form-panel" aria-label="Capital e pagamentos do investimento">
@@ -802,6 +803,13 @@ function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => v
           <input type="hidden" name="enteredOn" value={cash.entryDate} />
           <input type="hidden" name="requestId" defaultValue="" />
           <p><strong>Entrada de {formatMoney(investment.amountCents)} em {formatDate(cash.entryDate)}</strong> ({investment.investedOn ? "data do investimento" : "data de início do contrato"}). Vai aparecer no Financeiro como &ldquo;Entrada de investidor&rdquo; e somar ao capital disponível. Só pode ser registrada uma vez e não se desfaz por aqui.</p>
+          {beforeCycle && (
+            <div className="capital-note" role="alert">
+              <p><strong>Este investimento tem data anterior ao início do ciclo atual da carteira.</strong> O valor pode já estar contabilizado no capital inicial ou em um aporte anterior.</p>
+              <p>Valor: {formatMoney(investment.amountCents)} · Data do investimento: {formatDate(cash.entryDate)} · Início do ciclo: {formatDate(cash.cycleStartedOn as string)}</p>
+              <label className="check-field"><input type="checkbox" name="confirmBeforeCycle" value="1" required /><span>Confirmo que o dinheiro realmente entrou na carteira e ainda não foi contabilizado.</span></label>
+            </div>
+          )}
           <label className="check-field"><input type="checkbox" name="confirm" value="1" required /><span>Confirmo que {formatMoney(investment.amountCents)} entraram na carteira em {formatDate(cash.entryDate)}.</span></label>
           <div className="form-actions">
             <button type="button" className="outline-button" onClick={() => setConfirming(false)}>Cancelar</button>

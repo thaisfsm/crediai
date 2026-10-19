@@ -10,10 +10,10 @@ import { checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
 import {
-  INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, checkPriorContribution, contractLabel, entryDateOf, entryEvidence, maskReference,
+  INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, checkPriorContribution, contractLabel, entryDateOf, entryDuplicateConflict, entryEvidence, isBeforeCycle, maskReference,
   parsePaymentFields, paymentCategory,
 } from "@/lib/investors/payables";
-import { loadEntryEvidence } from "@/lib/investors/payables-queries";
+import { loadEntryEvidence, priorContributionCandidates } from "@/lib/investors/payables-queries";
 import type { ActionResult } from "../actions";
 
 // Contas a Pagar. Tudo roda em withTenantContext: o tenant vem só da sessão e cada consulta filtra tenant_id além do RLS
@@ -71,9 +71,15 @@ export async function registerInvestmentEntryAction(data: FormData): Promise<Act
       const [declared] = await tx.select({ id: investmentPriorContributions.id }).from(investmentPriorContributions)
         .where(and(eq(investmentPriorContributions.tenantId, tenantId), eq(investmentPriorContributions.investmentId, investment.id)));
       const enteredOn = entryDateOf(investment);
+      const startedOn = cycleStartedOn(wallet);
+      const beforeCycle = isBeforeCycle(enteredOn, startedOn);
+      const duplicateConflict = beforeCycle && wallet
+        ? entryDuplicateConflict({ amountCents: investment.amountCents, initialCapitalCents: wallet.initialCapitalCents, contributions: await priorContributionCandidates(tx, tenantId, wallet.cycleNumber) })
+        : null;
       const check = checkCapitalEntry({
         enteredOn, today: todayIso(), cycleStartedOn: cycleStartedOn(wallet), investmentStatus: investment.status, hasWallet: Boolean(wallet), alreadyRegistered: Boolean(existing),
         priorContributionDeclared: Boolean(declared), isRenewal: investment.renewedFromInvestmentId !== null,
+        confirmedBeforeCycle: field(data, "confirmBeforeCycle", 4) === "1", duplicateConflict,
       });
       if (!check.ok) return check;
       if (shownAmount !== investment.amountCents || shownDate !== enteredOn) {
@@ -91,8 +97,8 @@ export async function registerInvestmentEntryAction(data: FormData): Promise<Act
       });
       await recordAdminAudit(tx, session, {
         action: "INVESTMENT_CAPITAL_ENTRY_REGISTERED", entity: "capital_movement", entityId: movementId, tenantId, tenantName: await tenantName(tx, tenantId),
-        description: `Entrada do investimento de ${row.investorName} registrada no capital`,
-        after: { category: INVESTOR_CATEGORIES.INVESTOR_CONTRIBUTION, amountCents: investment.amountCents, occurredAt: enteredOn, investmentId: investment.id, investorId: investment.investorId, contract: label, capitalMovementId: movementId, entryId, cycleNumber: wallet!.cycleNumber },
+        description: `Entrada do investimento de ${row.investorName} registrada no capital${beforeCycle ? ` com confirmação do usuário (data anterior ao início do ciclo, ${formatDate(startedOn as string)})` : ""}`,
+        after: { category: INVESTOR_CATEGORIES.INVESTOR_CONTRIBUTION, amountCents: investment.amountCents, occurredAt: enteredOn, investmentId: investment.id, investorId: investment.investorId, contract: label, capitalMovementId: movementId, entryId, cycleNumber: wallet!.cycleNumber, ...(beforeCycle ? { confirmedBeforeCycle: true, cycleStartedOn: startedOn } : {}) },
       });
       return { ok: true, message: `Entrada de ${formatMoney(investment.amountCents)} em ${formatDate(enteredOn)} registrada no capital.` };
     });

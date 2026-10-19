@@ -252,8 +252,20 @@ export function checkPayment(payment: Pick<PaymentFields, "amountCents" | "paidO
 // Data da entrada: a data em que o dinheiro foi investido; sem ela, a data de início do contrato.
 export const entryDateOf = (investment: { investedOn: string | null; startDate: string }) => investment.investedOn ?? investment.startDate;
 
-export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered, priorContributionDeclared = false, isRenewal = false }: {
+// Entrada com data anterior ao ciclo: o sistema não consegue provar que o dinheiro ainda não está no capital, então pede
+// a confirmação explícita do usuário. Duplicidade identificada (mesmo valor já no capital inicial ou num aporte comum do
+// ciclo atual) nunca passa por confirmação.
+export const isBeforeCycle = (enteredOn: string, cycleStartedOn: string | null) => Boolean(cycleStartedOn && enteredOn < cycleStartedOn);
+export function entryDuplicateConflict({ amountCents, initialCapitalCents, contributions }: { amountCents: number; initialCapitalCents: number; contributions: { amountCents: number; occurredAt: string }[] }): string | null {
+  if (initialCapitalCents === amountCents) return `O capital inicial da carteira (${formatMoney(initialCapitalCents)}) tem o mesmo valor deste investimento (${formatMoney(amountCents)}). O dinheiro pode já estar contabilizado ali.`;
+  const same = contributions.find((contribution) => contribution.amountCents === amountCents);
+  return same ? `Já existe um aporte de ${formatMoney(same.amountCents)} em ${formatDate(same.occurredAt)} no ciclo atual, com o mesmo valor deste investimento. O dinheiro pode já estar contabilizado nele.` : null;
+}
+export const BEFORE_CYCLE_CONFLICT = "A entrada não foi registrada. Se esse aporte ou capital inicial é o dinheiro deste contrato, indique-o na página do contrato (contratos antigos) ou confira a data do investimento. Nada foi lançado.";
+
+export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investmentStatus, hasWallet, alreadyRegistered, priorContributionDeclared = false, isRenewal = false, confirmedBeforeCycle = false, duplicateConflict = null }: {
   enteredOn: string; today: string; cycleStartedOn: string | null; investmentStatus: string; hasWallet: boolean; alreadyRegistered: boolean; priorContributionDeclared?: boolean; isRenewal?: boolean;
+  confirmedBeforeCycle?: boolean; duplicateConflict?: string | null;
 }): { ok: true } | { ok: false; error: string } {
   if (isRenewal) return { ok: false, error: "Este contrato é uma renovação: o dinheiro já está no capital pelo contrato anterior. Nenhuma nova entrada é lançada." };
   if (alreadyRegistered) return { ok: false, error: "A entrada deste investimento já foi registrada no capital. Nada foi lançado em dobro." };
@@ -261,10 +273,13 @@ export function checkCapitalEntry({ enteredOn, today, cycleStartedOn, investment
   if (investmentStatus === "CANCELED") return { ok: false, error: "Este contrato está cancelado: a entrada não pode ser registrada." };
   if (!hasWallet) return { ok: false, error: "Defina o capital inicial da carteira (tela Capital) antes de registrar a entrada." };
   if (enteredOn > today) return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) ainda não chegou. Registre a entrada a partir dessa data.` };
-  // Proteção contra capital em dobro: um investimento recebido antes do início do ciclo atual da carteira já pode estar
-  // no capital inicial ou num aporte comum. A entrada nova não é lançada; o sistema não afirma que o dinheiro não existe.
-  if (cycleStartedOn && enteredOn < cycleStartedOn) {
-    return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}). Esse dinheiro pode já estar no capital inicial ou num aporte comum, e lançar uma nova entrada poderia contá-lo em dobro. Nada foi registrado. Se o dinheiro entrou por um aporte, indique esse aporte na página do contrato; se ainda não entrou, confira a data do investimento no contrato.` };
+  // Proteção contra capital em dobro. Duplicidade identificada bloqueia sempre. Data anterior ao ciclo sem duplicidade
+  // identificada só passa com a confirmação explícita (confirmedBeforeCycle), conferida aqui no servidor.
+  if (isBeforeCycle(enteredOn, cycleStartedOn)) {
+    if (duplicateConflict) return { ok: false, error: `${duplicateConflict} ${BEFORE_CYCLE_CONFLICT}` };
+    if (!confirmedBeforeCycle) {
+      return { ok: false, error: `A data do investimento (${formatDate(enteredOn)}) é anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn as string)}). Esse dinheiro pode já estar no capital inicial ou num aporte comum. Confirme que ele realmente entrou na carteira e ainda não foi contabilizado. Nada foi registrado.` };
+    }
   }
   return { ok: true };
 }

@@ -172,8 +172,8 @@ test("CF4. origem do dinheiro: entrada com data anterior ao ciclo recusada com m
   // Entrada nova com a data do investimento (antes da criação da carteira): recusada, sem dizer que o dinheiro não existe.
   const entry = await action(robério, "registerInvestmentEntryAction", { investmentId: ids.contract, amountCents: "1000000", enteredOn: START, confirm: "1", requestId: requestId() });
   assert.equal(entry?.ok, false);
-  assert.match(entry.error, /pode já estar no capital inicial ou num aporte comum/);
-  assert.match(entry.error, /indique esse aporte/);
+  assert.match(entry.error, /já existe um aporte de R\$\s?10\.000,00|Já existe um aporte de R\$\s?10\.000,00/);
+  assert.match(entry.error, /Nada foi (registrado|lançado)/);
   assert.doesNotMatch(entry.error, /não existe|não está disponível|não está mais no capital/);
   assert.equal(await available("ten_roberio"), capital, "nada lançado no capital");
   // O aporte de 60 dias atrás é do ciclo atual (está no capital): pode ser indicado. Antes desta correção era recusado.
