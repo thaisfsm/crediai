@@ -221,6 +221,41 @@ test("CE8. tela: busca, abrir a ficha com empresa e banco, CPF inválido avisado
   }
 });
 
+test("CE8b. cadastro novo já traz os documentos: cliente e arquivos gravados, ficha mostra os anexos, só na própria carteira", async () => {
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const page = await context.newPage();
+  await page.goto(`${BASE}/?tela=clientes`);
+  const form = page.getByRole("region", { name: "Novo cliente" });
+  await form.getByLabel("Nome completo").fill("Docs Cadastro Teste");
+  const pdf = (text) => Buffer.from(`%PDF-1.4\n% ${text}\n%%EOF\n`);
+  await form.locator('input[name="docLabel"]').nth(0).fill("RG");
+  await form.locator('input[name="docFile"]').nth(0).setInputFiles({ name: "rg.pdf", mimeType: "application/pdf", buffer: pdf("rg") });
+  await form.getByRole("button", { name: /Adicionar outro documento/ }).click();
+  await form.locator('input[name="docLabel"]').nth(1).fill("Comprovante de residência");
+  await form.locator('input[name="docFile"]').nth(1).setInputFiles({ name: "comprovante.pdf", mimeType: "application/pdf", buffer: pdf("comprovante") });
+  await form.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await page.getByText(/Docs Cadastro Teste cadastrado\. 2 documentos anexados\./).waitFor({ timeout: 20_000 });
+  const client = await clientOf("ten_roberio", "Docs Cadastro Teste");
+  assert.ok(client, "cliente gravado");
+  const docs = await admin(`select label, file_name, content_type, tenant_id from client_document where client_id = '${client.id}' order by label`);
+  assert.deepEqual(docs.map((doc) => [doc.label, doc.file_name, doc.content_type, doc.tenant_id]), [
+    ["Comprovante de residência", "comprovante.pdf", "application/pdf", "ten_roberio"], ["RG", "rg.pdf", "application/pdf", "ten_roberio"]]);
+  // Sem arquivo: cadastro continua funcionando; rótulo sem nome do documento é recusado antes de gravar.
+  await form.getByLabel("Nome completo").fill("Docs Sem Rotulo");
+  await form.locator('input[name="docFile"]').nth(0).setInputFiles({ name: "x.pdf", mimeType: "application/pdf", buffer: pdf("x") });
+  await form.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await page.getByText(/Informe o que é cada documento/).waitFor();
+  assert.equal(await clientOf("ten_roberio", "Docs Sem Rotulo"), undefined, "nada gravado quando falta o nome do documento");
+  // Isolamento: o tenant B não enxerga o documento do tenant A.
+  const download = await fetch(`${BASE}/documentos/${(await admin(`select id from client_document where client_id = '${client.id}' limit 1`))[0].id}`, { headers: { cookie: fernando } });
+  assert.equal(download.status, 404);
+  await context.close();
+});
+
 test("CE9. nada que já existia mudou (operações, pagamentos, capital, investidores, clientes antigos)", async () => {
   assert.equal(await existingHash(), before);
 });

@@ -462,11 +462,38 @@ export function useCompanyNamePrefill() {
 function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | null; onChanged: () => void; onCancel: () => void }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
   const [resetKey, setResetKey] = useState(0);
-  const { pending, feedback, onSubmit } = useFormAction(editing ? updateClientAction : createClientAction, () => {
+  const [docRows, setDocRows] = useState(1);
+  const afterSave = () => {
     setResetKey((key) => key + 1);
+    setDocRows(1);
     onChanged();
     if (editing) onCancel();
-  });
+  };
+  // No cadastro novo os documentos já podem ser escolhidos aqui: o cliente é gravado primeiro e cada arquivo vai em seguida,
+  // um por envio (limite de 5 MB por arquivo). Se um arquivo falhar, o cliente fica salvo e o aviso diz qual anexar depois.
+  const createWithDocuments = async (data: FormData): Promise<ActionResult> => {
+    const documents = data.getAll("docLabel").map((label, index) => ({ label: String(label).trim(), file: data.getAll("docFile")[index] }))
+      .filter((entry): entry is { label: string; file: File } => entry.file instanceof File && entry.file.size > 0);
+    if (data.getAll("docLabel").some((label, index) => !String(label).trim() && data.getAll("docFile")[index] instanceof File && (data.getAll("docFile")[index] as File).size > 0)) {
+      return { ok: false, error: "Informe o que é cada documento escolhido (por exemplo RG ou comprovante de residência)." };
+    }
+    data.delete("docLabel");
+    data.delete("docFile");
+    const created = await createClientAction(data);
+    if (!created.ok || !created.clientId || documents.length === 0) return created;
+    const failed: string[] = [];
+    for (const entry of documents) {
+      const upload = new FormData();
+      upload.set("clientId", created.clientId);
+      upload.set("label", entry.label);
+      upload.set("file", entry.file);
+      const result = await uploadClientDocumentAction(upload).catch((): ActionResult => ({ ok: false, error: "Falha no envio." }));
+      if (!result.ok) failed.push(`${entry.label} (${result.error})`);
+    }
+    if (failed.length > 0) return { ok: true, message: `${created.message} Mas não foi possível anexar: ${failed.join("; ")}. Anexe na página do cliente.` };
+    return { ok: true, message: `${created.message} ${documents.length === 1 ? "1 documento anexado." : `${documents.length} documentos anexados.`}` };
+  };
+  const { pending, feedback, onSubmit } = useFormAction(editing ? updateClientAction : createWithDocuments, afterSave);
   const prefill = usePersonPrefill("client");
   const company = useCompanyNamePrefill();
   return (
@@ -516,6 +543,21 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
             <p className="capital-note field-wide">O avalista fica no cadastro do cliente e aparece em todas as operações dele.</p>
           </div>
         </fieldset>
+        {!editing && (
+          <fieldset className="form-section field-wide">
+            <legend>Documentos (opcional)</legend>
+            <div className="form-grid">
+              {Array.from({ length: docRows }, (_, index) => (
+                <div key={index} className="form-grid field-wide reference-row" aria-label={`Documento ${index + 1}`}>
+                  <label className="field"><span>Documento {index + 1}</span><input name="docLabel" placeholder="RG, comprovante de residência…" maxLength={120} /></label>
+                  <label className="field"><span>Arquivo {index + 1}</span><input name="docFile" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" /></label>
+                </div>
+              ))}
+              <p className="capital-note field-wide">PDF, JPG, PNG ou WEBP de até 5 MB cada. Os arquivos são anexados assim que o cliente for cadastrado.</p>
+              <div className="form-actions field-wide"><button type="button" className="outline-button" onClick={() => setDocRows((rows) => Math.min(rows + 1, 6))} disabled={docRows >= 6}><Icon name="plus" size={16} /> Adicionar outro documento</button></div>
+            </div>
+          </fieldset>
+        )}
         <div className="form-actions">
           {editing && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
           <button className="primary-button" disabled={pending}><Icon name={editing ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>
