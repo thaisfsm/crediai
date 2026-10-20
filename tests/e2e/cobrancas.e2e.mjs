@@ -52,7 +52,7 @@ async function openTab(page, name) {
   return rows(page);
 }
 // Coluna Vencimento (dd/mm/aaaa do próximo vencimento em aberto), como ISO, para conferir a ordem crescente.
-const dueColumn = async (page) => (await charges(page).locator("table.data-table > tbody > tr > td:nth-child(6)").allInnerTexts())
+const dueColumn = async (page) => (await charges(page).locator("table.data-table > tbody > tr > td:nth-child(7)").allInnerTexts())
   .map((text) => { const [, d, m, y] = text.match(/(\d{2})\/(\d{2})\/(\d{4})/); return `${y}-${m}-${d}`; });
 const assertAscending = (dates, label) => dates.forEach((date, index) => index && assert.ok(dates[index - 1] <= date, `${label}: ${dates[index - 1]} antes de ${date}`));
 const counts = async (page) => Object.fromEntries((await charges(page).getByRole("tab").allInnerTexts()).map((label) => { const [, name, count] = label.match(/^(.+) \((\d+)\)$/); return [name, Number(count)]; }));
@@ -102,6 +102,11 @@ test("K1. Em aberto: vencidas (a mais antiga primeiro), depois hoje, depois as f
   assert.deepEqual(await rows(robério), EXPECTED);
   // Parcelado usa a 1ª parcela pendente (não a futura) e a parcial continua na data original.
   assert.ok(!(await rows(robério)).includes("Quitério Quitado"));
+  // Coluna "A cobrar no vencimento": parcela em aberto (parcial já descontado) ou total a quitar na data.
+  const toCollect = Object.fromEntries(await charges(robério).locator("table.data-table > tbody > tr").evaluateAll((trs) => trs.map((tr) => [tr.querySelector("td:nth-child(1) > strong").textContent, tr.querySelector("td:nth-child(6)").innerText.replace(/\s+/g, " ").trim()])));
+  assert.match(toCollect["Paula Parcial"], /R\$\s?600,00 saldo da parcela 1\/3/, "parcela de 1.000 com 400 pagos mostra o saldo de 600");
+  assert.match(toCollect["Igor Parcelado"], /R\$\s?1\.000,00 parcela 1\/3/);
+  assert.match(toCollect["Ana Hoje"], /R\$\s?1\.100,00 total a quitar/, "pagamento único mostra o total a quitar");
   // Abrir a tela e trocar de aba não grava nada.
   await readAll(robério);
   assert.equal(await tenantHash("ten_roberio"), before);
