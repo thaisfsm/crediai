@@ -45,14 +45,14 @@ async function signIn(email) {
 const TABS = ["Em aberto", "Em atraso", "Hoje", "Amanhã", "Próximas"];
 const charges = (page) => page.locator("main .table-panel");
 // Clientes da tabela, na ordem exibida, e o rótulo de cada aba com o contador.
-const rows = async (page) => charges(page).locator("table.data-table > tbody > tr > td:nth-child(2)").allInnerTexts();
+const rows = async (page) => charges(page).locator("table.data-table > tbody > tr > td:nth-child(1) > strong").allInnerTexts();
 async function openTab(page, name) {
   await charges(page).getByRole("tab", { name: new RegExp(`^${name} \\(`) }).click();
   await page.waitForTimeout(150);
   return rows(page);
 }
 // Coluna Vencimento (dd/mm/aaaa do próximo vencimento em aberto), como ISO, para conferir a ordem crescente.
-const dueColumn = async (page) => (await charges(page).locator("table.data-table > tbody > tr > td:nth-child(10)").allInnerTexts())
+const dueColumn = async (page) => (await charges(page).locator("table.data-table > tbody > tr > td:nth-child(6)").allInnerTexts())
   .map((text) => { const [, d, m, y] = text.match(/(\d{2})\/(\d{2})\/(\d{4})/); return `${y}-${m}-${d}`; });
 const assertAscending = (dates, label) => dates.forEach((date, index) => index && assert.ok(dates[index - 1] <= date, `${label}: ${dates[index - 1]} antes de ${date}`));
 const counts = async (page) => Object.fromEntries((await charges(page).getByRole("tab").allInnerTexts()).map((label) => { const [, name, count] = label.match(/^(.+) \((\d+)\)$/); return [name, Number(count)]; }));
@@ -126,6 +126,38 @@ test("K2. cinco abas: filtros, ordem e contadores corretos, sem duplicata", asyn
   assert.deepEqual(await readAll(robério), all);
 });
 
+
+// Painel "Contas a receber" do Dashboard: cada card como texto (rótulo, valor, legenda).
+const receivablesPanel = (page) => page.getByRole("region", { name: "Contas a receber" });
+const kpi = async (page, label) => (await receivablesPanel(page).locator(".payables-kpi", { hasText: label }).innerText()).split("\n").map((part) => part.trim()).filter(Boolean);
+const money = (text) => Number(text.replace(/[^\d,]/g, "").replace(",", "."));
+async function openDashboard(page) { await page.goto(`${BASE}/`); await receivablesPanel(page).waitFor(); }
+
+test("K2b. Dashboard: Contas a receber mostra atraso, hoje, próximos 7 dias e total, iguais às Cobranças", async () => {
+  const before = await tenantHash("ten_roberio");
+  await openCharges(robério);
+  const cobrancas = await readAll(robério);
+  await openDashboard(robério);
+  const late = await kpi(robério, "Em atraso");
+  assert.equal(late[2].match(/^(\d+) operaç/)?.[1], String(cobrancas["Em atraso"].length), "mesma contagem de operações em atraso");
+  assert.ok(money(late[1]) > 0, "valor em atraso");
+  const total = await kpi(robério, "Total a receber");
+  const card = await robério.getByRole("link", { name: /Total a receber, ver saldos em aberto/ }).innerText();
+  assert.equal(money(total[1]), money(card.match(/R\$\s?[\d.]+,\d{2}/)[0]), "mesmo total do card Total a receber");
+  // Quem vence hoje aparece na lista com o valor do saldo (R$ 1.100,00); as atrasadas com a mais antiga primeiro.
+  const today = receivablesPanel(robério).getByRole("region", { name: "Vencem hoje (a receber)" });
+  for (const name of ["Ana Hoje", "Bruno Hoje"]) assert.ok((await today.innerText()).includes(name), `${name} vence hoje`);
+  assert.ok((await today.innerText()).includes("1.100,00"));
+  const overdue = receivablesPanel(robério).getByRole("region", { name: "Em atraso" });
+  const names = await overdue.locator(".payables-row .charge-person strong").allInnerTexts();
+  assert.equal(names[0], "Zélia Antiga", "a mais antiga primeiro");
+  assert.ok(!(await receivablesPanel(robério).innerText()).includes("Quitério Quitado"), "quitada fora");
+  // O card leva à tela Cobranças já no filtro certo.
+  await receivablesPanel(robério).locator(".payables-kpi", { hasText: "Em atraso" }).click();
+  await charges(robério).getByRole("tab", { selected: true, name: /^Em atraso/ }).waitFor();
+  assert.equal(await tenantHash("ten_roberio"), before, "só leitura");
+});
+
 async function pay(page, client, shortcut) {
   await charges(page).locator("table.data-table > tbody > tr", { hasText: client }).getByRole("button", { name: "Registrar pagamento" }).click();
   const panel = page.getByRole("dialog", { name: `Pagamentos de ${client}` });
@@ -147,7 +179,7 @@ test("K3. depois de registrar pagamentos a lista se reordena sozinha (quitada sa
   // Só os juros da atrasada: renova para o mês seguinte (motor) e passa para depois das próximas, antes da de 40 dias.
   await pay(robério, "Bia Atrasada", /^Só os juros e renovar/);
   const expected = ["Igor Parcelado", "Paula Parcial", "Ana Hoje", "Bruno Hoje", "Tiago Amanhã", "Nina Próxima", "Bia Atrasada", "Fábio Longe"];
-  await robério.waitForFunction((first) => document.querySelector("main .table-panel tbody tr td:nth-child(2)")?.textContent === first, expected[0], { timeout: 15_000 });
+  await robério.waitForFunction((first) => document.querySelector("main .table-panel tbody tr td:nth-child(1) > strong")?.textContent === first, expected[0], { timeout: 15_000 });
   assert.deepEqual(await rows(robério), expected);
   const all = await readAll(robério);
   assert.deepEqual(all["Em atraso"], ["Igor Parcelado", "Paula Parcial"]);
@@ -156,6 +188,18 @@ test("K3. depois de registrar pagamentos a lista se reordena sozinha (quitada sa
   const renewed = await one(`select new_due_date::text from loan_renewal where operation_id = 'op_e2e_late'`);
   assert.ok(renewed > day(5) && renewed < day(40), `renovada para ${renewed}`);
   assert.equal(await one(`select status from loan_operation where id = 'op_e2e_old'`), "PAID");
+});
+
+test("K3b. Dashboard atualiza depois das baixas: quitada e renovada saem do atraso e o recebido hoje soma os pagamentos", async () => {
+  const received = Number(await one(`select coalesce(sum(amount_cents),0) from payment where tenant_id = 'ten_roberio' and paid_at = '${TODAY}'`));
+  assert.ok(received > 0, "houve pagamentos hoje");
+  await openDashboard(robério);
+  const late = await kpi(robério, "Em atraso");
+  assert.equal(late[2].match(/^(\d+) operaç/)?.[1], "2", "só Igor e Paula continuam em atraso");
+  const text = await receivablesPanel(robério).innerText();
+  assert.ok(!text.includes("Zélia Antiga") && !text.includes("Bia Atrasada"), "quitada e renovada saíram do atraso");
+  const today = await kpi(robério, "Recebido hoje");
+  assert.equal(money(today[1]), received / 100, "recebido hoje = soma dos pagamentos de hoje no banco");
 });
 
 test("K4. isolamento: cada tenant vê só as próprias cobranças, na ordem certa; o tenant B fica intacto", async () => {
@@ -169,6 +213,9 @@ test("K4. isolamento: cada tenant vê só as próprias cobranças, na ordem cert
   assert.ok(all["Em aberto"].length > 0);
   for (const name of TABS) { await openTab(fernando, name); assertAscending(await dueColumn(fernando), `${name} (Fernando)`); }
   for (const name of TABS) assert.equal(all.counts[name], all[name].length, `contador de ${name} (Fernando)`);
+  await openDashboard(fernando);
+  const panelText = await receivablesPanel(fernando).innerText();
+  for (const client of robérioNames) assert.ok(!panelText.includes(client), `${client} não aparece em Contas a receber do tenant B`);
   await openCharges(robério);
   const mine = await rows(robério);
   for (const client of ["Alexandre Teste", "Willian Teste", "Amany Teste", "Cinco Mil Teste", "Renovado Teste"]) assert.ok(!mine.includes(client));

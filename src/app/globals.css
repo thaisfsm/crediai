@@ -1200,6 +1200,7 @@ button { color:inherit; }
 .payables-kpi[aria-current="page"] { border-color: rgba(79,216,232,.45); box-shadow: 0 0 24px rgba(79,216,232,.1); }
 .payables-kpi-amber::before { background: linear-gradient(90deg, transparent, #ecc16b, transparent); }
 .payables-kpi-cyan::before { background: linear-gradient(90deg, transparent, #4fd8e8, transparent); }
+.payables-kpi-blue::before { background: linear-gradient(90deg, transparent, #5aa9ff, transparent); }
 .payables-kpi-green::before { background: linear-gradient(90deg, transparent, #5fd9a8, transparent); }
 .payables-kpi-red::before { background: linear-gradient(90deg, transparent, #f5222d, transparent); }
 .payables-kpi-red:hover, .payables-kpi-red:focus-visible, .payables-kpi-red[aria-current="page"] { border-color: rgba(245,34,45,.55); box-shadow: 0 0 24px rgba(245,34,45,.14); }
