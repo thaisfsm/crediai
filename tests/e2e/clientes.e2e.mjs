@@ -191,6 +191,14 @@ test("CE8. tela: busca, abrir a ficha com empresa e banco, CPF inválido avisado
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-busca-${label}.png`, fullPage: false });
     await box.fill("390.533.447-05");
     await results.getByText("Carla Bancária").waitFor();
+    // Na própria busca: Editar abre o formulário do cliente e Excluir abre a confirmação (nada é excluído aqui).
+    await results.getByRole("button", { name: "Excluir" }).waitFor();
+    await results.getByRole("button", { name: "Editar" }).click();
+    await page.getByRole("region", { name: "Editar cliente" }).getByText("Editar Carla Bancária").waitFor();
+    await results.getByRole("button", { name: "Excluir" }).click();
+    await page.getByRole("alertdialog", { name: /Excluir Carla Bancária/ }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("alertdialog").waitFor({ state: "detached" });
     await results.getByRole("button", { name: "Abrir" }).click();
     await page.getByRole("heading", { name: "Carla Bancária", level: 1 }).waitFor();
     const profile = page.getByRole("region", { name: "Cadastro de Carla Bancária" });

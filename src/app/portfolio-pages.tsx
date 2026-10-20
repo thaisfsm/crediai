@@ -828,7 +828,7 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
 
 // Busca rápida: o servidor procura na carteira da sessão por nome (sem acentos, partes do nome), CPF ou telefone,
 // formatados ou não. Fica no topo da tela Clientes; "Abrir" leva direto à ficha do cliente.
-function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
+function ClientSearch({ onOpen, onEdit, onDelete }: { onOpen: (id: string) => void; onEdit: (id: string) => void; onDelete: (id: string) => void }) {
   const [query, setQuery] = useState("");
   const [state, setState] = useState<{ query: string; results: ClientSearchResult[]; error?: string } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -865,7 +865,7 @@ function ClientSearch({ onOpen }: { onOpen: (id: string) => void }) {
               <td><strong>{client.name}</strong>{client.email && <small className="admin-cell-note">{client.email}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td>
               <td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td>
               <td>{client.archived ? <span className="status-chip status-muted"><i />Arquivado</span> : <span className="status-chip status-active"><i />Ativo</span>}</td>
-              <td className="actions-cell">{client.archived ? <small>Histórico em Operações</small> : <button className="outline-button" onClick={() => onOpen(client.id)}>Abrir</button>}</td>
+              <td className="actions-cell">{client.archived ? <small>Histórico em Operações</small> : <span className="row-actions"><button className="outline-button" onClick={() => onOpen(client.id)}>Abrir</button><button className="outline-button" onClick={() => onEdit(client.id)}>Editar</button><button className="outline-button danger-outline" onClick={() => onDelete(client.id)}>Excluir</button></span>}</td>
             </tr>
           ))}</tbody>
         </table></div>
@@ -886,7 +886,9 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
       <PageHeading eyebrow="CREDIAI · CLIENTES" title="Clientes" description="Cadastre os clientes da sua carteira para vincular operações.">
         <button className="primary-button" onClick={onNewOperation}><Icon name="plus" size={17} /> Nova operação</button>
       </PageHeading>
-      <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }} />
+      <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }}
+        onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) { setEditing(row); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
+        onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />
       <ClientForm key={editing?.id ?? "new"} editing={editing} onChanged={onChanged} onCancel={() => setEditing(null)} />
       <section className="panel table-panel" aria-label="Lista de clientes">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{portfolio.clients.length}</span></div></div></div>
