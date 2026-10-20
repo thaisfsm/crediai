@@ -144,15 +144,16 @@ const isDuplicateCpf = (error: unknown) => {
   return cause?.code === "23505" && cause?.constraint_name === "client_tenant_document_unique";
 };
 
-export async function createClientAction(data: FormData): Promise<ActionResult> {
+export async function createClientAction(data: FormData): Promise<ActionResult & { clientId?: string }> {
   const fields = clientFields(data);
   if (!fields.ok) return fields;
   try {
-    const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
+    const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult & { clientId?: string }> => {
       const duplicate = await duplicateCpfError(tx, tenantId, fields.values.document);
       if (duplicate) return { ok: false, error: duplicate };
-      await tx.insert(clients).values({ id: id("cli"), tenantId, ...fields.values });
-      return { ok: true, message: `Cliente ${fields.values.name} cadastrado.` };
+      const clientId = id("cli");
+      await tx.insert(clients).values({ id: clientId, tenantId, ...fields.values });
+      return { ok: true, message: `Cliente ${fields.values.name} cadastrado.`, clientId };
     });
     if (result.ok) revalidatePath("/");
     return result;
