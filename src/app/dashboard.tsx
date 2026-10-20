@@ -13,6 +13,8 @@ import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { RenegotiationPage } from "./renegotiation-page";
 import { PayablesDashboard } from "./payables-dashboard";
+import { ReceivablesDashboard } from "./receivables-dashboard";
+import { receivablesOverview } from "@/lib/finance/receivables";
 import type { PayablesOverview } from "@/lib/investors/payables";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
@@ -245,6 +247,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               </section>
 
               <PayablesDashboard overview={payables} availableCents={summary.availableCents} />
+              <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
 
               <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
                 <div className="intelligence-orb"><Icon name="sparkles" size={21} /></div>
