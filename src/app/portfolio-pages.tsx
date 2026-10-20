@@ -1601,12 +1601,17 @@ function OperationsTable({ operations, clients, today, onChanged }: { operations
   // Tabela compacta: cabe na largura da tela sem rolar para o lado. Dados menos usados ficam como linha pequena sob o principal.
   return (
     <div className="table-scroll"><table className="data-table fit-table">
-      <thead><tr><th>Cliente</th><th>Principal e juros</th><th>Total</th><th>Recebido</th><th>Saldo</th><th>Vencimento e situação</th><th /></tr></thead>
+      <thead><tr><th>Cliente</th><th>Principal e juros</th><th>Total</th><th>Recebido</th><th>Saldo</th><th>A cobrar no vencimento</th><th>Vencimento e situação</th><th /></tr></thead>
       <tbody>{operations.map((operation) => (
         <tr key={operation.id}>
           <td data-label="Cliente"><strong>{operation.clientName}</strong><small>#{operation.code} · emprestado em {formatDate(operation.loanDate)} · {operationAge(operation)}</small></td>
           <td data-label="Principal e juros">{formatMoney(operation.principalCents)}<small>juros {formatMoney(operation.interestCents)} · {rateLabel(operation)} · {operation.modality === "INSTALLMENT" ? `parcelado ${operation.frequency === "BIWEEKLY" ? "quinzenal" : "mensal"}` : frequencyLabels[operation.frequency].toLowerCase()}</small></td>
           <td data-label="Total">{formatMoney(operation.totalCents)}</td><td data-label="Recebido">{formatMoney(operation.paidCents)}</td><td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
+          <td data-label="A cobrar no vencimento">{(() => {
+            // Parcelado: o que falta da parcela em aberto (pagamento parcial já descontado). Pagamento único ou juros: o total a quitar na data.
+            const due = operation.nextInstallment ? { cents: operation.nextInstallment.remainingCents, note: operation.nextInstallment.remainingCents < operation.nextInstallment.amountCents ? `saldo da parcela ${operation.nextInstallment.number}/${operation.installmentTotal}` : `parcela ${operation.nextInstallment.number}/${operation.installmentTotal}` } : { cents: operation.balanceCents, note: "total a quitar" };
+            return operation.nextOpenDueDate && due.cents > 0 ? <><strong>{formatMoney(due.cents)}</strong><small>{due.note}</small></> : <span>—</span>;
+          })()}</td>
           <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installmentTotal}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
           <td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>
         </tr>
