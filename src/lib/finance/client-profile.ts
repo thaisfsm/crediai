@@ -23,8 +23,8 @@ export type ContactKey = (typeof contactKeys)[number];
 type AddressKey = `${AddressKind}${AddressPart}`;
 type ReferenceKey = `reference${(typeof referenceSlots)[number]}${(typeof referenceParts)[number]}`;
 type GuarantorKey = `guarantor${(typeof guarantorParts)[number]}`;
-// Empresa onde o cliente trabalha (junto do endereço comercial): nome e CNPJ (só dígitos, conferido).
-export const companyKeys = ["businessCompanyName", "businessCnpj"] as const;
+// Empresa onde o cliente trabalha (junto do endereço comercial): nome, CNPJ (só dígitos, conferido) e data de admissão (AAAA-MM-DD).
+export const companyKeys = ["businessCompanyName", "businessCnpj", "businessAdmissionDate"] as const;
 export type CompanyKey = (typeof companyKeys)[number];
 export type ClientProfileKey = ContactKey | AddressKey | ReferenceKey | GuarantorKey | CompanyKey | BankKey;
 export type ClientProfile = Record<ClientProfileKey, string | null>;

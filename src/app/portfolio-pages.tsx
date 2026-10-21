@@ -516,6 +516,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
           <div className="form-grid">
             <label className="field"><span>CNPJ da empresa</span><MaskedInput name="businessCnpj" mask={maskCnpj} initial={formatCnpj(editing?.businessCnpj ?? null) ?? ""} validate={cnpjProblem} inputMode="numeric" placeholder="00.000.000/0000-00" maxLength={20} /></label>
             <label className="field field-wide"><span>Nome da empresa</span><input name="businessCompanyName" maxLength={160} defaultValue={editing?.businessCompanyName ?? ""} placeholder="Onde o cliente trabalha" /></label>
+            <DateField label="Data de admissão" name="businessAdmissionDate" min="1900-01-01" max={todayIso()} defaultValue={editing?.businessAdmissionDate ?? ""} className="field" />
             {company.notice && <p className="form-feedback field-wide" role="status">{company.notice}</p>}
           </div>
         </fieldset>
@@ -731,7 +732,7 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
           return <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd>{!client[network] ? "—" : href ? <a className="text-link inline-link" href={href} target="_blank" rel="noreferrer noopener">{socialLabel(client[network])}</a> : client[network]}</dd></div>;
         })}
         {(Object.keys(addressKinds) as AddressKind[]).map((kind) => <div key={kind}><dt>{addressKinds[kind]}</dt><dd>{formatAddress(client, kind) ?? "Não informado"}</dd></div>)}
-        <div><dt>Empresa</dt><dd>{[client.businessCompanyName, client.businessCnpj && `CNPJ ${formatCnpj(client.businessCnpj)}`].filter(Boolean).join(" · ") || "Não informada"}</dd></div>
+        <div><dt>Empresa</dt><dd>{[client.businessCompanyName, client.businessCnpj && `CNPJ ${formatCnpj(client.businessCnpj)}`, client.businessAdmissionDate && `admitido em ${formatDate(client.businessAdmissionDate)}`].filter(Boolean).join(" · ") || "Não informada"}</dd></div>
         <BankSummaryRows values={client} />
         {references.map((reference) => (
           <div key={reference.slot}><dt>Referência {reference.slot}</dt><dd>{reference.name ? [reference.name, reference.relationship, reference.phone].filter(Boolean).join(" · ") : "Não informada"}</dd></div>
