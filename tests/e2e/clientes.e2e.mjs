@@ -250,6 +250,19 @@ test("CE8b. cadastro novo já traz os documentos: cliente e arquivos gravados, f
   await form.getByRole("button", { name: "Cadastrar cliente" }).click();
   await page.getByText(/Informe o que é cada documento/).waitFor();
   assert.equal(await clientOf("ten_roberio", "Docs Sem Rotulo"), undefined, "nada gravado quando falta o nome do documento");
+  // Edição do cliente já cadastrado: a seção Documentos aparece, lista os anexos e permite anexar mais um depois.
+  await page.reload();
+  await page.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Docs Cadastro Teste");
+  const found = page.getByRole("table", { name: "Resultado da busca" });
+  await found.getByText("Docs Cadastro Teste").waitFor();
+  await found.getByRole("button", { name: "Editar" }).click();
+  const documents = page.getByRole("region", { name: "Documentos de Docs Cadastro Teste" });
+  await documents.getByText("comprovante.pdf").waitFor();
+  await documents.getByLabel("Documento", { exact: true }).fill("CPF");
+  await documents.getByLabel("Arquivo", { exact: true }).setInputFiles({ name: "cpf.pdf", mimeType: "application/pdf", buffer: pdf("cpf") });
+  await documents.getByRole("button", { name: "Anexar documento" }).click();
+  await documents.getByText("cpf.pdf").waitFor({ timeout: 20_000 });
+  assert.equal(await one(`select count(*)::int from client_document where client_id = '${client.id}'`), 3);
   // Isolamento: o tenant B não enxerga o documento do tenant A.
   const download = await fetch(`${BASE}/documentos/${(await admin(`select id from client_document where client_id = '${client.id}' limit 1`))[0].id}`, { headers: { cookie: fernando } });
   assert.equal(download.status, 404);
