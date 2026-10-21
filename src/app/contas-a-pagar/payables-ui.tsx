@@ -181,7 +181,16 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
             {open && (
               <tr className="obligation-detail-row"><td colSpan={columns}>
                 <ObligationDetail obligation={obligation} />
-                {canPay && obligation.balanceCents > 0 && obligation.paymentBlock && <p className="capital-note">{obligation.paymentBlock}</p>}
+                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (
+                  <>
+                    <p className="capital-note">{obligation.paymentBlock}</p>
+                    <div className="form-actions">
+                      <Link prefetch={false} className="primary-button" href={`/investidores/investimentos/${obligation.investmentId}`}>
+                        {obligation.paymentBlock === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}
+                      </Link>
+                    </div>
+                  </>
+                )}
                 {paying && canPay && obligation.balanceCents > 0 && !obligation.paymentBlock && (
                   <PaymentForm obligation={obligation} today={today} minDate={minDate} availableCents={availableCents}
                     onDone={() => { setPaying(false); onDone(); }} onCancel={() => setPaying(false)} />
