@@ -18,19 +18,23 @@ import { MoneyInput } from "./money-input";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
-export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void) {
-  const [pending, startTransition] = useTransition();
+export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void, resetOnSuccess = true) {
+  // O estado "enviando" é próprio (não de uma transição do React): termina assim que a ação responde, mesmo que a tela
+  // ainda esteja sendo atualizada em seguida, e nunca deixa o botão preso em "Salvando…".
+  const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (pending) return;
     const form = event.currentTarget;
     const data = new FormData(form);
     setFeedback(null);
-    startTransition(async () => {
+    setPending(true);
+    void (async () => {
       try {
         const result = await action(data);
         if (result.ok) {
-          form.reset();
+          if (resetOnSuccess) form.reset();
           setFeedback({ tone: "ok", text: result.message });
           onDone?.();
         } else {
@@ -38,8 +42,10 @@ export function useFormAction(action: (data: FormData) => Promise<ActionResult>,
         }
       } catch {
         setFeedback({ tone: "error", text: "Não foi possível salvar. Tente novamente." });
+      } finally {
+        setPending(false);
       }
-    });
+    })();
   };
   return { pending, feedback, onSubmit };
 }
@@ -463,11 +469,13 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
   const [resetKey, setResetKey] = useState(0);
   const [docRows, setDocRows] = useState(1);
+  const [saved, setSaved] = useState(false);
   const afterSave = () => {
-    setResetKey((key) => key + 1);
-    setDocRows(1);
+    // O botão mostra "Salvo ✓" por um instante; na edição o formulário fecha depois disso.
+    setSaved(true);
     onChanged();
-    if (editing) onCancel();
+    if (editing) setTimeout(() => { setSaved(false); onCancel(); }, 1500);
+    else { setResetKey((key) => key + 1); setDocRows(1); setTimeout(() => setSaved(false), 2500); }
   };
   // No cadastro novo os documentos já podem ser escolhidos aqui: o cliente é gravado primeiro e cada arquivo vai em seguida,
   // um por envio (limite de 5 MB por arquivo). Se um arquivo falhar, o cliente fica salvo e o aviso diz qual anexar depois.
@@ -493,7 +501,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
     if (failed.length > 0) return { ok: true, message: `${created.message} Mas não foi possível anexar: ${failed.join("; ")}. Anexe na página do cliente.` };
     return { ok: true, message: `${created.message} ${documents.length === 1 ? "1 documento anexado." : `${documents.length} documentos anexados.`}` };
   };
-  const { pending, feedback, onSubmit } = useFormAction(editing ? updateClientAction : createWithDocuments, afterSave);
+  const { pending, feedback, onSubmit } = useFormAction(editing ? updateClientAction : createWithDocuments, afterSave, !editing);
   const prefill = usePersonPrefill("client");
   const company = useCompanyNamePrefill();
   return (
@@ -561,7 +569,7 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
         )}
         <div className="form-actions">
           {editing && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
-          <button className="primary-button" disabled={pending}><Icon name={editing ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>
+          <button className="primary-button" disabled={pending}><Icon name={editing || saved ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : saved ? "Salvo" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>
         </div>
       </form>
       <Feedback feedback={feedback} />
