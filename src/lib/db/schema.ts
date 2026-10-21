@@ -273,6 +273,8 @@ export const clients = pgTable("client", {
   // Empresa do endereço comercial: nome e CNPJ (só dígitos, com dígitos verificadores conferidos; pode repetir entre clientes).
   businessCompanyName: text("business_company_name"),
   businessCnpj: text("business_cnpj"),
+  // Data em que o cliente começou no emprego (opcional; não pode ser futura).
+  businessAdmissionDate: date("business_admission_date", { mode: "string" }),
   // Dados bancários e chave Pix (opcionais). Regras em src/lib/bank-account.ts.
   bankHolderName: text("bank_holder_name"),
   bankHolderDocument: text("bank_holder_document"),

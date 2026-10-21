@@ -211,6 +211,13 @@
       "when": 1792378613329,
       "tag": "0030_parcela_renegociada",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792608469982,
+      "tag": "0031_data_admissao_empresa",
+      "breakpoints": true
     }
   ]
 }

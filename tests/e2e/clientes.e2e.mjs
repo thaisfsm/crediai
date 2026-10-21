@@ -136,6 +136,24 @@ test("CE5. empresa (CNPJ conferido, pode repetir) e dados bancários com Pix", a
   await assert.rejects(admin(`update client set bank_account_type = 'XPTO' where id = '${carla.id}'`));
 });
 
+test("CE5b. data de admissão na empresa: opcional, data real e não futura; edição e remoção", async () => {
+  const future = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+  for (const bad of ["2021-02-30", "31/12/2020", "abc", future, "1800-01-01"]) {
+    assert.equal((await create(robério, { name: "Admissão Inválida", businessAdmissionDate: bad })).ok, false, bad);
+  }
+  assert.equal(await one(`select count(*)::int from client where name = 'Admissão Inválida'`), 0);
+  const ok = await create(robério, { name: "Admissão Teste", businessCompanyName: "Padaria Pão Bom", businessAdmissionDate: "2021-03-15" });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  const client = await clientOf("ten_roberio", "Admissão Teste");
+  assert.equal(await one(`select to_char(business_admission_date, 'YYYY-MM-DD') from client where id = '${client.id}'`), "2021-03-15");
+  // Sem data: cadastro continua válido. Edição troca a data e vazio remove.
+  assert.equal((await create(robério, { name: "Sem Admissão" })).ok, true);
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Admissão Teste", businessAdmissionDate: "2022-01-10" })).ok, true);
+  assert.equal(await one(`select to_char(business_admission_date, 'YYYY-MM-DD') from client where id = '${client.id}'`), "2022-01-10");
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Admissão Teste", businessAdmissionDate: "" })).ok, true);
+  assert.equal(await one(`select business_admission_date is null from client where id = '${client.id}'`), true);
+});
+
 test("CE6. busca no servidor: nome sem acentos e em partes, CPF e telefone com ou sem máscara", async () => {
   for (const query of ["joao", "JOÃO", "conceicao silva", "silva  joão", "Conceição"]) assert.deepEqual(names(await search(robério, query)), ["João da Conceição Silva"], query);
   for (const query of ["529.982.247-25", "52998224725", "982247", "(11) 98765-4321", "11987654321", "98765", "(21) 99876"]) assert.deepEqual(names(await search(robério, query)), ["João da Conceição Silva"], query);
@@ -266,6 +284,30 @@ test("CE8b. cadastro novo já traz os documentos: cliente e arquivos gravados, f
   // Isolamento: o tenant B não enxerga o documento do tenant A.
   const download = await fetch(`${BASE}/documentos/${(await admin(`select id from client_document where client_id = '${client.id}' limit 1`))[0].id}`, { headers: { cookie: fernando } });
   assert.equal(download.status, 404);
+  await context.close();
+});
+
+test("CE8c. tela: campo Data de admissão na seção Empresa (cadastro e ficha)", async () => {
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "pt-BR" });
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const page = await context.newPage();
+  await page.goto(`${BASE}/?tela=clientes`);
+  const form = page.getByRole("region", { name: "Novo cliente" });
+  const company = form.getByRole("group", { name: "Empresa" });
+  await company.getByLabel("Nome da empresa").fill("ASSOCIACAO DESP POLICIA MILITAR DO ESTADO DE SAO PAULO");
+  await company.getByLabel("Data de admissão").fill("12/08/2019");
+  await company.scrollIntoViewIfNeeded();
+  if (SHOTS) await company.screenshot({ path: `${SHOTS}/clientes-empresa-admissao.png` });
+  await form.getByLabel("Nome completo").fill("Admissão Tela");
+  await form.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await page.getByText(/Admissão Tela cadastrado/).waitFor({ timeout: 20_000 });
+  assert.equal(await one(`select to_char(business_admission_date, 'DD/MM/YYYY') from client where name = 'Admissão Tela'`), "12/08/2019");
+  await page.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Admissão Tela");
+  await page.getByRole("table", { name: "Resultado da busca" }).getByRole("button", { name: "Abrir" }).click();
+  await page.getByText(/admitido em 12\/08\/2019/).waitFor();
   await context.close();
 });
 

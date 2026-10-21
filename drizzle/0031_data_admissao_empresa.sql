@@ -1,0 +1,1 @@
+ALTER TABLE "client" ADD COLUMN "business_admission_date" date;

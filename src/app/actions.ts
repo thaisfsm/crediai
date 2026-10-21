@@ -123,6 +123,14 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
   const businessCnpj = normalizeCnpj(profile.businessCnpj ?? "");
   if (!businessCnpj.ok) return { ok: false as const, error: `CNPJ da empresa: ${businessCnpj.error}` };
   profile.businessCnpj = businessCnpj.value;
+  // Data de admissão: opcional, data real e não futura.
+  const admission = profile.businessAdmissionDate;
+  if (admission) {
+    const real = /^\d{4}-\d{2}-\d{2}$/.test(admission) && new Date(`${admission}T00:00:00Z`).toISOString().slice(0, 10) === admission;
+    if (!real) return { ok: false as const, error: "Data de admissão inválida. Informe uma data real, por exemplo 15/03/2021." };
+    if (admission > todayIso()) return { ok: false as const, error: "A data de admissão não pode ser futura." };
+    if (admission < "1900-01-01") return { ok: false as const, error: "Data de admissão inválida. Informe uma data real, por exemplo 15/03/2021." };
+  }
   // Dados bancários e chave Pix (src/lib/bank-account.ts).
   const bank = bankFields((key, max) => text(data, key, max));
   if (!bank.ok) return bank;
