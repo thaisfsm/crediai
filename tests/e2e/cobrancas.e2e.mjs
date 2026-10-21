@@ -138,6 +138,19 @@ const kpi = async (page, label) => (await receivablesPanel(page).locator(".payab
 const money = (text) => Number(text.replace(/[^\d,]/g, "").replace(",", "."));
 async function openDashboard(page) { await page.goto(`${BASE}/`); await receivablesPanel(page).waitFor(); }
 
+test("K2c. ficha do cliente: tabela de operações tem a mesma coluna A cobrar no vencimento das Operações e das Cobranças", async () => {
+  await robério.goto(`${BASE}/?tela=clientes`);
+  await robério.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Paula Parcial");
+  await robério.getByRole("table", { name: "Resultado da busca" }).getByRole("button", { name: "Abrir" }).click();
+  const table = robério.locator('section[aria-label="Operações de Paula Parcial"]');
+  await table.locator("tbody tr").first().waitFor();
+  assert.ok((await table.locator("thead th").allTextContents()).includes("A cobrar no vencimento"), "coluna A cobrar no vencimento");
+  const row = (await table.locator("tbody tr").first().innerText()).replace(/\s+/g, " ");
+  assert.match(row, /R\$\s?600,00 saldo da parcela 1\/3/, "parcela de 1.000 com 400 pagos mostra o saldo de 600 também na ficha");
+  if (process.env.E2E_SCREENSHOTS) { await table.scrollIntoViewIfNeeded(); await table.screenshot({ path: `${process.env.E2E_SCREENSHOTS}/ficha-operacoes-a-cobrar.png` }); }
+  await robério.getByRole("button", { name: /Voltar|Clientes/ }).first().click().catch(() => {});
+});
+
 test("K2b. Dashboard: Contas a receber mostra atraso, hoje, próximos 7 dias e total, iguais às Cobranças", async () => {
   const before = await tenantHash("ten_roberio");
   await openCharges(robério);
