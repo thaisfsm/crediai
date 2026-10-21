@@ -932,6 +932,11 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
         onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) { setEditing(row); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
         onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />
       <ClientForm key={editing?.id ?? "new"} editing={editing} onChanged={onChanged} onCancel={() => setEditing(null)} />
+      {editing && (() => {
+        // Documentos também na edição (anexar depois do cadastro). Usa a linha atual da carteira para a lista refletir os envios.
+        const current = portfolio.clients.find((client) => client.id === editing.id);
+        return current ? <ClientDocuments key={current.id} client={current} onChanged={onChanged} /> : null;
+      })()}
       <section className="panel table-panel" aria-label="Lista de clientes">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{portfolio.clients.length}</span></div></div></div>
         {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente cadastrado ainda." /> : (
