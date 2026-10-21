@@ -252,6 +252,12 @@ test("RE8. telas no desktop e no celular: contrato antigo com a indicação de a
     const browserPage = await context.newPage();
     await browserPage.goto(`${BASE}/contas-a-pagar?q=RE-ISOLADO`);
     await browserPage.getByText("Baixa bloqueada").first().waitFor();
+    // Os detalhes da parcela bloqueada trazem o caminho para destravar (botão para o contrato), não só o aviso.
+    await browserPage.getByRole("button", { name: "Detalhes" }).first().click();
+    const unblock = browserPage.getByRole("link", { name: /Indicar a entrada ou o aporte no contrato|Registrar a entrada no capital/ });
+    await unblock.first().waitFor();
+    assert.ok((await unblock.first().getAttribute("href")).includes("/investidores/investimentos/"), "o botão leva ao contrato");
+    if (SHOTS) await browserPage.locator("tr.obligation-detail-row").first().screenshot({ path: `${SHOTS}/regra-entrada-detalhes-bloqueado-${label}.png` });
     if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/regra-entrada-contas-${label}.png`, fullPage: true });
     await browserPage.goto(`${BASE}/investidores/investimentos/${legacyId}`);
     await browserPage.getByRole("button", { name: "Indicar aporte anterior" }).click();
