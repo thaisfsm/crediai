@@ -311,6 +311,31 @@ test("CE8c. tela: campo Data de admissão na seção Empresa (cadastro e ficha)"
   await context.close();
 });
 
+test("CE8d. tela: salvar a edição do cliente termina (sem ficar em Salvando…) e mostra a confirmação", async () => {
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "pt-BR" });
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const page = await context.newPage();
+  await page.goto(`${BASE}/?tela=clientes`);
+  await page.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Admissão Tela");
+  await page.getByRole("table", { name: "Resultado da busca" }).getByRole("button", { name: "Editar" }).click();
+  const form = page.getByRole("region", { name: "Editar cliente" });
+  await form.getByLabel("Observações").fill("editado pela tela");
+  await form.getByRole("button", { name: "Salvar alterações" }).click();
+  await page.waitForTimeout(600);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-salvando-600ms.png` });
+  await form.getByRole("button", { name: "Salvo" }).waitFor({ timeout: 15_000 });
+  await page.getByText(/Cliente Admissão Tela atualizado/).waitFor({ timeout: 5_000 });
+  assert.equal(await form.getByLabel("Observações").inputValue(), "editado pela tela", "a tela mantém o que foi salvo");
+  await page.waitForTimeout(500);
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-salvo.png` });
+  assert.equal(await page.getByText("Salvando…").count(), 0, "nenhum botão preso em Salvando…");
+  assert.equal(await one(`select notes from client where name = 'Admissão Tela'`), "editado pela tela");
+  await context.close();
+});
+
 test("CE9. nada que já existia mudou (operações, pagamentos, capital, investidores, clientes antigos)", async () => {
   assert.equal(await existingHash(), before);
 });

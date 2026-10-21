@@ -126,7 +126,7 @@ async function assertDaySummary(cookie, tenantId) {
     assert.match(view.html, new RegExp(`Pago hoje ${brl(day.paidToday)}`), `${where}: pago hoje`);
     assert.match(view.html, new RegExp(`Capital disponível ${brl(capital)} Só a baixa`), `${where}: capital`);
     const raw = await fetch(`${BASE}${path}`, { headers: { cookie } }).then((response) => response.text());
-    const cards = [...raw.matchAll(/<a[^>]*class="payables-kpi[^"]*"[^>]*>/g)].map(([tag]) => tag.match(/href="([^"]+)"/)?.[1].replace(/&amp;/g, "&"));
+    const cards = [...raw.matchAll(/<a[^>]*class="payables-kpi[^"]*"[^>]*>/g)].map(([tag]) => tag.match(/href="([^"]+)"/)?.[1].replace(/&amp;/g, "&")).filter((href) => !href?.startsWith("/?tela=cobrancas")); // os cards de Contas a receber (Cobranças) usam o mesmo estilo
     assert.deepEqual(cards, ["/contas-a-pagar", "/contas-a-pagar?aba=vencidos", "/contas-a-pagar?aba=proximos", "/contas-a-pagar?aba=pagos", "/?tela=capital"], `${where}: cards clicáveis na ordem das abas`);
   }
   return day;
