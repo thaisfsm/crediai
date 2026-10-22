@@ -311,7 +311,7 @@ test("CE8c. tela: campo Data de admissão na seção Empresa (cadastro e ficha)"
   await context.close();
 });
 
-test("CE8d. tela: salvar a edição do cliente termina (sem ficar em Salvando…) e mostra a confirmação", async () => {
+test("CE8d. tela: modo visualização/edição do cadastro (campos bloqueados, Editar, Salvar volta à visualização, nova edição sem recarregar, Cancelar, falha)", async () => {
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
   browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "pt-BR" });
@@ -322,17 +322,52 @@ test("CE8d. tela: salvar a edição do cliente termina (sem ficar em Salvando…
   await page.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Admissão Tela");
   await page.getByRole("table", { name: "Resultado da busca" }).getByRole("button", { name: "Editar" }).click();
   const form = page.getByRole("region", { name: "Editar cliente" });
-  await form.getByLabel("Observações").fill("editado pela tela");
+  const notes = form.getByLabel("Observações");
+  // Ao clicar em Editar o formulário já está editável, com Salvar e Cancelar.
+  assert.equal(await notes.isEditable(), true);
+  await form.getByRole("button", { name: "Salvar alterações" }).waitFor();
+  await form.getByRole("button", { name: "Cancelar" }).waitFor();
+  // Cancelar descarta o que foi digitado e volta à visualização (campos bloqueados de verdade).
+  await notes.fill("rascunho descartado");
+  await form.getByRole("button", { name: "Cancelar" }).click();
+  await form.getByRole("button", { name: "Editar", exact: true }).waitFor();
+  assert.equal(await form.getByRole("button", { name: "Salvar alterações" }).count(), 0, "sem Salvar na visualização");
+  assert.equal(await notes.isDisabled(), true, "campo bloqueado");
+  assert.notEqual(await notes.inputValue(), "rascunho descartado");
+  assert.equal(await one(`select count(*)::int from client where name = 'Admissão Tela' and notes = 'rascunho descartado'`), 0);
+  // Editar de novo, salvar: confirmação, volta à visualização com os dados novos e campos bloqueados.
+  await form.getByRole("button", { name: "Editar", exact: true }).click();
+  await notes.fill("primeira etapa");
+  await form.getByLabel("Titular da conta").fill("Titular Teste");
   await form.getByRole("button", { name: "Salvar alterações" }).click();
-  await page.waitForTimeout(600);
-  if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-salvando-600ms.png` });
-  await form.getByRole("button", { name: "Salvo" }).waitFor({ timeout: 15_000 });
-  await page.getByText(/Cliente Admissão Tela atualizado/).waitFor({ timeout: 5_000 });
-  assert.equal(await form.getByLabel("Observações").inputValue(), "editado pela tela", "a tela mantém o que foi salvo");
-  await page.waitForTimeout(500);
-  if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-salvo.png` });
+  await page.getByText(/Cliente Admissão Tela atualizado/).waitFor({ timeout: 15_000 });
+  await form.getByRole("button", { name: "Editar", exact: true }).waitFor();
+  assert.equal(await notes.isDisabled(), true);
+  assert.equal(await notes.inputValue(), "primeira etapa", "a tela mostra o que foi salvo");
   assert.equal(await page.getByText("Salvando…").count(), 0, "nenhum botão preso em Salvando…");
-  assert.equal(await one(`select notes from client where name = 'Admissão Tela'`), "editado pela tela");
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/clientes-visualizacao-apos-salvar.png` });
+  // Sem recarregar a página: Editar reabre na hora e uma segunda edição soma à primeira.
+  await page.waitForTimeout(2000);
+  await form.getByRole("button", { name: "Editar", exact: true }).click();
+  assert.equal(await notes.isEditable(), true);
+  assert.equal(await notes.inputValue(), "primeira etapa", "carrega os dados mais recentes");
+  await form.getByLabel("Agência").fill("1234");
+  await form.getByRole("button", { name: "Salvar alterações" }).click();
+  await form.getByRole("button", { name: "Editar", exact: true }).waitFor({ timeout: 15_000 });
+  assert.equal(await one(`select notes from client where name = 'Admissão Tela'`), "primeira etapa");
+  assert.equal(await one(`select bank_holder_name from client where name = 'Admissão Tela'`), "Titular Teste");
+  assert.equal(await one(`select bank_branch from client where name = 'Admissão Tela'`), "1234");
+  // Falha ao salvar (CPF de outro cliente): continua em edição, com o que foi digitado e o erro.
+  const otherCpf = await one(`select document from client where tenant_id = 'ten_roberio' and document is not null and name <> 'Admissão Tela' limit 1`);
+  assert.ok(otherCpf, "há outro cliente com CPF para provocar a falha");
+  await form.getByRole("button", { name: "Editar", exact: true }).click();
+  await form.getByLabel("CPF", { exact: true }).fill(otherCpf);
+  await notes.fill("não deve gravar");
+  await form.getByRole("button", { name: "Salvar alterações" }).click();
+  await form.getByRole("alert").or(form.locator(".form-feedback-error")).first().waitFor({ timeout: 15_000 });
+  await form.getByRole("button", { name: "Salvar alterações" }).waitFor();
+  assert.equal(await notes.inputValue(), "não deve gravar", "preserva o que foi digitado");
+  assert.equal(await one(`select notes from client where name = 'Admissão Tela'`), "primeira etapa");
   await context.close();
 });
 

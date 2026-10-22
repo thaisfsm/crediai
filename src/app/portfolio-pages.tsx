@@ -18,7 +18,7 @@ import { MoneyInput } from "./money-input";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
-export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: () => void, resetOnSuccess = true) {
+export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: (message: string) => void, resetOnSuccess = true) {
   // O estado "enviando" é próprio (não de uma transição do React): termina assim que a ação responde, mesmo que a tela
   // ainda esteja sendo atualizada em seguida, e nunca deixa o botão preso em "Salvando…".
   const [pending, setPending] = useState(false);
@@ -36,7 +36,7 @@ export function useFormAction(action: (data: FormData) => Promise<ActionResult>,
         if (result.ok) {
           if (resetOnSuccess) form.reset();
           setFeedback({ tone: "ok", text: result.message });
-          onDone?.();
+          onDone?.(result.message);
         } else {
           setFeedback({ tone: "error", text: result.error });
         }
@@ -465,17 +465,19 @@ export function useCompanyNamePrefill() {
 }
 
 // Formulário de cadastro e edição. CPF e telefone recebem máscara enquanto o usuário digita; o servidor grava só os dígitos.
-function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | null; onChanged: () => void; onCancel: () => void }) {
+// Cliente existente: abre em modo de visualização (campos realmente bloqueados) e "Editar" libera os campos. Ao salvar volta
+// para a visualização com os dados novos; "Cancelar" descarta o que foi digitado. `onMode` troca o modo a partir do pai.
+function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, onSaved, notice = null }: { editing: ClientRow | null; readOnly?: boolean; onChanged: () => void; onCancel: () => void; onEdit?: () => void; onSaved?: (message: string) => void; notice?: string | null }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
   const [resetKey, setResetKey] = useState(0);
   const [docRows, setDocRows] = useState(1);
   const [saved, setSaved] = useState(false);
-  const afterSave = () => {
-    // O botão mostra "Salvo ✓" por um instante; na edição o formulário fecha depois disso.
-    setSaved(true);
+  const afterSave = (message: string) => {
     onChanged();
-    if (editing) setTimeout(() => { setSaved(false); onCancel(); }, 1500);
-    else { setResetKey((key) => key + 1); setDocRows(1); setTimeout(() => setSaved(false), 2500); }
+    // Edição: volta já para a visualização (sem temporizador, que fechava a tela se o usuário clicasse em Editar de novo).
+    if (editing) { onSaved?.(message); return; }
+    setSaved(true);
+    setResetKey((key) => key + 1); setDocRows(1); setTimeout(() => setSaved(false), 2500);
   };
   // No cadastro novo os documentos já podem ser escolhidos aqui: o cliente é gravado primeiro e cada arquivo vai em seguida,
   // um por envio (limite de 5 MB por arquivo). Se um arquivo falhar, o cliente fica salvo e o aviso diz qual anexar depois.
@@ -506,9 +508,10 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
   const company = useCompanyNamePrefill();
   return (
     <section className="panel form-panel" aria-label={editing ? "Editar cliente" : "Novo cliente"}>
-      <div className="panel-header"><div><h2>{editing ? `Editar ${editing.name}` : "Novo cliente"}</h2><p>Somente o nome é obrigatório.</p></div></div>
+      <div className="panel-header"><div><h2>{editing ? `${readOnly ? "Cadastro de" : "Editar"} ${editing.name}` : "Novo cliente"}</h2><p>{readOnly ? "Clique em Editar para alterar os dados." : "Somente o nome é obrigatório."}</p></div></div>
       <form className="form-grid" onSubmit={onSubmit} onInput={(event) => { if (!editing) prefill.onInput(event); company.onInput(event); }} key={resetKey}>
         {editing && <input type="hidden" name="clientId" value={editing.id} />}
+        <fieldset className="client-fields" disabled={readOnly}>
         {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
         <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
@@ -567,12 +570,17 @@ function ClientForm({ editing, onChanged, onCancel }: { editing: ClientRow | nul
             </div>
           </fieldset>
         )}
+        </fieldset>
         <div className="form-actions">
-          {editing && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
-          <button className="primary-button" disabled={pending}><Icon name={editing || saved ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : saved ? "Salvo" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>
+          {readOnly && <>
+            <button type="button" className="outline-button" onClick={onCancel}>Fechar</button>
+            <button type="button" className="primary-button" onClick={onEdit}><Icon name="check" size={16} /> Editar</button>
+          </>}
+          {editing && !readOnly && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
+          {!readOnly && <button className="primary-button" disabled={pending}><Icon name={editing || saved ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : saved ? "Salvo" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>}
         </div>
       </form>
-      <Feedback feedback={feedback} />
+      <Feedback feedback={feedback ?? (notice ? { tone: "ok", text: notice } : null)} />
     </section>
   );
 }
@@ -927,7 +935,13 @@ function ClientSearch({ onOpen, onEdit, onDelete }: { onOpen: (id: string) => vo
 }
 
 export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null }) {
-  const [editing, setEditing] = useState<ClientRow | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  // Número que muda a cada Editar/Cancelar/Salvar: o formulário recomeça com os dados mais recentes salvos.
+  const [formVersion, setFormVersion] = useState(0);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const editing = portfolio.clients.find((client) => client.id === editingId) ?? null;
+  const startEdit = (row: ClientRow) => { setEditingId(row.id); setEditMode(true); setSavedNotice(null); setFormVersion((version) => version + 1); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const [deleting, setDeleting] = useState<ClientRow | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(initialClientId);
   // Busca o cliente de novo a cada atualização para que a página mostre os valores mais recentes.
@@ -939,9 +953,12 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
         <button className="primary-button" onClick={onNewOperation}><Icon name="plus" size={17} /> Nova operação</button>
       </PageHeading>
       <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }}
-        onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) { setEditing(row); window.scrollTo({ top: 0, behavior: "smooth" }); } }}
+        onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) startEdit(row); }}
         onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />
-      <ClientForm key={editing?.id ?? "new"} editing={editing} onChanged={onChanged} onCancel={() => setEditing(null)} />
+      <ClientForm key={`${editing?.id ?? "new"}:${formVersion}:${editing ? JSON.stringify(editing) : ""}`} editing={editing} readOnly={editing !== null && !editMode} onChanged={onChanged}
+        notice={savedNotice} onEdit={() => { setEditMode(true); setSavedNotice(null); setFormVersion((version) => version + 1); }}
+        onSaved={(message) => { setSavedNotice(message); setEditMode(false); }}
+        onCancel={() => { setSavedNotice(null); if (editing && editMode) { setEditMode(false); setFormVersion((version) => version + 1); } else { setEditingId(null); setEditMode(false); } }} />
       {editing && (() => {
         // Documentos também na edição (anexar depois do cadastro). Usa a linha atual da carteira para a lista refletir os envios.
         const current = portfolio.clients.find((client) => client.id === editing.id);
@@ -952,12 +969,12 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
         {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente cadastrado ainda." /> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Operações</th><th>Emprestado</th><th>Juros recebidos</th><th>Saldo</th><th /></tr></thead>
-            <tbody>{portfolio.clients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button><button className="outline-button" onClick={() => { setEditing(client); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></span></td></tr>)}</tbody>
+            <tbody>{portfolio.clients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button><button className="outline-button" onClick={() => startEdit(client)}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></span></td></tr>)}</tbody>
           </table></div>
         )}
         {portfolio.archivedClients.length > 0 && <p className="capital-note">Arquivados ({portfolio.archivedClients.length}): {portfolio.archivedClients.map((client) => client.name).join(", ")}. O histórico deles continua em Operações e Pagamentos.</p>}
       </section>
-      {deleting && <DeleteClientDialog client={deleting} onClose={() => setDeleting(null)} onChanged={() => { if (editing?.id === deleting.id) setEditing(null); onChanged(); }} />}
+      {deleting && <DeleteClientDialog client={deleting} onClose={() => setDeleting(null)} onChanged={() => { if (editingId === deleting.id) setEditingId(null); onChanged(); }} />}
     </div>
   );
 }
