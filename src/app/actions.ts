@@ -135,7 +135,7 @@ function clientFields(data: FormData, previous?: { document: string | null; phon
   const bank = bankFields((key, max) => text(data, key, max));
   if (!bank.ok) return bank;
   for (const key of bankKeys) profile[key] = bank.values[key];
-  return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 500)), ...profile } };
+  return { ok: true as const, values: { name, document: document.value, phone: phone.value, notes: optional(text(data, "notes", 2000)), onlineCasinoBettor: data.get("onlineCasinoBettor") === "on", ...profile } };
 }
 
 // O mesmo CPF uma só vez por carteira (clientes arquivados contam). A consulta dá a mensagem com o nome; o índice único

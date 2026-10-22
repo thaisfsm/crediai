@@ -94,7 +94,7 @@ export async function loadTenantPortfolio() {
     documentsByClient.set(document.clientId, [...(documentsByClient.get(document.clientId) ?? []), { ...document, createdAt: document.createdAt.toISOString() }]);
   }
   const clientList: ClientRecord[] = data.clientRows.map((client) => ({
-    id: client.id, name: client.name, document: client.document, phone: client.phone, notes: client.notes, archivedAt: client.archivedAt?.toISOString() ?? null, createdAt: client.createdAt.toISOString(),
+    id: client.id, name: client.name, document: client.document, phone: client.phone, notes: client.notes, onlineCasinoBettor: client.onlineCasinoBettor, archivedAt: client.archivedAt?.toISOString() ?? null, createdAt: client.createdAt.toISOString(),
     ...(Object.fromEntries(clientProfileKeys.map((key) => [key, client[key]])) as ClientProfile),
   }));
   const portfolio = buildPortfolio({
