@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fragment, useRef, useState, useTransition, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { formatDate, formatMoney, parseMoneyToCents, centsToInput } from "@/lib/finance/format";
 import {
   LEGACY_EVIDENCE_ERROR, OBLIGATION_KINDS, OBLIGATION_SOURCES, OBLIGATION_STATUS, PAYABLE_TABS, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, kindSlug, obligationDescription, statusSlug,
@@ -26,14 +26,16 @@ export function ObligationStatusChip({ status }: { status: ObligationStatus }) {
 // uma queda de conexão): o servidor grava uma única baixa por chave.
 const newRequestId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`);
 
-// Formulário da baixa de UMA obrigação: tipo (fixo, o da obrigação), valor (até o saldo), data efetiva, forma de
-// pagamento, referência e observações. O servidor confere tudo de novo com a obrigação travada.
-export function PaymentForm({ obligation, today, minDate, availableCents, onDone, onCancel }: {
-  obligation: Obligation; today: string; minDate: string; availableCents: number | null; onDone: () => void; onCancel: () => void;
+// Janela "Registrar pagamento" da obrigação, igual à das Operações: resumo, data do pagamento, valor pago, atalhos de um
+// clique (parcela e saldo), forma, referência e observação. O servidor confere tudo de novo com a obrigação travada
+// (capital, entrada do contrato, saldo). Obrigação bloqueada mostra o motivo e o caminho para destravar.
+export function ObligationPaymentDialog({ obligation, today, minDate, availableCents, onDone, onClose }: {
+  obligation: Obligation; today: string; minDate: string; availableCents: number | null; onDone: () => void; onClose: () => void;
 }) {
   const requestId = useRef<string | null>(null);
-  const [amountText, setAmountText] = useState(centsToInput(obligation.balanceCents));
-  const { pending, feedback, onSubmit } = useFormAction(registerInvestmentPaymentAction, () => { requestId.current = null; onDone(); });
+  const [amountText, setAmountText] = useState("");
+  const { pending, feedback, onSubmit } = useFormAction(registerInvestmentPaymentAction, () => { requestId.current = null; onDone(); onClose(); });
+  const blocked = obligation.paymentBlock;
   const amountCents = amountText.trim() ? parseMoneyToCents(amountText) : null;
   const invalid = amountText.trim() !== "" && (amountCents === null || amountCents <= 0);
   const aboveBalance = amountCents !== null && amountCents > obligation.balanceCents;
@@ -44,74 +46,75 @@ export function PaymentForm({ obligation, today, minDate, availableCents, onDone
     input.value = requestId.current;
     onSubmit(event);
   };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const contractHref = `/investidores/investimentos/${obligation.investmentId}`;
   return (
-    <div className="schedule-form" aria-label="Registrar baixa">
-      <form className="form-grid" onSubmit={submit}>
-        <input type="hidden" name="scheduleItemId" value={obligation.scheduleItemId} />
-        <input type="hidden" name="kind" value={obligation.kind} />
-        <input type="hidden" name="requestId" defaultValue="" />
-        <label className="field"><span>Tipo da obrigação</span><select value={obligation.kind} disabled><option value={obligation.kind}>{OBLIGATION_KINDS[obligation.kind]}</option></select></label>
-        <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amountText} onChange={(event) => setAmountText(event.target.value)} aria-invalid={invalid || aboveBalance || aboveCapital} required /></label>
-        <DateField label="Data efetiva do pagamento" name="paidOn" defaultValue={today} min={minDate} max={today} required />
-        <label className="field"><span>Forma de pagamento</span><select name="method" defaultValue="" required>
-          <option value="" disabled>Escolha</option>
-          {(Object.keys(PAYMENT_METHODS) as PaymentMethod[]).map((method) => <option key={method} value={method}>{PAYMENT_METHODS[method]}</option>)}
-        </select></label>
-        <label className="field field-wide"><span>Referência ou comprovante</span><input name="reference" maxLength={REFERENCE_MAX} placeholder="Ex.: ID da transação Pix (opcional)" /></label>
-        <label className="field field-wide"><span>Observações</span><textarea name="notes" rows={2} maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
-        {invalid && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor precisa ser maior que zero, sem sinal de menos.</p>}
-        {aboveBalance && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o saldo da obrigação ({formatMoney(obligation.balanceCents)}).</p>}
-        {!aboveBalance && aboveCapital && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o capital disponível ({formatMoney(Math.max(availableCents ?? 0, 0))}).</p>}
-        {amountCents !== null && amountCents > 0 && !aboveBalance && !aboveCapital && (
-          <p className="capital-note field-wide">
-            Saldo da obrigação: {formatMoney(obligation.balanceCents)} → <strong>{formatMoney(obligation.balanceCents - amountCents)}</strong>
-            {availableCents !== null && <> · Capital disponível: {formatMoney(availableCents)} → <strong>{formatMoney(availableCents - amountCents)}</strong></>}. Sai do capital uma única vez, na data informada.
-          </p>
-        )}
-        <div className="form-actions">
-          <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>
-          <button className="primary-button" disabled={pending || invalid || aboveBalance || aboveCapital}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Confirmar baixa"}</button>
+    <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Registrar pagamento de ${obligation.investorName}`}>
+        <div className="panel-header">
+          <div><h2>{obligation.investorName} — {obligation.contractLabel}</h2><p>Parcela {obligation.number} vence {formatDate(obligation.dueDate)} · <ObligationStatusChip status={obligation.status} /></p></div>
+          <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
-      </form>
-      <Feedback feedback={feedback} />
+        <ObligationDetail obligation={obligation} />
+        {blocked ? (
+          <>
+            <p className="capital-note">{blocked}</p>
+            <div className="form-actions">
+              <button type="button" className="outline-button" onClick={onClose}>Fechar</button>
+              <Link prefetch={false} className="primary-button" href={contractHref}>{blocked === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}</Link>
+            </div>
+          </>
+        ) : (
+          <form className="form-grid" onSubmit={submit}>
+            <input type="hidden" name="scheduleItemId" value={obligation.scheduleItemId} />
+            <input type="hidden" name="kind" value={obligation.kind} />
+            <input type="hidden" name="requestId" defaultValue="" />
+            <DateField label="Data do pagamento" name="paidOn" defaultValue={today} min={minDate} max={today} required />
+            <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(obligation.balanceCents)} value={amountText} onChange={(event) => setAmountText(event.target.value)} aria-invalid={invalid || aboveBalance || aboveCapital} required autoFocus /></label>
+            <div className="payment-shortcuts field-wide">
+              <button type="button" className="outline-button" onClick={() => setAmountText(centsToInput(obligation.balanceCents))}>Parcela {obligation.number} ({formatMoney(obligation.balanceCents)})</button>
+              {obligation.balanceCents > 1 && <button type="button" className="outline-button" onClick={() => setAmountText(centsToInput(Math.floor(obligation.balanceCents / 2)))}>Metade ({formatMoney(Math.floor(obligation.balanceCents / 2))})</button>}
+            </div>
+            <label className="field"><span>Forma de pagamento</span><select name="method" defaultValue={obligation.defaultMethod ?? "OTHER"} required>
+              {(Object.keys(PAYMENT_METHODS) as PaymentMethod[]).map((method) => <option key={method} value={method}>{PAYMENT_METHODS[method]}</option>)}
+            </select></label>
+            <label className="field"><span>Referência ou comprovante</span><input name="reference" maxLength={REFERENCE_MAX} placeholder="Ex.: ID da transação Pix (opcional)" /></label>
+            <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
+            {invalid && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor precisa ser maior que zero, sem sinal de menos.</p>}
+            {aboveBalance && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o saldo da obrigação ({formatMoney(obligation.balanceCents)}).</p>}
+            {!aboveBalance && aboveCapital && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o capital disponível ({formatMoney(Math.max(availableCents ?? 0, 0))}).</p>}
+            {amountCents !== null && amountCents > 0 && !aboveBalance && !aboveCapital && (
+              <p className="capital-note field-wide">
+                Saldo da obrigação: {formatMoney(obligation.balanceCents)} → <strong>{formatMoney(obligation.balanceCents - amountCents)}</strong>
+                {availableCents !== null && <> · Capital disponível: {formatMoney(availableCents)} → <strong>{formatMoney(availableCents - amountCents)}</strong></>}. Sai do capital uma única vez, na data informada.
+              </p>
+            )}
+            <div className="form-actions">
+              <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
+              <button className="primary-button" disabled={pending || amountCents === null || invalid || aboveBalance || aboveCapital}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
+            </div>
+          </form>
+        )}
+        <Feedback feedback={feedback} />
+      </section>
     </div>
   );
 }
 
-// Pagar em um clique: registra a baixa do saldo inteiro da obrigação, hoje, na forma de pagamento combinada no contrato
-// (sem ela, como "Outro"). É a mesma ação e as mesmas conferências do formulário: o servidor recusa se o capital não
-// cobre, se a entrada do contrato não foi registrada etc. A chave do envio evita pagamento em dobro no clique duplo.
-export function QuickPayButton({ obligation, today, onDone }: { obligation: Pick<Obligation, "scheduleItemId" | "kind" | "balanceCents" | "defaultMethod">; today: string; onDone: () => void }) {
-  const requestId = useRef<string | null>(null);
-  const [pending, startTransition] = useTransition();
-  const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const pay = () => {
-    requestId.current ??= newRequestId();
-    const data = new FormData();
-    data.set("scheduleItemId", obligation.scheduleItemId);
-    data.set("kind", obligation.kind);
-    data.set("amount", centsToInput(obligation.balanceCents));
-    data.set("paidOn", today);
-    data.set("method", obligation.defaultMethod ?? "OTHER");
-    data.set("requestId", requestId.current);
-    setFeedback(null);
-    startTransition(async () => {
-      try {
-        const result = await registerInvestmentPaymentAction(data);
-        if (result.ok) { requestId.current = null; setFeedback({ tone: "ok", text: result.message }); onDone(); }
-        else setFeedback({ tone: "error", text: result.error });
-      } catch {
-        setFeedback({ tone: "error", text: "Não foi possível registrar o pagamento. Confira a lista antes de tentar de novo." });
-      }
-    });
-  };
-  const method = PAYMENT_METHODS[obligation.defaultMethod ?? "OTHER"];
+// Botão "Registrar pagamento" que abre a janela acima; vale em qualquer tela que liste obrigações.
+export function PayObligationButton({ obligation, today, cycleStartedOn = null, availableCents = null, onDone }: {
+  obligation: Obligation; today: string; cycleStartedOn?: string | null; availableCents?: number | null; onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const minDate = [obligation.startDate, cycleStartedOn ?? ""].sort().at(-1) as string;
   return (
     <>
-      <button type="button" className="primary-button" disabled={pending} onClick={pay} title={`Registra ${formatMoney(obligation.balanceCents)} como pago hoje (${method}) e tira do capital`}>
-        <Icon name="check" size={15} /> {pending ? "Pagando…" : `Pagar ${formatMoney(obligation.balanceCents)}`}
-      </button>
-      <Feedback feedback={feedback} />
+      <button type="button" className="primary-button" onClick={() => setOpen(true)}><Icon name="check" size={15} /> Registrar pagamento</button>
+      {open && <ObligationPaymentDialog obligation={obligation} today={today} minDate={minDate} availableCents={availableCents} onDone={onDone} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -146,7 +149,7 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
   obligations: Obligation[]; today: string; cycleStartedOn: string | null; availableCents: number | null; canPay: boolean; showInvestor?: boolean; label: string; onDone: () => void;
 }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [paying, setPaying] = useState(false);
+  const [paying, setPaying] = useState<string | null>(null);
   const columns = showInvestor ? 9 : 8;
   return (
     <div className="table-scroll"><table className="data-table" aria-label={label}>
@@ -166,14 +169,15 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
               <td><strong>{formatMoney(obligation.balanceCents)}</strong></td>
               <td><ObligationStatusChip status={obligation.status} /></td>
               <td className="actions-cell"><span className="row-actions">
-                <button type="button" className="outline-button" aria-expanded={open} onClick={() => { setOpenKey(open ? null : obligation.key); setPaying(false); }}>{open ? "Fechar" : "Detalhes"}</button>
-                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && !obligation.paymentBlock && (
-                  <>
-                    <QuickPayButton obligation={obligation} today={today} onDone={onDone} />
-                    <button type="button" className="outline-button" onClick={() => { setOpenKey(obligation.key); setPaying(true); }}>Pagar parte</button>
-                  </>
+                <button type="button" className="outline-button" aria-expanded={open} onClick={() => { setOpenKey(open ? null : obligation.key); }}>{open ? "Fechar" : "Detalhes"}</button>
+                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && (
+                  <button type="button" className={obligation.paymentBlock ? "outline-button" : "primary-button"} onClick={() => setPaying(obligation.key)}><Icon name="check" size={15} /> Registrar pagamento</button>
                 )}
               </span>
+              {paying === obligation.key && (
+                <ObligationPaymentDialog obligation={obligation} today={today} minDate={minDate} availableCents={availableCents}
+                  onDone={onDone} onClose={() => setPaying(null)} />
+              )}
               {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (
                 <small className="admin-cell-note payment-block-note">Baixa bloqueada: <Link prefetch={false} className="text-link inline-link" href={`/investidores/investimentos/${obligation.investmentId}`}>{obligation.paymentBlock === LEGACY_EVIDENCE_ERROR ? "indique a entrada ou o aporte anterior" : "registre a entrada no capital"}</Link></small>
               )}</td>
@@ -181,20 +185,6 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
             {open && (
               <tr className="obligation-detail-row"><td colSpan={columns}>
                 <ObligationDetail obligation={obligation} />
-                {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (
-                  <>
-                    <p className="capital-note">{obligation.paymentBlock}</p>
-                    <div className="form-actions">
-                      <Link prefetch={false} className="primary-button" href={`/investidores/investimentos/${obligation.investmentId}`}>
-                        {obligation.paymentBlock === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}
-                      </Link>
-                    </div>
-                  </>
-                )}
-                {paying && canPay && obligation.balanceCents > 0 && !obligation.paymentBlock && (
-                  <PaymentForm obligation={obligation} today={today} minDate={minDate} availableCents={availableCents}
-                    onDone={() => { setPaying(false); onDone(); }} onCancel={() => setPaying(false)} />
-                )}
               </td></tr>
             )}
           </Fragment>

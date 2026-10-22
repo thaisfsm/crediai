@@ -8,7 +8,7 @@ import type { InvestmentDetail } from "@/lib/investors/queries";
 import { LINE_KINDS, MAX_SCHEDULE_ITEMS, PAYMENT_FREQUENCIES, applyRedemptionDate, defaultModelPlan, redemptionDate, suggestScheduleLines, type LineKind, type PaymentFrequency, type ScheduleLineInput } from "@/lib/investors/rules";
 import { DateField } from "../date-field";
 import { MoneyInput } from "../money-input";
-import { QuickPayButton } from "../contas-a-pagar/payables-ui";
+import { PayObligationButton } from "../contas-a-pagar/payables-ui";
 import { EmptyPanel, Feedback, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
 import { addInvestmentScheduleItemAction, deleteInvestmentScheduleItemAction, saveInvestmentScheduleLinesAction, updateInvestmentScheduleItemAction } from "./actions";
@@ -124,11 +124,11 @@ function ScheduleRow({ line, position, investmentId, editable, editing, payable,
         <td><LineStatusChip status={line.status} /></td>
         <td>{line.description ?? "—"}</td>
         {editable && locked && <td className="actions-cell"><span className="row-actions">
-          {payable.map((obligation) => <QuickPayButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}
+          {payable.map((obligation) => <PayObligationButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}
           <span className="status-chip status-paid"><i />Com pagamento</span></span></td>}
         {editable && !locked && (
           <td className="actions-cell">
-            {payable.length > 0 && <span className="row-actions">{payable.map((obligation) => <QuickPayButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}</span>}
+            {payable.length > 0 && <span className="row-actions">{payable.map((obligation) => <PayObligationButton key={obligation.key} obligation={obligation} today={today} onDone={onDone} />)}</span>}
             <form className="row-actions" onSubmit={remove.onSubmit}>
               <input type="hidden" name="investmentId" value={investmentId} /><input type="hidden" name="itemId" value={line.id} />
               <button type="button" className="outline-button" onClick={onEdit}>{editing ? "Fechar" : "Editar"}</button>
