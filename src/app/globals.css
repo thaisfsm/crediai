@@ -1275,3 +1275,4 @@ button { color:inherit; }
   .data-table.fit-table .row-actions .outline-button { width: 100%; min-height: 30px; padding: 5px 6px; font-size: 11px; white-space: nowrap; justify-content: center; }
 }
 .row-deferred td { color:#8298a8; font-style:italic; }
+.client-fields { display: contents; border: 0; margin: 0; padding: 0; min-width: 0; }
