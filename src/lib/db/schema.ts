@@ -275,6 +275,8 @@ export const clients = pgTable("client", {
   businessCnpj: text("business_cnpj"),
   // Data em que o cliente começou no emprego (opcional; não pode ser futura).
   businessAdmissionDate: date("business_admission_date", { mode: "string" }),
+  // Marcação manual: apostadora de cassino online. Vai pesar no score de concessão de crédito quando o score existir.
+  onlineCasinoBettor: boolean("online_casino_bettor").notNull().default(false),
   // Dados bancários e chave Pix (opcionais). Regras em src/lib/bank-account.ts.
   bankHolderName: text("bank_holder_name"),
   bankHolderDocument: text("bank_holder_document"),

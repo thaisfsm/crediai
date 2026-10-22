@@ -154,6 +154,44 @@ test("CE5b. data de admissão na empresa: opcional, data real e não futura; edi
   assert.equal(await one(`select business_admission_date is null from client where id = '${client.id}'`), true);
 });
 
+test("CE5c. observações longas e marca de apostadora de cassino online: grava, edita, desmarca e fica só na própria carteira", async () => {
+  const long = "Observação livre. ".repeat(100).trim();
+  const ok = await create(robério, { name: "Cassino Teste", notes: long, onlineCasinoBettor: "on" });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  const client = await clientOf("ten_roberio", "Cassino Teste");
+  assert.equal(await one(`select online_casino_bettor from client where id = '${client.id}'`), true);
+  assert.equal(await one(`select length(notes) from client where id = '${client.id}'`), long.length);
+  assert.equal((await create(robério, { name: "Cassino Sem Marca" })).ok, true);
+  assert.equal(await one(`select online_casino_bettor from client where name = 'Cassino Sem Marca'`), false);
+  // Edição sem a caixa desmarca; com a caixa marca de novo.
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Cassino Teste", notes: "curta" })).ok, true);
+  assert.equal(await one(`select online_casino_bettor from client where id = '${client.id}'`), false);
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Cassino Teste", onlineCasinoBettor: "on" })).ok, true);
+  assert.equal(await one(`select online_casino_bettor from client where id = '${client.id}'`), true);
+  assert.equal(await one(`select count(*)::int from client where tenant_id <> 'ten_roberio' and online_casino_bettor`), 0);
+  // Tela: a caixa e as observações ficam no fim do cadastro e a ficha mostra a marca.
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "pt-BR" });
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+  const page = await context.newPage();
+  await page.goto(`${BASE}/?tela=clientes`);
+  const form = page.getByRole("region", { name: "Novo cliente" });
+  const box = form.getByRole("checkbox", { name: "Apostadora de cassino online" });
+  await box.scrollIntoViewIfNeeded();
+  assert.equal(await box.isChecked(), false);
+  await form.getByLabel("Observações").fill("anotação pela tela");
+  await box.check();
+  if (process.env.E2E_SCREENSHOTS) await form.locator("fieldset.form-section", { hasText: "Observações e risco" }).last().screenshot({ path: `${process.env.E2E_SCREENSHOTS}/cadastro-observacoes-cassino.png` });
+  await form.getByLabel("Nome completo").fill("Cassino Tela");
+  await form.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await page.getByText(/Cliente Cassino Tela cadastrado/).waitFor({ timeout: 15_000 });
+  assert.equal(await one(`select online_casino_bettor from client where name = 'Cassino Tela'`), true);
+  assert.equal(await one(`select notes from client where name = 'Cassino Tela'`), "anotação pela tela");
+  await context.close();
+});
+
 test("CE6. busca no servidor: nome sem acentos e em partes, CPF e telefone com ou sem máscara", async () => {
   for (const query of ["joao", "JOÃO", "conceicao silva", "silva  joão", "Conceição"]) assert.deepEqual(names(await search(robério, query)), ["João da Conceição Silva"], query);
   for (const query of ["529.982.247-25", "52998224725", "982247", "(11) 98765-4321", "11987654321", "98765", "(21) 99876"]) assert.deepEqual(names(await search(robério, query)), ["João da Conceição Silva"], query);

@@ -520,7 +520,6 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
         <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
         <label className="field"><span>Instagram</span><input name="instagram" maxLength={200} defaultValue={editing?.instagram ?? ""} placeholder="@usuario ou instagram.com/usuario" /></label>
         <label className="field"><span>Facebook</span><input name="facebook" maxLength={200} defaultValue={editing?.facebook ?? ""} placeholder="@usuario ou facebook.com/usuario" /></label>
-        <label className="field field-wide"><span>Observações</span><input name="notes" placeholder="Opcional" maxLength={500} defaultValue={editing?.notes ?? ""} /></label>
         <AddressFields kind="residential" client={editing} />
         <fieldset className="form-section field-wide">
           <legend>Empresa</legend>
@@ -570,6 +569,14 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
             </div>
           </fieldset>
         )}
+          <fieldset className="form-section field-wide">
+            <legend>Observações e risco</legend>
+            <div className="form-grid">
+              <label className="field field-wide"><span>Observações</span><textarea name="notes" rows={4} maxLength={2000} placeholder="Escreva o que desejar sobre o cliente (opcional)" defaultValue={editing?.notes ?? ""} /></label>
+              <label className="check-field field-wide"><input type="checkbox" name="onlineCasinoBettor" defaultChecked={editing?.onlineCasinoBettor ?? false} /><span>Apostadora de cassino online</span></label>
+              <p className="capital-note field-wide">Marcação interna: quando houver score de concessão de crédito, ela vai tirar muitos pontos do cliente. Por enquanto só fica registrada no cadastro.</p>
+            </div>
+          </fieldset>
         </fieldset>
         <div className="form-actions">
           {readOnly && <>
@@ -754,6 +761,7 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
           <div key={reference.slot}><dt>Referência {reference.slot}</dt><dd>{reference.name ? [reference.name, reference.relationship, reference.phone].filter(Boolean).join(" · ") : "Não informada"}</dd></div>
         ))}
         <div><dt>Avalista</dt><dd>{guarantor || "Não informado"}</dd></div>
+        {client.onlineCasinoBettor && <div><dt>Risco</dt><dd><span className="status-chip status-late"><i />Apostadora de cassino online</span></dd></div>}
         {client.notes && <div><dt>Observações</dt><dd>{client.notes}</dd></div>}
       </dl>
     </section>

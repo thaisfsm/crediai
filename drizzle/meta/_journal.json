@@ -218,6 +218,13 @@
       "when": 1792608469982,
       "tag": "0031_data_admissao_empresa",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792684547175,
+      "tag": "0032_marca_apostadora_cassino",
+      "breakpoints": true
     }
   ]
 }

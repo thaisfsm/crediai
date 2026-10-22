@@ -6,7 +6,7 @@ import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, typ
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED" | "RENEGOTIATED";
 
-export type ClientRecord = ClientProfile & { id: string; name: string; document: string | null; phone: string | null; notes: string | null; archivedAt: string | null; createdAt: string };
+export type ClientRecord = ClientProfile & { id: string; name: string; document: string | null; phone: string | null; notes: string | null; onlineCasinoBettor: boolean; archivedAt: string | null; createdAt: string };
 export type DeferralRecord = { id: string; originalNumber: number; originalDueDate: string; originalAmountCents: number; additionCents: number; newDueDate: string; newAmountCents: number; reason: string | null; createdAt: string };
 export type OperationCorrection = { id: string; reason: string; changes: { field: string; before: string | null; after: string | null }[]; editedAt: string; editedBy: string | null };
 export type OperationRecord = {

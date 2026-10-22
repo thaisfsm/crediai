@@ -1,0 +1,1 @@
+ALTER TABLE "client" ADD COLUMN "online_casino_bettor" boolean DEFAULT false NOT NULL;
