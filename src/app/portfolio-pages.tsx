@@ -1695,14 +1695,36 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
   const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
   const ordered = portfolio.operationOrder.flatMap((id) => byId.get(id) ?? []);
-  const operations = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
+  const focused = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
+  // Filtro por cliente (nome sem acento, CPF, telefone, e-mail) ou código da operação; só esconde linhas, nada é recalculado.
+  const [clientFilter, setClientFilter] = useState("");
+  const wanted = clientFilter.trim();
+  const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const clientsById = new Map(portfolio.clients.map((client) => [client.id, client]));
+  const operations = wanted === "" ? focused : focused.filter((operation) => {
+    const client = clientsById.get(operation.clientId);
+    const digits = onlyDigits(wanted);
+    return fold(operation.clientName).includes(fold(wanted)) || fold(operation.code).includes(fold(wanted.replace(/^#/, "")))
+      || (client?.email ? fold(client.email).includes(fold(wanted)) : false)
+      || (digits.length >= 3 && [client?.document, client?.phone, client?.whatsapp].some((value) => value && onlyDigits(value).includes(digits)));
+  });
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description="Cadastre e acompanhe os empréstimos da sua carteira." />
       {focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
-        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
+        {focused.length > 0 && (
+          <div className="client-search" role="search">
+            <label className="client-search-box">
+              <span className="search-icon"><Icon name="search" size={16} /></span>
+              <input type="search" aria-label="Filtrar operações por cliente" placeholder="Filtrar por cliente: nome, CPF, telefone, e-mail ou código" value={clientFilter} maxLength={120} onChange={(event) => setClientFilter(event.target.value)} />
+              {clientFilter && <button type="button" className="search-clear" aria-label="Limpar filtro" onClick={() => setClientFilter("")}>×</button>}
+            </label>
+            {wanted && <p className="client-search-status" role="status">{operations.length === 0 ? "Nenhuma operação encontrada para esse cliente." : `${operations.length} ${operations.length === 1 ? "operação" : "operações"} de ${wanted}.`}</p>}
+          </div>
+        )}
+        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? "Nenhuma operação encontrada para esse cliente." : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
       </section>
     </div>
   );

@@ -220,6 +220,24 @@ test("K3b. Dashboard atualiza depois das baixas: quitada e renovada saem do atra
   assert.equal(money(today[1]), received / 100, "recebido hoje = soma dos pagamentos de hoje no banco");
 });
 
+test("K3c. Operações: filtro por cliente mostra só as operações do cliente (sem acento) e volta ao limpar", async () => {
+  await robério.goto(`${BASE}/?tela=operacoes`);
+  const list = robério.getByRole("region", { name: "Lista de operações" });
+  const filter = list.getByRole("searchbox", { name: "Filtrar operações por cliente" });
+  await filter.waitFor();
+  const total = await list.locator("tbody tr").count();
+  assert.ok(total > 1, "há várias operações");
+  await filter.fill("nina proxima");
+  await robério.waitForFunction(() => document.querySelectorAll('section[aria-label="Lista de operações"] tbody tr').length === 1);
+  assert.match(await list.locator("tbody tr").first().innerText(), /Nina Próxima/);
+  await filter.fill("cliente que nao existe");
+  await list.getByText("Nenhuma operação encontrada para esse cliente.").first().waitFor();
+  await list.getByRole("button", { name: "Limpar filtro" }).click();
+  assert.equal(await list.locator("tbody tr").count(), total, "limpar volta a lista inteira");
+  const SHOTS = process.env.E2E_SCREENSHOTS;
+  if (SHOTS) { await filter.fill("bia"); await robério.waitForTimeout(300); await robério.screenshot({ path: `${SHOTS}/operacoes-filtro-cliente.png` }); }
+});
+
 test("K4. isolamento: cada tenant vê só as próprias cobranças, na ordem certa; o tenant B fica intacto", async () => {
   await openCharges(fernando);
   const all = await readAll(fernando);
