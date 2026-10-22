@@ -366,7 +366,7 @@ test("CP11. isolamento: o tenant B e o MASTER não veem nem mexem no capital do 
   // O MASTER vê o contrato do A no módulo Investidores, mas só consulta: sem botão de entrada nem de baixa.
   const masterView = await page(thais, `/investidores/investimentos/${ids.investmentB}`);
   assert.ok(masterView.html.includes("outra carteira"));
-  assert.ok(!masterView.html.includes("Registrar a entrada deste investimento no capital") && !masterView.html.includes("Registrar baixa") && !masterView.html.includes("Pagar parte"));
+  assert.ok(!masterView.html.includes("Registrar a entrada deste investimento no capital") && !masterView.html.includes("Registrar baixa") && !masterView.html.includes("Pagar parte") && !masterView.html.includes("Registrar pagamento"));
   const ownerView = await page(robério, `/investidores/investimentos/${ids.investmentB}`);
   assert.ok(ownerView.html.includes("Registrar a entrada deste investimento no capital"));
   assert.deepEqual({ payments: await count("investment_payment", "ten_roberio"), balance: await available("ten_roberio") }, before);
@@ -436,15 +436,20 @@ test("CP13. telas no desktop e no celular: contas a pagar, detalhe, formulário 
     if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/contas-a-pagar-${label}.png`, fullPage: true });
     await browserPage.goto(`${BASE}/contas-a-pagar?aba=proximos`);
     const upcoming = browserPage.getByRole("region", { name: "Próximas" });
-    await upcoming.getByRole("button", { name: "Pagar parte" }).first().click();
-    const form = upcoming.locator('[aria-label="Registrar baixa"]');
+    await upcoming.getByRole("button", { name: "Registrar pagamento" }).first().click();
+    const form = browserPage.getByRole("dialog");
     await form.getByLabel("Valor pago (R$)").waitFor();
+    assert.equal(await form.locator(`input[name="paidOn"]`).count(), 1, "data do pagamento na janela");
     await form.getByLabel("Valor pago (R$)").fill("999.999,00");
     await form.getByText("maior que o saldo da obrigação").waitFor();
-    assert.equal(await form.getByRole("button", { name: "Confirmar baixa" }).isDisabled(), true);
+    assert.equal(await form.getByRole("button", { name: "Registrar pagamento" }).isDisabled(), true);
+    await form.getByRole("button", { name: /^Parcela \d+ \(/ }).click();
+    assert.notEqual(await form.getByLabel("Valor pago (R$)").inputValue(), "999.999,00", "atalho da parcela preenche o valor");
     await form.getByLabel("Valor pago (R$)").fill("1,00");
     await form.getByText("Sai do capital uma única vez").waitFor();
-    if (SHOTS) await upcoming.screenshot({ path: `${SHOTS}/contas-a-pagar-baixa-${label}.png` });
+    if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/contas-a-pagar-baixa-${label}.png` });
+    await browserPage.keyboard.press("Escape");
+    await form.waitFor({ state: "detached" });
     assert.equal(await browserPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal (${label})`);
     await browserPage.goto(`${BASE}/investidores/investimentos/${ids.investmentB}`);
     const cash = browserPage.getByRole("region", { name: "Capital e pagamentos do investimento" });
