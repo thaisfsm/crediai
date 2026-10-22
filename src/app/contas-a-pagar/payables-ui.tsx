@@ -60,15 +60,9 @@ export function ObligationPaymentDialog({ obligation, today, minDate, availableC
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <ObligationDetail obligation={obligation} />
-        {blocked ? (
-          <>
-            <p className="capital-note">{blocked}</p>
-            <div className="form-actions">
-              <button type="button" className="outline-button" onClick={onClose}>Fechar</button>
-              <Link prefetch={false} className="primary-button" href={contractHref}>{blocked === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}</Link>
-            </div>
-          </>
-        ) : (
+        {blocked && (
+          <p className="capital-note">{blocked} <Link prefetch={false} className="text-link inline-link" href={contractHref}>{blocked === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}</Link></p>
+        )}
           <form className="form-grid" onSubmit={submit}>
             <input type="hidden" name="scheduleItemId" value={obligation.scheduleItemId} />
             <input type="hidden" name="kind" value={obligation.kind} />
@@ -98,7 +92,6 @@ export function ObligationPaymentDialog({ obligation, today, minDate, availableC
               <button className="primary-button" disabled={pending || amountCents === null || invalid || aboveBalance || aboveCapital}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
             </div>
           </form>
-        )}
         <Feedback feedback={feedback} />
       </section>
     </div>

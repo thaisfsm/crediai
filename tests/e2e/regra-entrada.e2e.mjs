@@ -256,7 +256,14 @@ test("RE8. telas no desktop e no celular: contrato antigo com a indicação de a
     await browserPage.getByRole("button", { name: "Registrar pagamento" }).first().click();
     const unblock = browserPage.getByRole("dialog").getByRole("link", { name: /Indicar a entrada ou o aporte no contrato|Registrar a entrada no capital/ });
     await unblock.first().waitFor();
-    assert.ok((await unblock.first().getAttribute("href")).includes("/investidores/investimentos/"), "o botão leva ao contrato");
+    assert.ok((await unblock.first().getAttribute("href")).includes("/investidores/investimentos/"), "o link leva ao contrato");
+    // A janela é a mesma das Operações (data, valor, atalhos); a regra continua valendo: o servidor recusa a baixa.
+    const dialog = browserPage.getByRole("dialog");
+    await dialog.getByLabel("Valor pago (R$)").waitFor();
+    await dialog.getByRole("button", { name: /^Parcela \d+ \(/ }).click();
+    await dialog.getByRole("button", { name: "Registrar pagamento" }).click();
+    await dialog.getByText(/entrada|aporte/i).last().waitFor();
+    assert.equal(await dialog.getByText("Pagamento registrado").count(), 0, "nada foi pago");
     if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/regra-entrada-detalhes-bloqueado-${label}.png` });
     if (SHOTS) await browserPage.screenshot({ path: `${SHOTS}/regra-entrada-contas-${label}.png`, fullPage: true });
     await browserPage.goto(`${BASE}/investidores/investimentos/${legacyId}`);
