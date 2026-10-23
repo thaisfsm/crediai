@@ -225,6 +225,13 @@
       "when": 1792684547175,
       "tag": "0032_marca_apostadora_cassino",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792772591723,
+      "tag": "0033_pagamento_historico",
+      "breakpoints": true
     }
   ]
 }

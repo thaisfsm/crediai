@@ -4,14 +4,14 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordAdminAudit } from "@/lib/admin/audit";
-import { withTenantContext } from "@/lib/auth/guards";
+import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
 import { checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
 import {
   INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, checkPriorContribution, contractLabel, entryDateOf, entryDuplicateConflict, entryEvidence, isBeforeCycle, maskReference,
-  parsePaymentFields, paymentCategory,
+  parsePaymentFields, paymentCategory, type PaymentFields,
 } from "@/lib/investors/payables";
 import { loadEntryEvidence, priorContributionCandidates } from "@/lib/investors/payables-queries";
 import type { ActionResult } from "../actions";
@@ -110,6 +110,33 @@ export async function registerInvestmentEntryAction(data: FormData): Promise<Act
   }
 }
 
+// Grava a baixa histórica: só a baixa (sem saída de capital), com a mesma auditoria. Contrato renovado não recebe baixa de
+// principal; a regra da entrada no capital não se aplica (o pagamento é anterior ao capital). O banco confere de novo.
+async function registerHistoricalPayment({ tx, tenantId, session, payment, item, investment, investorName, balanceCents, cycleNumber }: {
+  tx: TenantTransaction; tenantId: string; session: { user: { id: string } } & Parameters<typeof recordAdminAudit>[1]; payment: PaymentFields; item: typeof investmentScheduleItems.$inferSelect;
+  investment: typeof investments.$inferSelect; investorName: string; balanceCents: number; cycleNumber: number;
+}): Promise<ActionResult> {
+  const [renewed] = await tx.select({ renewed: sql<boolean>`exists (select 1 from investment r where r.renewed_from_investment_id = ${investment.id} and r.tenant_id = ${tenantId})` }).from(investments).where(and(eq(investments.id, investment.id), eq(investments.tenantId, tenantId)));
+  if (payment.kind === "PRINCIPAL" && renewed.renewed) return { ok: false, error: "Este contrato foi renovado: o principal que faltava devolver passou para a renovação. Registre a devolução no contrato novo. Nada foi registrado." };
+  const label = contractLabel(investment);
+  const paymentId = id("ivp");
+  await tx.insert(investmentPayments).values({
+    id: paymentId, tenantId, investmentId: investment.id, scheduleItemId: item.id, kind: payment.kind, amountCents: payment.amountCents, paidOn: payment.paidOn,
+    method: payment.method, reference: payment.reference, notes: payment.notes, capitalMovementId: null, historical: true, idempotencyKey: payment.requestId, createdByUserId: session.user.id,
+  });
+  const remaining = balanceCents - payment.amountCents;
+  await recordAdminAudit(tx, session, {
+    action: "INVESTMENT_PAYMENT_REGISTERED", entity: "investment_payment", entityId: paymentId, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Baixa histórica registrada para ${investorName} (sem saída de capital)`,
+    after: {
+      historical: true, kind: OBLIGATION_KINDS[payment.kind], amountCents: payment.amountCents, paidOn: payment.paidOn, method: PAYMENT_METHODS[payment.method], reference: maskReference(payment.reference),
+      notes: payment.notes ? "preenchidas" : null, investmentId: investment.id, investorId: investment.investorId, contract: label, scheduleItemId: item.id, installment: item.number,
+      dueDate: item.dueDate, capitalMovementId: null, balanceAfterCents: remaining, cycleNumber,
+    },
+  });
+  return { ok: true, message: `Pagamento histórico de ${formatMoney(payment.amountCents)} registrado em ${formatDate(payment.paidOn)} (${OBLIGATION_KINDS[payment.kind]}), sem mexer no capital. ${remaining > 0 ? `Saldo da obrigação: ${formatMoney(remaining)}.` : "Obrigação paga."}` };
+}
+
 // Baixa de uma obrigação (rendimento ou devolução de principal) de uma linha do cronograma. Pode ser parcial; nunca
 // passa do saldo; a data fica entre o início do contrato e hoje; o capital não fica negativo em nenhuma data. Grava
 // exatamente UMA saída de capital por baixa: o mesmo envio repetido (clique duplo, nova tentativa) é reconhecido pela chave.
@@ -120,6 +147,9 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
   });
   if (!parsed.ok) return parsed;
   const payment = parsed.value;
+  // Baixa histórica (migração 0033): pagamento de data anterior ao início do ciclo do capital. Registra a baixa na data
+  // real, sem saída de capital (o capital começou depois; o dinheiro já saiu antes dele existir).
+  const historical = field(data, "historical", 4) === "1";
   try {
     const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
       // Trava a carteira: duas saídas simultâneas (baixas, Financeiro, operações) não usam o mesmo capital.
@@ -146,8 +176,13 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
       const [{ paid }] = await tx.select({ paid: sql<string>`coalesce(sum(${investmentPayments.amountCents}), 0)` }).from(investmentPayments)
         .where(and(eq(investmentPayments.tenantId, tenantId), eq(investmentPayments.scheduleItemId, item.id), eq(investmentPayments.kind, payment.kind)));
       const balanceCents = expectedCents - Number(paid);
-      const check = checkPayment(payment, { today: todayIso(), startDate: investment.startDate, cycleStartedOn: cycleStartedOn(wallet), balanceCents, investmentStatus: investment.status });
+      const startedOn = cycleStartedOn(wallet);
+      const beforeCycle = Boolean(startedOn && payment.paidOn < startedOn);
+      if (beforeCycle && !historical) return { ok: false, error: `A data do pagamento (${formatDate(payment.paidOn)}) é anterior ao início do capital (${formatDate(startedOn as string)}). Confirme que é um pagamento histórico para registrar sem mexer no capital. Nada foi registrado.` };
+      if (historical && !beforeCycle) return { ok: false, error: `Pagamento histórico só vale para datas anteriores ao início do capital (${startedOn ? formatDate(startedOn) : "—"}). Nesta data o pagamento sai do capital normalmente. Nada foi registrado.` };
+      const check = checkPayment(payment, { today: todayIso(), startDate: investment.startDate, cycleStartedOn: historical ? null : startedOn, balanceCents, investmentStatus: investment.status });
       if (!check.ok) return check;
+      if (historical) return registerHistoricalPayment({ tx, tenantId, session, payment, item, investment, investorName: row.investorName, balanceCents, cycleNumber: wallet.cycleNumber });
       // Mesma regra das saídas do Financeiro: o capital não pode ficar negativo hoje nem em nenhuma data a partir da baixa.
       const capital = await tenantCapital(tx, tenantId);
       const outflow = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents: payment.amountCents, occurredAt: payment.paidOn, availableCents: capital.summary.availableCents });

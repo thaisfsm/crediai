@@ -851,7 +851,9 @@ export const investmentPayments = pgTable("investment_payment", {
   method: text("method").notNull(),
   reference: text("reference"),
   notes: text("notes"),
-  capitalMovementId: text("capital_movement_id").notNull(),
+  // Baixa histórica: pagamento anterior ao início do ciclo do capital; não tem saída de capital (capital_movement_id nulo).
+  capitalMovementId: text("capital_movement_id"),
+  historical: boolean("historical").notNull().default(false),
   idempotencyKey: text("idempotency_key").notNull(),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -863,6 +865,7 @@ export const investmentPayments = pgTable("investment_payment", {
   foreignKey({ name: "investment_payment_investment_same_tenant_fk", columns: [table.tenantId, table.investmentId], foreignColumns: [investments.tenantId, investments.id] }).onDelete("restrict"),
   foreignKey({ name: "investment_payment_schedule_item_same_tenant_fk", columns: [table.tenantId, table.scheduleItemId], foreignColumns: [investmentScheduleItems.tenantId, investmentScheduleItems.id] }).onDelete("restrict"),
   foreignKey({ name: "investment_payment_movement_same_tenant_fk", columns: [table.tenantId, table.capitalMovementId], foreignColumns: [capitalMovements.tenantId, capitalMovements.id] }).onDelete("restrict"),
+  check("investment_payment_historical_no_movement", sql`${table.historical} = (${table.capitalMovementId} is null)`),
   check("investment_payment_amount_positive", sql`${table.amountCents} > 0`),
   check("investment_payment_kind_valid", sql`${table.kind} in ('YIELD', 'PRINCIPAL')`),
   check("investment_payment_method_valid", sql`${table.method} in ('PIX', 'TRANSFER', 'CASH', 'OTHER')`),

@@ -29,9 +29,12 @@ const newRequestId = () => (typeof crypto !== "undefined" && "randomUUID" in cry
 // Janela "Registrar pagamento" da obrigação, igual à das Operações: resumo, data do pagamento, valor pago, atalhos de um
 // clique (parcela e saldo), forma, referência e observação. O servidor confere tudo de novo com a obrigação travada
 // (capital, entrada do contrato, saldo). Obrigação bloqueada mostra o motivo e o caminho para destravar.
-export function ObligationPaymentDialog({ obligation, today, minDate, availableCents, onDone, onClose }: {
-  obligation: Obligation; today: string; minDate: string; availableCents: number | null; onDone: () => void; onClose: () => void;
+export function ObligationPaymentDialog({ obligation, today, cycleStartedOn, availableCents, onDone, onClose }: {
+  obligation: Obligation; today: string; cycleStartedOn: string | null; availableCents: number | null; onDone: () => void; onClose: () => void;
 }) {
+  // Data anterior ao início do capital: pagamento histórico, registrado na data real sem sair do capital (migração 0033).
+  const [paidOn, setPaidOn] = useState(today);
+  const historical = Boolean(cycleStartedOn && paidOn < cycleStartedOn);
   const requestId = useRef<string | null>(null);
   const [amountText, setAmountText] = useState("");
   const { pending, feedback, onSubmit } = useFormAction(registerInvestmentPaymentAction, () => { requestId.current = null; onDone(); onClose(); });
@@ -39,7 +42,7 @@ export function ObligationPaymentDialog({ obligation, today, minDate, availableC
   const amountCents = amountText.trim() ? parseMoneyToCents(amountText) : null;
   const invalid = amountText.trim() !== "" && (amountCents === null || amountCents <= 0);
   const aboveBalance = amountCents !== null && amountCents > obligation.balanceCents;
-  const aboveCapital = availableCents !== null && amountCents !== null && amountCents > availableCents;
+  const aboveCapital = !historical && availableCents !== null && amountCents !== null && amountCents > availableCents;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     const input = event.currentTarget.elements.namedItem("requestId") as HTMLInputElement;
     requestId.current ??= newRequestId();
@@ -60,14 +63,15 @@ export function ObligationPaymentDialog({ obligation, today, minDate, availableC
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <ObligationDetail obligation={obligation} />
-        {blocked && (
+        {blocked && !historical && (
           <p className="capital-note">{blocked} <Link prefetch={false} className="text-link inline-link" href={contractHref}>{blocked === LEGACY_EVIDENCE_ERROR ? "Indicar a entrada ou o aporte no contrato" : "Registrar a entrada no capital"}</Link></p>
         )}
           <form className="form-grid" onSubmit={submit}>
             <input type="hidden" name="scheduleItemId" value={obligation.scheduleItemId} />
             <input type="hidden" name="kind" value={obligation.kind} />
             <input type="hidden" name="requestId" defaultValue="" />
-            <DateField label="Data do pagamento" name="paidOn" defaultValue={today} min={minDate} max={today} required />
+            <DateField label="Data do pagamento" name="paidOn" defaultValue={today} min={obligation.startDate} max={today} required onChange={setPaidOn} />
+            {historical && <input type="hidden" name="historical" value="1" />}
             <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(obligation.balanceCents)} value={amountText} onChange={(event) => setAmountText(event.target.value)} aria-invalid={invalid || aboveBalance || aboveCapital} required autoFocus /></label>
             <div className="payment-shortcuts field-wide">
               <button type="button" className="outline-button" onClick={() => setAmountText(centsToInput(obligation.balanceCents))}>Parcela {obligation.number} ({formatMoney(obligation.balanceCents)})</button>
@@ -78,13 +82,14 @@ export function ObligationPaymentDialog({ obligation, today, minDate, availableC
             </select></label>
             <label className="field"><span>Referência ou comprovante</span><input name="reference" maxLength={REFERENCE_MAX} placeholder="Ex.: ID da transação Pix (opcional)" /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
+            {historical && <p className="capital-note field-wide">Pagamento histórico: {formatDate(paidOn)} é anterior ao início do capital ({formatDate(cycleStartedOn as string)}). Fica registrado na data real, marca a parcela como paga e <strong>não sai do capital</strong>.</p>}
             {invalid && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor precisa ser maior que zero, sem sinal de menos.</p>}
             {aboveBalance && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o saldo da obrigação ({formatMoney(obligation.balanceCents)}).</p>}
             {!aboveBalance && aboveCapital && <p className="form-feedback form-feedback-error field-wide" role="alert">O valor é maior que o capital disponível ({formatMoney(Math.max(availableCents ?? 0, 0))}).</p>}
             {amountCents !== null && amountCents > 0 && !aboveBalance && !aboveCapital && (
               <p className="capital-note field-wide">
                 Saldo da obrigação: {formatMoney(obligation.balanceCents)} → <strong>{formatMoney(obligation.balanceCents - amountCents)}</strong>
-                {availableCents !== null && <> · Capital disponível: {formatMoney(availableCents)} → <strong>{formatMoney(availableCents - amountCents)}</strong></>}. Sai do capital uma única vez, na data informada.
+                {historical ? "." : <>{availableCents !== null && <> · Capital disponível: {formatMoney(availableCents)} → <strong>{formatMoney(availableCents - amountCents)}</strong></>}. Sai do capital uma única vez, na data informada.</>}
               </p>
             )}
             <div className="form-actions">
@@ -103,11 +108,10 @@ export function PayObligationButton({ obligation, today, cycleStartedOn = null, 
   obligation: Obligation; today: string; cycleStartedOn?: string | null; availableCents?: number | null; onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const minDate = [obligation.startDate, cycleStartedOn ?? ""].sort().at(-1) as string;
   return (
     <>
       <button type="button" className="primary-button" onClick={() => setOpen(true)}><Icon name="check" size={15} /> Registrar pagamento</button>
-      {open && <ObligationPaymentDialog obligation={obligation} today={today} minDate={minDate} availableCents={availableCents} onDone={onDone} onClose={() => setOpen(false)} />}
+      {open && <ObligationPaymentDialog obligation={obligation} today={today} cycleStartedOn={cycleStartedOn} availableCents={availableCents} onDone={onDone} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -128,7 +132,7 @@ export function ObligationDetail({ obligation }: { obligation: Obligation }) {
         <div className="table-scroll"><table className="data-table" aria-label="Baixas registradas">
           <thead><tr><th>Data do pagamento</th><th>Valor</th><th>Forma</th><th>Referência</th><th>Registrado por</th></tr></thead>
           <tbody>{obligation.payments.map((payment) => (
-            <tr key={payment.id}><td>{formatDate(payment.paidOn)}</td><td><strong>{formatMoney(payment.amountCents)}</strong></td><td>{PAYMENT_METHODS[payment.method]}</td><td>{payment.reference ?? "—"}{payment.notes && <small className="admin-cell-note">{payment.notes}</small>}</td><td>{payment.createdBy ?? "—"}</td></tr>
+            <tr key={payment.id}><td>{formatDate(payment.paidOn)}</td><td><strong>{formatMoney(payment.amountCents)}</strong></td><td>{PAYMENT_METHODS[payment.method]}{payment.historical && <small className="admin-cell-note">Histórico · sem saída de capital</small>}</td><td>{payment.reference ?? "—"}{payment.notes && <small className="admin-cell-note">{payment.notes}</small>}</td><td>{payment.createdBy ?? "—"}</td></tr>
           ))}</tbody>
         </table></div>
       ) : <p className="capital-note">Nenhuma baixa registrada ainda.</p>}
@@ -149,7 +153,6 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
       <thead><tr><th>Descrição</th>{showInvestor && <th>Investidor e contrato</th>}<th>Vencimento</th><th>Tipo</th><th>Previsto</th><th>Pago</th><th>Saldo</th><th>Situação</th><th /></tr></thead>
       <tbody>{obligations.map((obligation) => {
         const open = openKey === obligation.key;
-        const minDate = [obligation.startDate, cycleStartedOn ?? ""].sort().at(-1) as string;
         return (
           <Fragment key={obligation.key}>
             <tr>
@@ -168,7 +171,7 @@ export function ObligationsTable({ obligations, today, cycleStartedOn, available
                 )}
               </span>
               {paying === obligation.key && (
-                <ObligationPaymentDialog obligation={obligation} today={today} minDate={minDate} availableCents={availableCents}
+                <ObligationPaymentDialog obligation={obligation} today={today} cycleStartedOn={cycleStartedOn} availableCents={availableCents}
                   onDone={onDone} onClose={() => setPaying(null)} />
               )}
               {canPay && obligation.balanceCents > 0 && obligation.investmentStatus !== "CANCELED" && obligation.paymentBlock && (
