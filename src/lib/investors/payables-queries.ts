@@ -22,7 +22,7 @@ export async function loadPayments(tx: TenantTransaction, tenantId: string, inve
   return rows.map(({ payment, createdBy }) => ({
     id: payment.id, scheduleItemId: payment.scheduleItemId, kind: payment.kind as ObligationKind, amountCents: payment.amountCents, paidOn: payment.paidOn,
     method: payment.method as PaymentMethod, reference: payment.reference, notes: payment.notes, createdAt: payment.createdAt.toISOString(), createdBy: createdBy ?? null,
-    capitalMovementId: payment.capitalMovementId,
+    capitalMovementId: payment.capitalMovementId, historical: payment.historical,
   }));
 }
 

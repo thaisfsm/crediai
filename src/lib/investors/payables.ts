@@ -47,7 +47,7 @@ export type PayableInvestment = {
 export type PayableItem = { id: string; investmentId: string; number: number; dueDate: string; yieldCents: number; principalCents: number; description: string | null };
 export type PayablePayment = {
   id: string; scheduleItemId: string; kind: ObligationKind; amountCents: number; paidOn: string; method: PaymentMethod; reference: string | null;
-  notes: string | null; createdAt: string; createdBy: string | null; capitalMovementId: string;
+  notes: string | null; createdAt: string; createdBy: string | null; capitalMovementId: string | null; historical: boolean;
 };
 // Origem da obrigação. Nesta entrega só existem as dos contratos de investidores (cronograma do contrato). Outras
 // despesas entram depois com a própria origem e o próprio registro, sem passar pelo cronograma nem pela baixa do

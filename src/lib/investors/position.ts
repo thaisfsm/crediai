@@ -9,7 +9,7 @@ export const LINE_STATUS = { PREVISTA: "Prevista", VENCIDA: "Vencida", PARCIAL: 
 export type LineStatus = keyof typeof LINE_STATUS;
 
 type Item = { id: string; number: number; dueDate: string; yieldCents: number; principalCents: number; description: string | null };
-type Payment = { id: string; scheduleItemId: string; kind: "YIELD" | "PRINCIPAL"; amountCents: number; paidOn: string; method: string; reference: string | null; capitalMovementId: string };
+type Payment = { id: string; scheduleItemId: string; kind: "YIELD" | "PRINCIPAL"; amountCents: number; paidOn: string; method: string; reference: string | null; capitalMovementId: string | null };
 type Investment = { amountCents: number; status: string; startDate: string; maturityDate: string | null };
 // Contrato já renovado: o principal que faltava devolver passou para o contrato novo (não fica pendente aqui).
 type Options = { renewed?: boolean };
