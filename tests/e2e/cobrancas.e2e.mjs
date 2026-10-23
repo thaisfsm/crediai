@@ -238,6 +238,33 @@ test("K3c. Operações: filtro por cliente mostra só as operações do cliente 
   if (SHOTS) { await filter.fill("bia"); await robério.waitForTimeout(300); await robério.screenshot({ path: `${SHOTS}/operacoes-filtro-cliente.png` }); }
 });
 
+test("K3d. Operações: Ativas é o padrão, Quitadas e Todos separam a lista e a busca respeita a aba", async () => {
+  await robério.goto(`${BASE}/?tela=operacoes`);
+  const list = robério.getByRole("region", { name: "Lista de operações" });
+  const tab = (name) => list.getByRole("button", { name: new RegExp(`^${name}`) });
+  await tab("Ativas").waitFor();
+  assert.equal(await tab("Ativas").getAttribute("aria-pressed"), "true", "Ativas é o padrão");
+  const open = await list.locator("tbody tr").count();
+  const open2 = Number(await one(`select count(*) from loan_operation where tenant_id = 'ten_roberio' and status = 'OPEN'`));
+  const paid = Number(await one(`select count(*) from loan_operation where tenant_id = 'ten_roberio' and status = 'PAID'`));
+  const all = Number(await one(`select count(*) from loan_operation where tenant_id = 'ten_roberio'`));
+  assert.equal(open, open2);
+  assert.ok(paid > 0, "há quitada (Zélia Antiga)");
+  assert.ok(!(await list.innerText()).includes("Zélia Antiga"), "quitada fora da aba padrão");
+  const filter = list.getByRole("searchbox", { name: "Filtrar operações por cliente" });
+  await filter.fill("zelia");
+  await list.getByText("Nenhuma operação ativa encontrada para essa busca.").first().waitFor();
+  await tab("Quitadas").click();
+  await robério.waitForFunction(() => document.querySelectorAll('section[aria-label="Lista de operações"] tbody tr').length === 1);
+  assert.match(await list.locator("tbody tr").first().innerText(), /Zélia Antiga/);
+  await filter.fill("");
+  await robério.waitForFunction((n) => document.querySelectorAll('section[aria-label="Lista de operações"] tbody tr').length === n, paid);
+  await tab("Todos").click();
+  await robério.waitForFunction((n) => document.querySelectorAll('section[aria-label="Lista de operações"] tbody tr').length === n, all);
+  const SHOTS = process.env.E2E_SCREENSHOTS;
+  if (SHOTS) { await tab("Ativas").click(); await robério.waitForTimeout(300); await list.screenshot({ path: `${SHOTS}/operacoes-abas-situacao.png` }); }
+});
+
 test("K4. isolamento: cada tenant vê só as próprias cobranças, na ordem certa; o tenant B fica intacto", async () => {
   await openCharges(fernando);
   const all = await readAll(fernando);
