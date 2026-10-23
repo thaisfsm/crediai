@@ -1119,6 +1119,14 @@ button { color:inherit; }
 .field input[aria-invalid="true"] { border-color:rgba(255,133,137,.6); }
 .field input:disabled { opacity:.55; }
 
+/* Situação das operações (Ativas / Quitadas / Todos) */
+.situation-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:14px 18px 0; }
+.situation-tab { display:inline-flex; align-items:center; gap:7px; min-height:36px; padding:0 14px; border:1px solid rgba(112,145,170,.28); border-radius:999px; background:#07111f; color:#9db0bf; font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; }
+.situation-tab:hover { border-color:rgba(65,190,226,.5); color:#eef6fb; }
+.situation-tab.active { border-color:rgba(65,190,226,.78); background:rgba(65,190,226,.14); color:#eef6fb; }
+.situation-count { min-width:20px; padding:1px 6px; border-radius:999px; background:rgba(112,145,170,.2); font-size:11px; text-align:center; }
+@media (max-width: 720px) { .situation-tabs { padding:12px 12px 0; } }
+
 /* Busca rápida de clientes */
 .client-search { display:flex; flex-direction:column; gap:10px; padding:14px 18px 4px; }
 .client-search-box { position:relative; display:flex; align-items:center; max-width:560px; }

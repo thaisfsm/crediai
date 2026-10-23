@@ -1698,6 +1698,13 @@ function FocusPanel({ focus, portfolio, onClear }: { focus: Exclude<OperationsFo
   );
 }
 
+type OperationSituation = "OPEN" | "PAID" | "ALL";
+const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode }[] = [
+  { key: "OPEN", label: "Ativas", icon: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></> },
+  { key: "PAID", label: "Quitadas", icon: <><circle cx="12" cy="12" r="9" /><path d="m8 12.5 3 3 5-6" /></> },
+  { key: "ALL", label: "Todos", icon: <><path d="M4 6h16M4 12h16M4 18h16" /></> },
+];
+
 export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void }) {
   const ids = focus ? new Set(portfolio.operations.filter((operation) => operation.status === "OPEN" && (focus === "lent" ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0)).map((operation) => operation.id)) : null;
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
@@ -1706,10 +1713,14 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   const focused = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
   // Filtro por cliente (nome sem acento, CPF, telefone, e-mail) ou código da operação; só esconde linhas, nada é recalculado.
   const [clientFilter, setClientFilter] = useState("");
+  // Situação: ativas por padrão (quitadas poluem a busca do dia a dia); Todos inclui quitadas, renegociadas e canceladas.
+  const [situation, setSituation] = useState<OperationSituation>("OPEN");
   const wanted = clientFilter.trim();
   const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
   const clientsById = new Map(portfolio.clients.map((client) => [client.id, client]));
-  const operations = wanted === "" ? focused : focused.filter((operation) => {
+  const situationCounts = { OPEN: focused.filter((operation) => operation.status === "OPEN").length, PAID: focused.filter((operation) => operation.status === "PAID").length, ALL: focused.length };
+  const bySituation = focus || situation === "ALL" ? focused : focused.filter((operation) => operation.status === situation);
+  const operations = wanted === "" ? bySituation : bySituation.filter((operation) => {
     const client = clientsById.get(operation.clientId);
     const digits = onlyDigits(wanted);
     return fold(operation.clientName).includes(fold(wanted)) || fold(operation.code).includes(fold(wanted.replace(/^#/, "")))
@@ -1722,6 +1733,16 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
       {focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
+        {!focus && focused.length > 0 && (
+          <div className="situation-tabs" role="group" aria-label="Situação das operações">
+            {SITUATION_TABS.map((tab) => (
+              <button key={tab.key} type="button" className={`situation-tab${situation === tab.key ? " active" : ""}`} aria-pressed={situation === tab.key} onClick={() => setSituation(tab.key)}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{tab.icon}</svg>
+                {tab.label}<span className="situation-count">{situationCounts[tab.key]}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {focused.length > 0 && (
           <div className="client-search" role="search">
             <label className="client-search-box">
@@ -1732,7 +1753,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
             {wanted && <p className="client-search-status" role="status">{operations.length === 0 ? "Nenhuma operação encontrada para esse cliente." : `${operations.length} ${operations.length === 1 ? "operação" : "operações"} de ${wanted}.`}</p>}
           </div>
         )}
-        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? "Nenhuma operação encontrada para esse cliente." : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
+        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? (wanted ? `Nenhuma operação ${situation === "OPEN" ? "ativa" : situation === "PAID" ? "quitada" : ""} encontrada para essa busca.`.replace("  ", " ") : situation === "PAID" ? "Nenhuma operação quitada." : "Nenhuma operação ativa.") : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
       </section>
     </div>
   );
