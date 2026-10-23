@@ -24,7 +24,13 @@ test("AU3. IP do cliente: primeiro endereço do x-forwarded-for, senão x-real-i
 test("AU4. todas as ações administrativas pedidas têm evento de auditoria gravado no código", () => {
   const source = readFileSync("src/app/admin/actions.ts", "utf8") + readFileSync("src/app/admin/planos/actions.ts", "utf8") + readFileSync("scripts/create-super-admin.ts", "utf8")
     + readFileSync("src/app/investidores/actions.ts", "utf8") + readFileSync("src/app/financeiro/actions.ts", "utf8") + readFileSync("src/app/actions.ts", "utf8")
-    + readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/app/renegotiation-actions.ts", "utf8");
+    + readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/app/renegotiation-actions.ts", "utf8") + readFileSync("src/app/gerentes/actions.ts", "utf8");
+  // Gerentes de contas: toda ação exportada que grava algo registra auditoria na mesma transação.
+  const managers = readFileSync("src/app/gerentes/actions.ts", "utf8");
+  for (const name of [...managers.matchAll(/export async function (\w+)/g)].map((match) => match[1])) {
+    const body = managers.slice(managers.indexOf(`export async function ${name}`)).split(/\nexport async function /)[0];
+    assert.ok(body.includes("recordAdminAudit("), `${name} não grava auditoria`);
+  }
   for (const action of Object.keys(AUDIT_ACTIONS)) assert.ok(source.includes(`"${action}"`), `${action} sem registro`);
   // Toda ação exportada que altera dados chama recordAdminAudit (nenhuma ação administrativa sem auditoria).
   const admin = readFileSync("src/app/admin/actions.ts", "utf8");

@@ -1,0 +1,259 @@
+// Gerente de contas (acesso só de leitura + comissão livre por cliente), de ponta a ponta: servidor + banco + telas.
+// SÓ em ambiente LOCAL e DESCARTÁVEL (ver tests/e2e/README.md): cria clientes, operações e pagamentos fictícios no tenant de teste A.
+//   E2E_DATABASE_URL=… PLAYWRIGHT_MODULE=… node --test tests/e2e/gerentes.e2e.mjs
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdirSync, readFileSync } from "node:fs";
+import postgres from "postgres";
+
+const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
+if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(BASE)) throw new Error("Teste destrutivo: só roda em localhost.");
+const databaseUrl = process.env.E2E_DATABASE_URL;
+if (!databaseUrl || !/@(localhost|127\.0\.0\.1)[:/]/.test(databaseUrl)) throw new Error("E2E_DATABASE_URL precisa apontar para um banco local.");
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+const admin = async (query) => sql.begin(async (tx) => { await tx`select set_config('app.crediai_role', 'SUPER_ADMIN', true)`; return tx.unsafe(query); });
+const one = async (query) => { const value = Object.values((await admin(query))[0] ?? {})[0]; return typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value; };
+const manifest = JSON.parse(readFileSync(".next/server/server-reference-manifest.json", "utf8")).node;
+const actionId = (name) => Object.entries(manifest).find(([, value]) => value.exportedName === name)?.[0] ?? assert.fail(`ação ${name} não encontrada no build`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const SHOTS = process.env.E2E_SCREENSHOTS;
+if (SHOTS) mkdirSync(SHOTS, { recursive: true });
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+after(async () => { await browser.close(); await sql.end(); });
+
+const TODAY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const day = (offset) => { const date = new Date(`${TODAY}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + offset); return date.toISOString().slice(0, 10); };
+const PASSWORD = process.env.E2E_PASSWORD ?? "Senha-Teste-Local-123";
+const NEW_PASSWORD = "Gabrielle-Senha-Nova-2026";
+const EMAIL = "gabrielle.gerente@teste.local";
+const tenantHash = (tenant) => one(`select md5(string_agg(x, '|' order by x)) from (
+  select 'c'||row(c.*)::text x from client c where tenant_id = '${tenant}' and id not like 'c\\_g\\_%' union all select 'o'||row(o.*)::text from loan_operation o where tenant_id = '${tenant}'
+  union all select 'p'||row(p.*)::text from payment p where tenant_id = '${tenant}' union all select 'w'||row(w.*)::text from wallet w where tenant_id = '${tenant}'
+  union all select 'm'||row(m.*)::text from capital_movement m where tenant_id = '${tenant}') t`);
+
+let lastLogin = 0;
+async function throttle() { const wait = 11_000 - (Date.now() - lastLogin); if (wait > 0) await sleep(wait); lastLogin = Date.now(); }
+async function signIn(email, password = PASSWORD, viewport = { width: 1440, height: 900 }) {
+  await throttle();
+  const context = await browser.newContext({ viewport });
+  const page = await context.newPage();
+  await page.goto(`${BASE}/login`);
+  await page.getByLabel("E-mail").fill(email);
+  await page.getByLabel("Senha").fill(password);
+  await page.getByRole("button", { name: /Entrar/ }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 20_000 });
+  return page;
+}
+async function apiLogin(email, password = PASSWORD) {
+  await throttle();
+  const response = await fetch(`${BASE}/api/auth/sign-in/email`, { method: "POST", headers: { "content-type": "application/json", origin: BASE }, body: JSON.stringify({ email, password }) });
+  assert.equal(response.status, 200, `login de ${email}`);
+  return response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+}
+async function action(cookie, name, fields, path = "/gerentes") {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(`_1_${key}`, value);
+  form.append("0", '["$K1"]');
+  const response = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual", headers: { cookie, "next-action": actionId(name), accept: "text/x-component", origin: BASE }, body: form });
+  const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
+  return { status: response.status, result: result ? JSON.parse(result) : null, location: response.headers.get("location") };
+}
+const get = (cookie, path) => fetch(`${BASE}${path}`, { redirect: "manual", headers: { cookie } });
+const poll = async (query, expected) => { for (let i = 0; i < 60; i++) { if (String(await one(query)) === String(expected)) return; await sleep(250); } assert.equal(String(await one(query)), String(expected)); };
+
+let owner, manager, ownerBefore, fernandoBefore, tempPassword, managerCookie;
+
+test("preparação: clientes e operações fictícias do tenant A (indicados e um cliente sem gerente)", async () => {
+  fernandoBefore = await tenantHash("ten_fernando");
+  await admin(`insert into client(id, tenant_id, name, document, phone) values
+    ('c_g_ana','ten_roberio','Ana Indicada','11144477735','11999990001'), ('c_g_beto','ten_roberio','Beto Indicado','52998224725','11999990002'),
+    ('c_g_carla','ten_roberio','Carla Indicada','39053344705','11999990003'), ('c_g_dora','ten_roberio','Dora Sem Gerente','12345678909','11999990004')`);
+  const single = (id, client, status, loan, due, settled) => `('${id}','ten_roberio','${client}',100000,1000,10000,110000,'${loan}','${due}','RATE_PER_OPERATION_SINGLE_PAYMENT_V1','${status}',${settled ? `'${settled}'` : "null"},'SINGLE',null,null,'${due}')`;
+  await admin(`insert into loan_operation(id,tenant_id,client_id,principal_cents,interest_rate_bps,interest_cents,total_cents,loan_date,due_date,calculation_rule,status,settled_at,modality,installment_count,installment_cents,first_due_date) values
+    ${[single("op_g_ana_paid", "c_g_ana", "PAID", day(-50), day(-20), day(-20)), single("op_g_ana_open", "c_g_ana", "OPEN", day(-10), day(20)), single("op_g_beto_open", "c_g_beto", "OPEN", day(-40), day(-5)),
+      single("op_g_carla_paid", "c_g_carla", "PAID", day(-45), day(-15), day(-15)), single("op_g_dora_open", "c_g_dora", "OPEN", day(-5), day(25))].join(",")}`);
+  await admin(`insert into payment(id,tenant_id,operation_id,amount_cents,paid_at) values ('pay_g_ana','ten_roberio','op_g_ana_paid',110000,'${day(-20)}'), ('pay_g_carla','ten_roberio','op_g_carla_paid',110000,'${day(-15)}')`);
+  ownerBefore = await tenantHash("ten_roberio");
+  owner = await signIn("roberio@teste.local");
+});
+
+test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente), paga comissão e cria o acesso", async () => {
+  await owner.goto(`${BASE}/gerentes`);
+  await owner.getByLabel("Nome", { exact: true }).first().fill("Gabrielle Teste");
+  await owner.getByLabel("Comissão padrão (%)").first().fill("10");
+  await owner.getByRole("button", { name: "Cadastrar gerente" }).click();
+  await poll(`select count(*) from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste' and commission_bps=1000`, 1);
+  const managerId = await one(`select id from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste'`);
+  const region = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
+  await region.waitFor();
+  const link = async (label, commission) => {
+    await region.getByLabel("Cliente indicado").selectOption({ label });
+    if (commission) await region.getByLabel("Comissão deste cliente (%)").fill(commission);
+    await region.getByRole("button", { name: "Vincular cliente" }).click();
+    await poll(`select count(*) from client where tenant_id='ten_roberio' and name='${label}' and account_manager_id='${managerId}'`, 1);
+    await owner.waitForTimeout(400);
+  };
+  await link("Ana Indicada");
+  await link("Beto Indicado");
+  await link("Carla Indicada", "20");
+  assert.equal(await one(`select account_manager_bps from client where id='c_g_carla'`), 2000, "Carla com 20% próprios");
+  assert.equal(await one(`select account_manager_bps from client where id='c_g_ana'`), null, "Ana usa o padrão do gerente");
+  assert.equal(await one(`select account_manager_id from client where id='c_g_dora'`), null, "Dora continua sem gerente");
+  // Pagamento de comissão de R$ 10,00 registrado pelo dono.
+  await region.getByRole("button", { name: "Pagar comissão" }).click();
+  await region.getByLabel("Valor pago (R$)").fill("10,00");
+  await region.getByRole("button", { name: "Registrar pagamento da comissão" }).click();
+  await poll(`select coalesce(sum(amount_cents),0) from account_manager_payout where tenant_id='ten_roberio'`, 1000);
+  // Acesso de leitura com senha provisória mostrada uma vez.
+  await owner.reload();
+  const region2 = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
+  await region2.getByLabel("E-mail de acesso do gerente").fill(EMAIL);
+  await region2.getByRole("button", { name: "Criar acesso de leitura" }).click();
+  const note = region2.locator(".capital-note", { hasText: "Senha provisória" });
+  await note.waitFor();
+  tempPassword = (await note.locator("b").nth(1).innerText()).trim();
+  assert.match(tempPassword, /^[A-Za-z0-9]{4}(-[A-Za-z0-9]{4}){3}$/);
+  assert.equal(await one(`select role::text from "user" where email='${EMAIL}'`), "ACCOUNT_MANAGER");
+  assert.equal(await one(`select tenant_id from "user" where email='${EMAIL}'`), "ten_roberio");
+  assert.equal(await one(`select must_change_password from "user" where email='${EMAIL}'`), true);
+  assert.equal(await one(`select count(*) from account_manager where user_id = (select id from "user" where email='${EMAIL}')`), 1);
+  // O hash nunca vai para a auditoria e a senha provisória não aparece nos registros.
+  assert.equal(await one(`select count(*) from admin_audit_log where action like 'MANAGER_%' and tenant_id='ten_roberio'`) >= 6, true);
+  assert.equal(await one(`select count(*) from admin_audit_log where after::text like '%${tempPassword}%' or description like '%${tempPassword}%'`), 0);
+  if (SHOTS) { await owner.reload(); await owner.getByRole("region", { name: "Gerente Gabrielle Teste" }).screenshot({ path: `${SHOTS}/gerentes-tela-do-dono.png` }); }
+});
+
+test("G2. senha provisória: o gerente só passa pela troca de senha e depois entra no painel", async () => {
+  const cookie = await apiLogin(EMAIL, tempPassword);
+  const redirected = await get(cookie, "/gerente");
+  assert.match(redirected.headers.get("location") ?? "", /\/definir-senha/, "com senha provisória, só a troca de senha");
+  const changed = await action(cookie, "changeTemporaryPasswordAction", { currentPassword: tempPassword, newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD }, "/definir-senha");
+  assert.equal(changed.result?.ok ?? changed.result?.json?.ok, true);
+  assert.equal(await one(`select must_change_password from "user" where email='${EMAIL}'`), false);
+  manager = await signIn(EMAIL, NEW_PASSWORD);
+  await manager.waitForURL((url) => url.pathname === "/gerente", { timeout: 15_000 });
+});
+
+test("G3. painel: só os clientes dele, números certos, sem dados pessoais, com as duas cores", async () => {
+  await manager.goto(`${BASE}/gerente`);
+  await manager.locator(".mgr-hero-value").waitFor();
+  const text = await manager.locator("body").innerText();
+  // Ganho: Ana 10% de R$ 100,00 + Carla 20% de R$ 100,00 = R$ 30,00; paga R$ 10,00; a receber R$ 20,00; prevista (Ana e Beto 10% de R$ 100,00) R$ 20,00.
+  assert.match((await manager.locator(".mgr-hero-value").innerText()).replace(/\s/g, " "), /R\$ 20,00/);
+  assert.match(text.replace(/\s/g, " "), /Já recebida R\$ 10,00/);
+  assert.match(text.replace(/\s/g, " "), /Prevista \(juros ainda a pagar\) R\$ 20,00/);
+  assert.match(text.replace(/\s/g, " "), /Comissão gerada até hoje\s*R\$ 30,00/);
+  for (const name of ["Ana Indicada", "Beto Indicado", "Carla Indicada"]) assert.ok(text.includes(name), `${name} aparece`);
+  assert.ok(!text.includes("Dora Sem Gerente"), "cliente de outro gerente/sem gerente não aparece");
+  const html = await manager.content();
+  for (const secret of ["11144477735", "111.444.777-35", "11999990001", "52998224725", "12345678909", "Dora"]) assert.ok(!html.includes(secret), `dado pessoal ${secret} não aparece`);
+  // Situação real: Beto em atraso, Ana em dia, Carla quitada.
+  const card = (name) => manager.locator(".mgr-client", { hasText: name });
+  assert.match(await card("Beto Indicado").innerText(), /Em atraso · 5 dias/);
+  assert.match(await card("Ana Indicada").innerText(), /Em dia/);
+  assert.match(await card("Carla Indicada").innerText(), /Quitado/);
+  assert.match((await card("Carla Indicada").innerText()).replace(/\s/g, " "), /Sua comissão \(20%\) R\$ 20,00/);
+  // Filtros e busca.
+  await manager.getByRole("button", { name: /^Em atraso/ }).click();
+  assert.equal(await manager.locator(".mgr-client").count(), 1);
+  await manager.getByRole("button", { name: /^Todos/ }).click();
+  await manager.getByPlaceholder("Buscar cliente pelo nome").fill("carla");
+  assert.equal(await manager.locator(".mgr-client").count(), 1);
+  await manager.getByPlaceholder("Buscar cliente pelo nome").fill("");
+  // Operações do cliente.
+  await card("Ana Indicada").locator(".mgr-client-head").click();
+  assert.equal(await card("Ana Indicada").locator(".mgr-ops tbody tr").count(), 2);
+  // Cores: padrão e roxo, guardada num cookie (nada no banco).
+  const before = await tenantHash("ten_roberio");
+  assert.equal(await manager.locator(".mgr-root").getAttribute("data-theme"), "padrao");
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-painel-padrao.png`, fullPage: true });
+  await manager.getByRole("button", { name: "Roxo" }).click();
+  await manager.waitForFunction(() => document.querySelector(".mgr-root")?.getAttribute("data-theme") === "roxo");
+  await sleep(600);
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-painel-roxo.png`, fullPage: true });
+  await manager.reload();
+  assert.equal(await manager.locator(".mgr-root").getAttribute("data-theme"), "roxo", "a escolha da cor continua depois de recarregar");
+  assert.equal(await tenantHash("ten_roberio"), before, "escolher a cor não grava nada nos dados");
+});
+
+test("G4. celular: painel sem rolagem lateral", async () => {
+  const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
+  await phone.goto(`${BASE}/gerente`);
+  await phone.locator(".mgr-hero-value").waitFor();
+  assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, "sem rolagem lateral");
+  if (SHOTS) await phone.screenshot({ path: `${SHOTS}/gerente-painel-celular.png`, fullPage: true });
+  await phone.context().close();
+});
+
+test("G5. só leitura: o gerente não alcança nenhuma tela nem ação da carteira", async () => {
+  managerCookie = await apiLogin(EMAIL, NEW_PASSWORD);
+  for (const path of ["/", "/?tela=clientes", "/?tela=operacoes", "/financeiro", "/contas-a-pagar", "/investidores", "/gerentes", "/admin", "/admin/registros"]) {
+    let where = path, status = 200;
+    for (let hop = 0; hop < 4 && status >= 300 && status < 400 || hop === 0; hop++) {
+      const response = await get(managerCookie, where);
+      status = response.status;
+      const next = response.headers.get("location");
+      if (!(status >= 300 && status < 400) || !next) break;
+      where = new URL(next, BASE).pathname + new URL(next, BASE).search;
+    }
+    assert.equal(where, "/gerente", `${path} leva o gerente ao painel (terminou em ${where}, status ${status})`);
+  }
+  const before = await tenantHash("ten_roberio");
+  const counts = async () => `${await one(`select count(*) from client where tenant_id='ten_roberio'`)}/${await one(`select count(*) from account_manager`)}/${await one(`select count(*) from account_manager_payout`)}/${await one(`select count(*) from loan_operation`)}/${await one(`select count(*) from payment`)}`;
+  const countsBefore = await counts();
+  const forged = [
+    ["createClientAction", { name: "Forjado" }, "/"], ["createManagerAction", { name: "Forjada", commission: "50" }, "/gerentes"],
+    ["registerManagerPayoutAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), amount: "999,00", paidOn: TODAY }, "/gerentes"],
+    ["linkClientAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), clientId: "c_g_dora" }, "/gerentes"],
+    ["unlinkClientAction", { clientId: "c_g_ana" }, "/gerentes"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
+  ];
+  for (const [name, fields, path] of forged) {
+    const response = await action(managerCookie, name, fields, path);
+    assert.ok(response.status >= 300 || response.result?.ok !== true, `${name} recusada para o gerente`);
+  }
+  assert.equal(await counts(), countsBefore, "nada foi criado nem alterado");
+  assert.equal(await tenantHash("ten_roberio"), before);
+  assert.equal(await one(`select account_manager_id from client where id='c_g_dora'`), null);
+  assert.equal(await one(`select count(*) from "user" where email='outro@teste.local'`), 0);
+});
+
+test("G6. isolamento: outro tenant não vê nem mexe, e o painel não enxerga clientes de outro gerente", async () => {
+  const fernandoCookie = await apiLogin("fernando@teste.local");
+  const page = await (await get(fernandoCookie, "/gerentes")).text();
+  assert.ok(!page.includes("Gabrielle Teste") && !page.includes("Ana Indicada"), "tenant B não vê o gerente do A");
+  const managerId = await one(`select id from account_manager where name='Gabrielle Teste'`);
+  const link = await action(fernandoCookie, "linkClientAction", { managerId, clientId: "c_g_dora" });
+  assert.equal(link.result?.ok, false, "tenant B não vincula cliente ao gerente do A");
+  const pay = await action(fernandoCookie, "registerManagerPayoutAction", { managerId, amount: "5,00", paidOn: TODAY });
+  assert.equal(pay.result?.ok, false);
+  assert.equal(await one(`select count(*) from account_manager_payout`), 1);
+  assert.equal(await tenantHash("ten_fernando"), fernandoBefore, "tenant B intacto");
+  // Segundo gerente do mesmo tenant: o painel da primeira nunca mostra os clientes dele.
+  const own = await action(await apiLogin("roberio@teste.local"), "createManagerAction", { name: "Outro Gerente", commission: "5" });
+  assert.equal(own.result?.ok, true);
+  const otherId = await one(`select id from account_manager where name='Outro Gerente'`);
+  await admin(`update client set account_manager_id='${otherId}' where id='c_g_dora'`);
+  await manager.reload();
+  assert.ok(!(await manager.locator("body").innerText()).includes("Dora Sem Gerente"), "cliente de outro gerente do mesmo tenant não aparece");
+});
+
+test("G7. regras do banco: comissão paga não se edita nem se apaga; percentual só com gerente; limites", async () => {
+  await assert.rejects(admin(`update account_manager_payout set amount_cents = 1`), /não podem ser alterados/);
+  await assert.rejects(admin(`delete from account_manager_payout`), /não podem ser alterados/);
+  await assert.rejects(admin(`update client set account_manager_id = null, account_manager_bps = 500 where id = 'c_g_dora'`), /client_account_manager_bps_valid/);
+  await assert.rejects(admin(`update client set account_manager_bps = 10001 where id = 'c_g_ana'`), /client_account_manager_bps_valid/);
+  await assert.rejects(admin(`update account_manager set commission_bps = 10001`), /account_manager_commission_range/);
+});
+
+test("G8. desativar o gerente bloqueia o acesso na hora e nada financeiro mudou", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const managerId = await one(`select id from account_manager where name='Gabrielle Teste'`);
+  const off = await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "10", active: "0" });
+  assert.equal(off.result?.ok, true);
+  assert.equal(await one(`select active from "user" where email='${EMAIL}'`), false);
+  assert.equal(await one(`select count(*) from session where user_id = (select id from "user" where email='${EMAIL}')`), 0, "sessões encerradas");
+  await manager.goto(`${BASE}/gerente`);
+  assert.match(new URL(manager.url()).pathname, /login|account-disabled/, "sem sessão ou conta desativada");
+  assert.equal(await tenantHash("ten_roberio"), ownerBefore, "operações, pagamentos e capital do tenant não mudaram");
+});
