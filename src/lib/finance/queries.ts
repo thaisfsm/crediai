@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, clients, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { accountManagers, capitalMovements, clientDocuments, clients, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
@@ -74,7 +74,17 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       paymentCount: sql<string>`(select count(*) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
       receivedCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
     }).from(walletCycles).where(eq(walletCycles.tenantId, tenantId)).orderBy(desc(walletCycles.cycleNumber));
-    return { wallet, cycleNumber, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    // Pedidos de operação dos gerentes de contas (aguardando e decididos): o dono vê todos; a gerente, só os dela.
+    const requestRows = await tx.select({
+      id: operationRequests.id, managerName: accountManagers.name, clientId: operationRequests.clientId, clientName: clients.name, principalCents: operationRequests.principalCents,
+      totalCents: operationRequests.totalCents, loanDate: operationRequests.loanDate, form: operationRequests.form, status: operationRequests.status, decisionNote: operationRequests.decisionNote,
+      createdAt: operationRequests.createdAt, decidedAt: operationRequests.decidedAt,
+    }).from(operationRequests)
+      .innerJoin(accountManagers, and(eq(accountManagers.id, operationRequests.managerId), eq(accountManagers.tenantId, operationRequests.tenantId)))
+      .innerJoin(clients, and(eq(clients.id, operationRequests.clientId), eq(clients.tenantId, operationRequests.tenantId)))
+      .where(and(eq(operationRequests.tenantId, tenantId), scope ? eq(operationRequests.managerId, scope.managerId) : undefined))
+      .orderBy(desc(operationRequests.createdAt)).limit(60);
+    return { wallet, cycleNumber, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 export async function loadTenantPortfolio() {
@@ -145,6 +155,11 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     ...portfolio,
     today: todayIso(),
     investorLinkedContributionIds: data.investorLinkedRows.map((row) => row.id),
+    operationRequests: data.requestRows.map((row): OperationRequestView => ({
+      id: row.id, managerName: row.managerName, clientId: row.clientId, clientName: row.clientName, principalCents: row.principalCents, totalCents: row.totalCents, loanDate: row.loanDate,
+      modality: row.form.modality === "INSTALLMENT" ? "Parcelado" : "Pagamento único", status: row.status as OperationRequestView["status"], decisionNote: row.decisionNote,
+      createdAt: row.createdAt.toISOString(), decidedAt: row.decidedAt?.toISOString() ?? null,
+    })),
     // Clientes arquivados ficam fora da lista e do cadastro de operação; o histórico das operações continua com o nome.
     clients: clientList.filter((client) => !client.archivedAt).map((client) => ({
       ...client,
@@ -202,6 +217,11 @@ export async function loadAllCyclesOperations() {
   });
   return operations;
 }
+
+export type OperationRequestView = {
+  id: string; managerName: string; clientId: string; clientName: string; principalCents: number; totalCents: number; loanDate: string; modality: string;
+  status: "PENDING" | "APPROVED" | "REJECTED"; decisionNote: string | null; createdAt: string; decidedAt: string | null;
+};
 
 export type ClientDocumentInfo = { id: string; clientId: string; label: string; fileName: string; contentType: string; sizeBytes: number; createdAt: string };
 

@@ -54,6 +54,9 @@ export const AUDIT_ACTIONS = {
   MANAGER_PASSWORD_RESET: "Senha de gerente de contas redefinida",
   MANAGER_DELETED: "Gerente de contas excluído",
   CLIENT_REGISTERED_BY_MANAGER: "Cliente cadastrado por gerente de contas",
+  OPERATION_REQUESTED_BY_MANAGER: "Pedido de operação enviado por gerente de contas",
+  OPERATION_REQUEST_APPROVED: "Pedido de operação de gerente aprovado",
+  OPERATION_REQUEST_REJECTED: "Pedido de operação de gerente reprovado",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 

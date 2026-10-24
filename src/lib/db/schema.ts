@@ -485,6 +485,35 @@ export const loanOperationRevisions = pgTable("loan_operation_revision", {
   pgPolicy("loan_operation_revision_delete_admin_only", { for: "delete", using: adminScope }),
 ]).enableRLS();
 
+// Pedido de operação do gerente de contas: ele preenche o mesmo cadastro do dono, mas a operação só nasce (loan_operation, ativa)
+// quando o dono aprova. Enquanto PENDING nada entra na carteira nem no capital. Migração 0036.
+export const operationRequests = pgTable("operation_request", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  managerId: text("manager_id").notNull(),
+  clientId: text("client_id").notNull(),
+  // Campos do formulário exatamente como o gerente enviou (texto); na aprovação passam de novo pelas regras do cadastro.
+  form: jsonb("form").$type<Record<string, string>>().notNull(),
+  principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
+  totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+  loanDate: date("loan_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().default("PENDING"),
+  decisionNote: text("decision_note"),
+  decidedByUserId: text("decided_by_user_id"),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  operationId: text("operation_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("operation_request_tenant_status_idx").on(table.tenantId, table.status),
+  index("operation_request_manager_idx").on(table.tenantId, table.managerId),
+  foreignKey({ name: "operation_request_manager_same_tenant_fk", columns: [table.tenantId, table.managerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("restrict"),
+  foreignKey({ name: "operation_request_client_same_tenant_fk", columns: [table.tenantId, table.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
+  foreignKey({ name: "operation_request_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
+  check("operation_request_status_valid", sql`${table.status} in ('PENDING', 'APPROVED', 'REJECTED')`),
+  check("operation_request_principal_positive", sql`${table.principalCents} > 0`),
+  ...tenantPolicies("operation_request", table.tenantId),
+]).enableRLS();
+
 // Renovação de período: o cliente pagou só os juros do período e a operação ganhou novo vencimento e novo período de juros.
 // O pagamento dos juros fica em payment (entra no capital como qualquer pagamento); aqui fica o que a renovação mudou.
 export const loanRenewals = pgTable("loan_renewal", {
@@ -1082,4 +1111,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
