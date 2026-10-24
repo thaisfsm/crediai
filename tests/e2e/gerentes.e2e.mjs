@@ -205,6 +205,21 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   assert.equal(await tenantHash("ten_roberio"), before, "escolher a cor não grava nada nos dados");
 });
 
+test("G3b. sem clientes ainda: tela de boas-vindas bonita no lugar dos zeros", async () => {
+  const linked = await admin(`select id, account_manager_id, account_manager_bps from client where account_manager_id is not null`);
+  await admin(`update client set account_manager_id = null, account_manager_bps = null where account_manager_id is not null`);
+  try {
+    await manager.goto(`${BASE}/gerente`);
+    await manager.locator(".manager-welcome").waitFor();
+    const text = (await manager.locator("body").innerText()).replace(/\s+/g, " ");
+    assert.match(text, /Sua vitrine de comissões está pronta/);
+    assert.ok(!/Evolução da carteira/.test(text), "sem gráficos vazios");
+    if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-sem-clientes.png`, fullPage: true });
+  } finally {
+    for (const row of linked) await admin(`update client set account_manager_id='${row.account_manager_id}', account_manager_bps=${row.account_manager_bps ?? "null"} where id='${row.id}'`);
+  }
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);
