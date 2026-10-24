@@ -278,6 +278,19 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               </section>
               )}
 
+              {manager && portfolio.clients.length === 0 ? (
+              <section className="manager-welcome" aria-label="Boas-vindas">
+                <div className="manager-welcome-orb"><Icon name="users" size={30} /></div>
+                <h2>Sua vitrine de comissões está pronta</h2>
+                <p>Assim que o seu primeiro cliente indicado for vinculado ao seu painel, aqui aparecem as cobranças, os pagamentos e a comissão que você ganha, atualizados na hora.</p>
+                <div className="manager-welcome-steps">
+                  <div><span>1</span><strong>Você indica</strong><small>O cliente é vinculado ao seu nome com a sua porcentagem.</small></div>
+                  <div><span>2</span><strong>Ele paga os juros</strong><small>Cada pagamento recebido entra na conta da comissão.</small></div>
+                  <div><span>3</span><strong>Você acompanha</strong><small>Veja o saldo a receber e o que já foi pago a você.</small></div>
+                </div>
+                <small className="manager-welcome-note"><Icon name="shield" size={13} /> Painel somente leitura, com acesso apenas aos seus clientes.</small>
+              </section>
+              ) : (<>
               {payables && <PayablesDashboard overview={payables} availableCents={summary.availableCents} />}
               <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
 
@@ -335,6 +348,8 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                   <button className="activity-link" onClick={() => navigate("Cobranças")}>Ver central de cobranças <Icon name="arrow" size={14} /></button>
                 </article>
               </section>
+
+              </>)}
 
               <footer className="page-footer"><span>CrediAI <i /> Gestão de carteira inteligente</span><span><Icon name="shield" size={13} /> {manager ? "Somente leitura" : "Dados da sua carteira"}</span></footer>
             </>
