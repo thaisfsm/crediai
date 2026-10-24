@@ -52,6 +52,7 @@ export const AUDIT_ACTIONS = {
   MANAGER_COMMISSION_PAID: "Comissão paga a gerente de contas",
   MANAGER_ACCESS_CREATED: "Acesso de leitura criado para gerente de contas",
   MANAGER_PASSWORD_RESET: "Senha de gerente de contas redefinida",
+  MANAGER_DELETED: "Gerente de contas excluído",
 } as const;
 export type AuditAction = keyof typeof AUDIT_ACTIONS;
 

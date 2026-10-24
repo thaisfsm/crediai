@@ -244,8 +244,8 @@ export const walletCycles = pgTable("wallet_cycle", {
 ]).enableRLS();
 
 // Gerente de contas: quem indica clientes ao dono da carteira e recebe uma comissão (percentual sobre os juros recebidos desses
-// clientes, definido pelo dono). Pode ter um acesso próprio só de leitura (user_id, papel ACCOUNT_MANAGER). Nunca é apagado:
-// só desativado. Migração 0034.
+// clientes, definido pelo dono). Pode ter um acesso próprio só de leitura (user_id, papel ACCOUNT_MANAGER). Só é apagado se não tiver comissão paga
+// (FK RESTRICT + registro de pagamento imutável); senão só se desativa. Migrações 0034 e 0035 (exclusão pelo dono).
 export const accountManagers = pgTable("account_manager", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
@@ -263,7 +263,7 @@ export const accountManagers = pgTable("account_manager", {
   uniqueIndex("account_manager_user_unique").on(table.userId).where(sql`${table.userId} is not null`),
   check("account_manager_name_not_blank", sql`length(trim(${table.name})) > 0`),
   check("account_manager_commission_range", sql`${table.commissionBps} >= 0 and ${table.commissionBps} <= 10000`),
-  ...tenantPolicies("account_manager", table.tenantId),
+  ...tenantPolicies("account_manager", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
 // Comissão já paga ao gerente pelo dono da carteira (só se registra; não se edita nem se apaga pelo tenant).

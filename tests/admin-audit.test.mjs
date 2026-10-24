@@ -35,7 +35,7 @@ test("AU4. todas as ações administrativas pedidas têm evento de auditoria gra
   for (const file of ["src/app/gerentes/actions.ts", "src/app/admin/gerentes-actions.ts"]) {
     const actions = readFileSync(file, "utf8");
     assert.ok(!/\.(insert|update|delete)\(/.test(actions), `${file} grava sem passar pelas regras auditadas`);
-    for (const command of ["createManager", "updateManager", "linkClient", "unlinkClient", "registerPayout", "createManagerAccess", "resetManagerPassword"]) assert.ok(actions.includes(command), `${file} sem ${command}`);
+    for (const command of ["createManager", "updateManager", "linkClient", "unlinkClient", "registerPayout", "createManagerAccess", "resetManagerPassword", "deleteManager"]) assert.ok(actions.includes(command), `${file} sem ${command}`);
   }
   for (const action of Object.keys(AUDIT_ACTIONS)) assert.ok(source.includes(`"${action}"`), `${action} sem registro`);
   // Toda ação exportada que altera dados chama recordAdminAudit (nenhuma ação administrativa sem auditoria).

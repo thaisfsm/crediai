@@ -3,11 +3,11 @@ import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { requireActiveAccount } from "@/lib/auth/guards";
 import { loadManagersPage } from "@/lib/managers/queries";
 import { AppShell } from "../app-shell";
-import { createManagerAccessAction, createManagerAction, linkClientAction, registerManagerPayoutAction, resetManagerPasswordAction, unlinkClientAction, updateManagerAction } from "./actions";
+import { createManagerAccessAction, createManagerAction, deleteManagerAction, linkClientAction, registerManagerPayoutAction, resetManagerPasswordAction, unlinkClientAction, updateManagerAction } from "./actions";
 import { ManagersHome, type ManagerActions } from "./managers-ui";
 
 const actions: ManagerActions = {
-  createManager: createManagerAction, updateManager: updateManagerAction, linkClient: linkClientAction, unlinkClient: unlinkClientAction,
+  createManager: createManagerAction, updateManager: updateManagerAction, linkClient: linkClientAction, unlinkClient: unlinkClientAction, deleteManager: deleteManagerAction,
   registerPayout: registerManagerPayoutAction, createAccess: createManagerAccessAction, resetPassword: resetManagerPasswordAction,
 };
 

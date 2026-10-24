@@ -239,6 +239,13 @@
       "when": 1792781430256,
       "tag": "0034_gerentes_de_contas",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792845000000,
+      "tag": "0035_excluir_gerente",
+      "breakpoints": true
     }
   ]
 }
