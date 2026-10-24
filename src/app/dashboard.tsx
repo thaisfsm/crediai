@@ -17,6 +17,8 @@ import { ReceivablesDashboard } from "./receivables-dashboard";
 import { receivablesOverview } from "@/lib/finance/receivables";
 import type { PayablesOverview } from "@/lib/investors/payables";
 import type { ManagerPanel } from "@/lib/managers/queries";
+import { MANAGER_REQUIRED_FIELDS } from "@/lib/managers/required-fields";
+import { registerClientAction } from "./gerente/actions";
 import { ManagerCommissionPage } from "./gerente/commission-page";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
@@ -333,7 +335,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
           ) : active === "Capital" ? (
             <CapitalPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Clientes" ? (
-            <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} readOnly={readOnly} />
+            <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} readOnly={readOnly} manager={manager ? { submit: registerClientAction, required: MANAGER_REQUIRED_FIELDS } : undefined} />
           ) : active === "Operações" ? (
             <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} readOnly={readOnly} />
           ) : active === "Pagamentos" ? (
