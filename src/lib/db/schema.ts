@@ -28,7 +28,8 @@ const adminScope = sql`${roleSetting} = 'SUPER_ADMIN'`;
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
 
-export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN"]);
+// ACCOUNT_MANAGER: gerente de contas, só leitura (painel /gerente). Nunca acessa a carteira nem grava nada. Migração 0034.
+export const userRole = pgEnum("user_role", ["TENANT_USER", "SUPER_ADMIN", "ACCOUNT_MANAGER"]);
 export const tenantStatus = pgEnum("tenant_status", ["TRIALING", "ACTIVE", "SUSPENDED", "CLOSED"]);
 export const loanOperationStatus = pgEnum("loan_operation_status", ["OPEN", "PAID", "CANCELED", "RENEGOTIATED"]);
 // Movimentos de capital além do capital inicial (que fica em wallet): aporte, retirada (toda saída manual de dinheiro,
@@ -242,6 +243,46 @@ export const walletCycles = pgTable("wallet_cycle", {
   ...tenantPolicies("wallet_cycle", table.tenantId),
 ]).enableRLS();
 
+// Gerente de contas: quem indica clientes ao dono da carteira e recebe uma comissão (percentual sobre os juros recebidos desses
+// clientes, definido pelo dono). Pode ter um acesso próprio só de leitura (user_id, papel ACCOUNT_MANAGER). Nunca é apagado:
+// só desativado. Migração 0034.
+export const accountManagers = pgTable("account_manager", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  email: text("email"),
+  userId: text("user_id").references(() => users.id, { onDelete: "restrict" }),
+  // Comissão PADRÃO em pontos-base (10% = 1000) sobre os juros recebidos; cada cliente indicado pode ter o seu percentual (client.account_manager_bps).
+  commissionBps: integer("commission_bps").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("account_manager_tenant_id_idx").on(table.tenantId),
+  unique("account_manager_tenant_id_id_unique").on(table.tenantId, table.id),
+  uniqueIndex("account_manager_user_unique").on(table.userId).where(sql`${table.userId} is not null`),
+  check("account_manager_name_not_blank", sql`length(trim(${table.name})) > 0`),
+  check("account_manager_commission_range", sql`${table.commissionBps} >= 0 and ${table.commissionBps} <= 10000`),
+  ...tenantPolicies("account_manager", table.tenantId),
+]).enableRLS();
+
+// Comissão já paga ao gerente pelo dono da carteira (só se registra; não se edita nem se apaga pelo tenant).
+export const accountManagerPayouts = pgTable("account_manager_payout", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  managerId: text("manager_id").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  paidOn: date("paid_on", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("account_manager_payout_manager_idx").on(table.tenantId, table.managerId),
+  foreignKey({ name: "account_manager_payout_manager_same_tenant_fk", columns: [table.tenantId, table.managerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("restrict"),
+  check("account_manager_payout_amount_positive", sql`${table.amountCents} > 0`),
+  ...tenantPolicies("account_manager_payout", table.tenantId),
+]).enableRLS();
+
 export const clients = pgTable("client", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
@@ -277,6 +318,10 @@ export const clients = pgTable("client", {
   businessAdmissionDate: date("business_admission_date", { mode: "string" }),
   // Marcação manual: apostadora de cassino online. Vai pesar no score de concessão de crédito quando o score existir.
   onlineCasinoBettor: boolean("online_casino_bettor").notNull().default(false),
+  // Gerente de contas que indicou o cliente (opcional). Define quem enxerga o cliente no painel /gerente e quem recebe comissão.
+  accountManagerId: text("account_manager_id"),
+  // Comissão deste cliente para o gerente, em pontos-base sobre os juros recebidos (livre por cliente). Vazio = padrão do gerente.
+  accountManagerBps: integer("account_manager_bps"),
   // Dados bancários e chave Pix (opcionais). Regras em src/lib/bank-account.ts.
   bankHolderName: text("bank_holder_name"),
   bankHolderDocument: text("bank_holder_document"),
@@ -308,6 +353,9 @@ export const clients = pgTable("client", {
   check("client_name_not_blank", sql`length(trim(${table.name})) > 0`),
   // O mesmo CPF não aparece duas vezes na mesma carteira (clientes arquivados contam). Outras carteiras não são afetadas.
   uniqueIndex("client_tenant_document_unique").on(table.tenantId, table.document).where(sql`${table.document} is not null`),
+  foreignKey({ name: "client_account_manager_same_tenant_fk", columns: [table.tenantId, table.accountManagerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("restrict"),
+  check("client_account_manager_bps_valid", sql`${table.accountManagerBps} is null or (${table.accountManagerId} is not null and ${table.accountManagerBps} >= 0 and ${table.accountManagerBps} <= 10000)`),
+  index("client_account_manager_idx").on(table.tenantId, table.accountManagerId),
   check("client_bank_account_type_valid", sql`${table.bankAccountType} is null or ${table.bankAccountType} in ('CHECKING', 'SAVINGS', 'PAYMENT', 'SALARY')`),
   check("client_pix_key_pair", sql`(${table.pixKey} is null) = (${table.pixKeyType} is null) and (${table.pixKeyType} is null or ${table.pixKeyType} in ('CPF', 'CNPJ', 'EMAIL', 'PHONE', 'RANDOM'))`),
   ...tenantPolicies("client", table.tenantId, { tenantDelete: true }),
@@ -1029,7 +1077,9 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   // E as correções de operação (Etapa G), também só no próprio tenant.
   pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
   // Contas bancárias e documentos do investidor (migração 0024), também só no próprio tenant.
+  // Gerentes de contas e comissões pagas a eles (migração 0034), também só no próprio tenant.
+  pgPolicy("admin_audit_log_insert_tenant_managers", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('account_manager', 'account_manager_payout')` }),
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

@@ -14,6 +14,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
   if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
   // Sem sessão vai para /login; conta bloqueada para /account-disabled; senha provisória para /definir-senha.
   const { session, state } = await requireActiveAccount();
+  // Gerente de contas só vê o painel de leitura dele.
+  if (state.role === "ACCOUNT_MANAGER") redirect("/gerente");
   const isSuperAdmin = state.role === "SUPER_ADMIN";
   // MASTER sem tenant próprio só tem a administração global; com tenant, usa a própria carteira aqui normalmente.
   if (!session.user.tenantId) redirect(isSuperAdmin ? "/admin" : "/account-disabled");

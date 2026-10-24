@@ -232,6 +232,13 @@
       "when": 1792772591723,
       "tag": "0033_pagamento_historico",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792781430256,
+      "tag": "0034_gerentes_de_contas",
+      "breakpoints": true
     }
   ]
 }
