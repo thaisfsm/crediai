@@ -226,6 +226,24 @@ export async function approveOperationRequestAction(requestId: string): Promise<
   return result;
 }
 
+// Pix ao cliente de uma operação aprovada feito: baixa o compromisso do dia em Contas a pagar. Não mexe no capital (o principal já saiu na aprovação).
+export async function confirmOperationPixAction(requestId: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [request] = await tx.select().from(operationRequests).where(and(eq(operationRequests.id, String(requestId).slice(0, 80)), eq(operationRequests.tenantId, tenantId))).for("update");
+    if (!request || request.status !== "APPROVED") return { ok: false, error: "Pedido aprovado não encontrado." };
+    if (request.pixPaidOn) return { ok: false, error: "O Pix deste pedido já foi confirmado." };
+    await tx.update(operationRequests).set({ pixPaidOn: todayIso() }).where(and(eq(operationRequests.id, request.id), eq(operationRequests.tenantId, tenantId)));
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_PIX_CONFIRMED", entity: "account_manager", entityId: request.managerId, tenantId, tenantName: tenant?.name ?? null,
+      description: `Pix de ${formatMoney(request.principalCents)} da operação aprovada confirmado.`, after: { requestId: request.id, operationId: request.operationId },
+    });
+    return { ok: true, message: "Pix confirmado." };
+  });
+  if (result.ok) { revalidatePath("/"); revalidatePath("/contas-a-pagar"); }
+  return result;
+}
+
 export async function rejectOperationRequestAction(requestId: string, reason: string): Promise<ActionResult> {
   const note = String(reason ?? "").trim().slice(0, 300);
   if (!note) return { ok: false, error: "Escreva o motivo para a gerente saber o que ajustar." };

@@ -14,6 +14,7 @@ import { MoneyInput } from "../money-input";
 import { FinanceSubnav } from "../financeiro/finance-subnav";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon, type IconName } from "../ui-icon";
+import { confirmOperationPixAction } from "../actions";
 import { registerInvestmentPaymentAction } from "./actions";
 import { PayablesKpis } from "./payables-kpis";
 
@@ -207,6 +208,37 @@ const TAB_SECTIONS: Record<PayableTab, { key: SectionKey; title: string; empty: 
 
 // /contas-a-pagar (dentro do Financeiro): obrigações com investidores vindas dos cronogramas dos contratos, em abas
 // (Hoje, Vencidos, Próximos, Pagos, Todos), com o resumo do dia, busca e filtros. Só a carteira da sessão.
+// Pix de operações aprovadas das gerentes: compromisso do dia. Confirmar só marca o Pix como feito (o capital já foi baixado na aprovação).
+function OperationPixSection({ items, today }: { items: PayablesPageData["pixTodo"]; today: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  if (items.length === 0) return null;
+  const confirm = async (id: string) => {
+    setBusy(id); setFeedback(null);
+    try {
+      const result = await confirmOperationPixAction(id);
+      setFeedback(result.ok ? { tone: "ok", text: result.message } : { tone: "error", text: result.error });
+      if (result.ok) router.refresh();
+    } catch { setFeedback({ tone: "error", text: "Não foi possível confirmar. Tente novamente." }); } finally { setBusy(null); }
+  };
+  return (
+    <section className="panel" aria-label="Pix de operações aprovadas">
+      <div className="panel-header"><div><div className="panel-title-row"><h2>Pix de operações aprovadas</h2><span className="today-count">{items.length}</span></div><p>Operações aprovadas por você que ainda esperam o Pix ao cliente. O capital já foi baixado na aprovação.</p></div></div>
+      <ul className="request-list">
+        {items.map((item) => (
+          <li key={item.id} className="request-row request-approved">
+            <div className="request-main"><strong>{item.clientName}</strong><span>{formatMoney(item.principalCents)} · gerente {item.managerName} · aprovada {item.approvedOn === today ? "hoje" : `em ${formatDate(item.approvedOn)}`}</span></div>
+            <span className="request-badge request-badge-pending">{item.approvedOn < today ? "Vencido" : "Pix hoje"}</span>
+            <div className="request-actions"><button type="button" className="primary-button" disabled={busy === item.id} onClick={() => void confirm(item.id)}><Icon name="check" size={15} /> {busy === item.id ? "Confirmando…" : "Pix feito"}</button></div>
+          </li>
+        ))}
+      </ul>
+      <Feedback feedback={feedback} />
+    </section>
+  );
+}
+
 export function PayablesHome({ data }: { data: PayablesPageData }) {
   const router = useRouter();
   const { filters, totals, sections, overview, tab } = data;
@@ -231,6 +263,8 @@ export function PayablesHome({ data }: { data: PayablesPageData }) {
       <FinanceSubnav active="contas" />
 
       {!data.hasWallet && <EmptyPanel icon="wallet" text="Defina o capital inicial da carteira na tela Capital para registrar pagamentos." action={<Link prefetch={false} className="primary-button" href="/?tela=capital">Ir para Capital</Link>} />}
+
+      <OperationPixSection items={data.pixTodo} today={data.today} />
 
       <section aria-label="Resumo do dia"><PayablesKpis overview={overview} availableCents={data.availableCents} tabHref={query} currentTab={tab} /></section>
 

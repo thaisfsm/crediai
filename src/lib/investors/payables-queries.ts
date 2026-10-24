@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, users, wallets } from "@/lib/db/schema";
+import { accountManagers, capitalMovements, clients, investmentCapitalEntries, operationRequests, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, users, wallets } from "@/lib/db/schema";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { normalizeName } from "@/lib/finance/client-search";
 import { todayIso } from "@/lib/finance/format";
@@ -79,7 +79,15 @@ export async function loadPayablesPage(search: Search) {
     const filters = parsePayablesFilters(search);
     const all = await loadTenantObligations(tx, tenantId, today);
     const visible = filterObligations(all, filters);
+    // Pix de operações aprovadas das gerentes ainda não confirmados: o compromisso do dia (vence no dia da aprovação).
+    const pixRows = await tx.select({ id: operationRequests.id, clientName: clients.name, managerName: accountManagers.name, principalCents: operationRequests.principalCents, decidedAt: operationRequests.decidedAt })
+      .from(operationRequests)
+      .innerJoin(clients, and(eq(clients.id, operationRequests.clientId), eq(clients.tenantId, operationRequests.tenantId)))
+      .innerJoin(accountManagers, and(eq(accountManagers.id, operationRequests.managerId), eq(accountManagers.tenantId, operationRequests.tenantId)))
+      .where(and(eq(operationRequests.tenantId, tenantId), eq(operationRequests.status, "APPROVED"), sql`${operationRequests.pixPaidOn} is null`))
+      .orderBy(asc(operationRequests.decidedAt));
     return {
+      pixTodo: pixRows.map((row) => ({ id: row.id, clientName: row.clientName, managerName: row.managerName, principalCents: row.principalCents, approvedOn: todayIso(row.decidedAt ?? new Date()) })),
       today, hasWallet: Boolean(wallet), cycleStartedOn: cycleStartedOn(wallet), availableCents: portfolio.summary.availableCents,
       tab: parsePayableTab(search.aba),
       // Resumo do dia: sempre sobre todas as obrigações da carteira (os filtros mudam só a lista), igual ao Dashboard.

@@ -1,0 +1,2 @@
+ALTER TABLE "operation_request" ADD COLUMN "pix_paid_on" date;--> statement-breakpoint
+ALTER TABLE "operation_request" ADD CONSTRAINT "operation_request_pix_only_approved" CHECK ("operation_request"."pix_paid_on" is null or "operation_request"."status" = 'APPROVED');

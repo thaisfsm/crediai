@@ -322,7 +322,7 @@ test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou
   }
   assert.equal(await one(`select status from operation_request where id='${requestId}'`), "PENDING");
   // Dono: vê o pedido e aprova pela tela.
-  await owner.goto(`${BASE}/?tela=operacoes`);
+  await owner.goto(`${BASE}/?tela=aprovacoes`);
   await owner.getByRole("region", { name: "Pedidos de operação" }).waitFor();
   await owner.getByText("Enviado por Gabrielle Teste").first().waitFor();
   if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-aprova-operacao.png`, fullPage: true });
@@ -337,10 +337,31 @@ test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou
   assert.equal(again.result?.ok, false);
   assert.match(String(again.result?.error), /já foi decidido/);
   assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1);
+  // Aprovada = Pix a fazer: aparece no menu, na visão geral e em Contas a pagar; "Pix feito" baixa o compromisso e não mexe no capital.
+  await owner.goto(`${BASE}/`);
+  await owner.getByRole("region", { name: "Aprovações" }).waitFor();
+  assert.match(await owner.getByRole("region", { name: "Aprovações" }).innerText(), /Pix a fazer hoje\s*1/);
+  assert.ok(await owner.getByRole("link", { name: /Aprovações/ }).count() >= 1, "item Aprovações no menu lateral");
+  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-visao-geral-aprovacoes.png`, fullPage: false });
+  await owner.goto(`${BASE}/contas-a-pagar`);
+  const pixRegion = owner.getByRole("region", { name: "Pix de operações aprovadas" });
+  await pixRegion.waitFor();
+  assert.match(await pixRegion.innerText(), /Ana Indicada/);
+  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-contas-a-pagar-pix.png`, fullPage: false });
+  const capitalBeforePix = await tenantHash("ten_roberio");
+  await pixRegion.getByRole("button", { name: "Pix feito" }).click();
+  await poll(`select pix_paid_on is not null from operation_request where id='${requestId}'`, "true");
+  assert.equal(await tenantHash("ten_roberio"), capitalBeforePix, "confirmar o Pix não mexe em capital, operações nem pagamentos");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_PIX_CONFIRMED' and tenant_id='ten_roberio'`) >= 1, true);
+  const pixAgain = await actionArgs(ownerCookie, "confirmOperationPixAction", [requestId]);
+  assert.equal(pixAgain.result?.ok, false);
+  assert.equal(await one(`select count(*) from operation_request where status='APPROVED' and pix_paid_on is null`), 0);
+  const managerPix = await actionArgs(cookie, "confirmOperationPixAction", [requestId], "/gerente");
+  assert.ok(managerPix.status >= 300 || managerPix.result?.ok !== true, "a gerente não confirma Pix");
   // Segundo pedido: reprovado com motivo, que a gerente vê.
   const second = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_beto", ...terms }, "/gerente");
   assert.equal(second.result?.ok, true, JSON.stringify(second));
-  await owner.goto(`${BASE}/?tela=operacoes`);
+  await owner.goto(`${BASE}/?tela=aprovacoes`);
   await owner.getByRole("button", { name: "Reprovar" }).first().click();
   await owner.getByLabel("Motivo da reprovação").fill("Cliente com atraso, ajustar o prazo");
   await owner.getByRole("button", { name: "Confirmar reprovação" }).click();

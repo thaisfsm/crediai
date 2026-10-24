@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -1733,13 +1733,15 @@ const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode 
 ];
 
 // Pedidos de operação das gerentes de contas. O dono aprova (a operação nasce ativa) ou reprova com o motivo; a gerente acompanha o andamento.
-function OperationRequestsPanel({ requests, owner, onChanged }: { requests: TenantPortfolio["operationRequests"]; owner: boolean; onChanged: () => void }) {
+export function OperationRequestsPanel({ requests, owner, onChanged }: { requests: TenantPortfolio["operationRequests"]; owner: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const pending = requests.filter((request) => request.status === "PENDING");
-  const decided = requests.filter((request) => request.status !== "PENDING").slice(0, owner ? 8 : 20);
+  // Aprovadas cujo Pix ao cliente ainda não foi confirmado: o compromisso de pagamento do dia (também em Contas a pagar).
+  const pixTodo = owner ? requests.filter((request) => request.status === "APPROVED" && !request.pixPaidOn) : [];
+  const decided = requests.filter((request) => request.status !== "PENDING" && !pixTodo.includes(request)).slice(0, owner ? 10 : 20);
   const run = async (id: string, action: () => Promise<ActionResult>) => {
     setBusy(id); setFeedback(null);
     try {
@@ -1749,6 +1751,7 @@ function OperationRequestsPanel({ requests, owner, onChanged }: { requests: Tena
     } catch { setFeedback({ tone: "error", text: "Não foi possível concluir. Tente novamente." }); } finally { setBusy(null); }
   };
   const statusLabel = { PENDING: "Aguardando aprovação", APPROVED: "Aprovada", REJECTED: "Reprovada" } as const;
+  const badgeOf = (request: (typeof requests)[number]) => (owner && request.status === "APPROVED" ? (request.pixPaidOn ? `Aprovada · Pix feito ${formatDate(request.pixPaidOn)}` : "Pix a fazer") : statusLabel[request.status]);
   const row = (request: (typeof requests)[number]) => (
     <li key={request.id} className={`request-row request-${request.status.toLowerCase()}`}>
       <div className="request-main">
@@ -1757,7 +1760,12 @@ function OperationRequestsPanel({ requests, owner, onChanged }: { requests: Tena
         {owner && <span>Enviado por {request.managerName} em {formatDate(request.createdAt.slice(0, 10))}</span>}
         {request.status === "REJECTED" && request.decisionNote && <span className="request-note">Motivo: {request.decisionNote}</span>}
       </div>
-      <span className={`request-badge request-badge-${request.status.toLowerCase()}`}>{statusLabel[request.status]}</span>
+      <span className={`request-badge request-badge-${request.status.toLowerCase()}`}>{badgeOf(request)}</span>
+      {owner && request.status === "APPROVED" && !request.pixPaidOn && (
+        <div className="request-actions">
+          <button type="button" className="primary-button" disabled={busy === request.id} onClick={() => void run(request.id, () => confirmOperationPixAction(request.id))}><Icon name="check" size={15} /> {busy === request.id ? "Confirmando…" : "Pix feito"}</button>
+        </div>
+      )}
       {owner && request.status === "PENDING" && (
         rejecting === request.id ? (
           <div className="request-actions">
@@ -1778,8 +1786,43 @@ function OperationRequestsPanel({ requests, owner, onChanged }: { requests: Tena
     <section className="panel" aria-label="Pedidos de operação">
       <div className="panel-header"><div><div className="panel-title-row"><h2>{owner ? "Operações aguardando aprovação" : "Meus pedidos de operação"}</h2><span className="today-count">{pending.length}</span></div><p>{owner ? "Aprove para a operação ficar ativa e faça o Pix. Reprove com o motivo para a gerente ajustar." : "Acompanhe o que você enviou. Quando o Fernando aprovar, a operação fica ativa."}</p></div></div>
       {pending.length === 0 ? <p className="muted">Nenhum pedido aguardando aprovação.</p> : <ul className="request-list">{pending.map(row)}</ul>}
+      {pixTodo.length > 0 && <><h3 className="request-subtitle">Pix a fazer hoje ({pixTodo.length})</h3><p className="muted">Operação aprovada e ativa. Faça o Pix ao cliente e confirme; o capital já foi baixado na aprovação.</p><ul className="request-list">{pixTodo.map(row)}</ul></>}
       {decided.length > 0 && <><h3 className="request-subtitle">Decididos</h3><ul className="request-list">{decided.map(row)}</ul></>}
       <Feedback feedback={feedback} />
+    </section>
+  );
+}
+
+// Tela do dono: pedidos das gerentes para aprovar/reprovar, Pix a fazer e histórico. Cada aprovação vira compromisso do dia em Contas a pagar.
+export function ApprovalsPage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
+  return (
+    <div className="workspace-page">
+      <PageHeading eyebrow="CREDIAI · APROVAÇÕES" title="Aprovações" description="Pedidos de operação enviados pelas gerentes de contas. Aprovar ativa a operação e gera o Pix do dia em Contas a pagar; reprovar devolve o motivo para a gerente." />
+      <OperationRequestsPanel requests={portfolio.operationRequests} owner onChanged={onChanged} />
+    </div>
+  );
+}
+
+// Bloco da visão geral do dono: quanto espera aprovação e quanto de Pix está por fazer.
+export function ApprovalsOverview({ portfolio, onOpen }: { portfolio: TenantPortfolio; onOpen: () => void }) {
+  const pending = portfolio.operationRequests.filter((request) => request.status === "PENDING");
+  const pix = portfolio.operationRequests.filter((request) => request.status === "APPROVED" && !request.pixPaidOn);
+  const sum = (rows: { principalCents: number }[]) => rows.reduce((total, row) => total + row.principalCents, 0);
+  return (
+    <section className="panel approvals-overview" aria-label="Aprovações">
+      <div className="panel-header"><div><div className="panel-title-row"><h2>Aprovações</h2><span className="today-count">{pending.length}</span></div><p>Pedidos das gerentes de contas e Pix do dia</p></div><button className="outline-button" onClick={onOpen}>Abrir Aprovações <Icon name="arrow" size={14} /></button></div>
+      <dl className="detail-grid">
+        <div><dt>Aguardando aprovação</dt><dd><strong>{pending.length}</strong> · {formatMoney(sum(pending))}</dd></div>
+        <div><dt>Pix a fazer hoje</dt><dd><strong>{pix.length}</strong> · {formatMoney(sum(pix))}</dd></div>
+      </dl>
+      {pending.length === 0 && pix.length === 0 ? <p className="muted">Nenhum pedido aguardando e nenhum Pix pendente.</p> : (
+        <ul className="request-list">{[...pending, ...pix].slice(0, 4).map((request) => (
+          <li key={request.id} className={`request-row request-${request.status.toLowerCase()}`}>
+            <div className="request-main"><strong>{request.clientName}</strong><span>{formatMoney(request.principalCents)} · enviado por {request.managerName}</span></div>
+            <span className={`request-badge request-badge-${request.status.toLowerCase()}`}>{request.status === "PENDING" ? "Aguardando aprovação" : "Pix a fazer"}</span>
+          </li>
+        ))}</ul>
+      )}
     </section>
   );
 }
@@ -1809,7 +1852,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Cadastre operações dos clientes que você indicou (elas vão para a aprovação do Fernando) e acompanhe os empréstimos." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
-      {portfolio.operationRequests.length > 0 && <OperationRequestsPanel requests={portfolio.operationRequests} owner={!readOnly} onChanged={onChanged} />}
+      {readOnly && portfolio.operationRequests.length > 0 && <OperationRequestsPanel requests={portfolio.operationRequests} owner={false} onChanged={onChanged} />}
       {readOnly && !request ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} request={request} cashAvailableCents={cashAvailableCents} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
