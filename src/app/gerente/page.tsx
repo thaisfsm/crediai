@@ -1,10 +1,8 @@
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Dashboard from "../dashboard";
 import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { loadManagerPortfolio } from "@/lib/finance/queries";
 import { loadManagerPanel } from "@/lib/managers/queries";
-import { THEME_COOKIE, type ManagerTheme } from "./theme";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +15,6 @@ export default async function ManagerPage({ searchParams }: { searchParams: Prom
   if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
   const panel = await loadManagerPanel();
   const { portfolio } = await loadManagerPortfolio();
-  const theme: ManagerTheme = (await cookies()).get(THEME_COOKIE)?.value === "roxo" ? "roxo" : "padrao";
   const { tela } = await searchParams;
-  return <Dashboard userName={panel.userName} portfolio={portfolio} payables={null} initialSection={tela} manager={{ panel, initialTheme: theme }} />;
+  return <Dashboard userName={panel.userName} portfolio={portfolio} payables={null} initialSection={tela} manager={{ panel }} />;
 }

@@ -18,7 +18,6 @@ import { receivablesOverview } from "@/lib/finance/receivables";
 import type { PayablesOverview } from "@/lib/investors/payables";
 import type { ManagerPanel } from "@/lib/managers/queries";
 import { ManagerCommissionPage } from "./gerente/commission-page";
-import { setManagerThemeAction } from "./gerente/actions";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
@@ -139,15 +138,13 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 
 
 // Modo gerente de contas: as mesmas telas do dono, só com os clientes dele, sem edição, sem capital e com o resumo da comissão.
-export type ManagerMode = { panel: ManagerPanel; initialTheme: "padrao" | "roxo" };
+export type ManagerMode = { panel: ManagerPanel };
 const MANAGER_SECTIONS: NavKey[] = ["Visão geral", "Clientes", "Operações", "Pagamentos", "Cobranças", "Comissão"];
 
 export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection, manager }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview | null; isSuperAdmin?: boolean; initialSection?: string; manager?: ManagerMode }) {
   const router = useRouter();
   const initials = initialsOfUser(userName);
   const [active, setActive] = useState<NavKey>(() => { const key = navKeyFromSlug(initialSection); return manager && !MANAGER_SECTIONS.includes(key) ? "Visão geral" : key; });
-  const [theme, setTheme] = useState<"padrao" | "roxo">(manager?.initialTheme ?? "padrao");
-  const chooseTheme = (next: "padrao" | "roxo") => { setTheme(next); void setManagerThemeAction(next); };
   const readOnly = Boolean(manager);
   const [period, setPeriod] = useState<ChartPeriod>("30D");
   const [chargeFilter, setChargeFilter] = useState<ChargeFilter>("Hoje");
@@ -199,7 +196,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
   };
 
   return (
-    <div className="app-shell" data-theme={manager ? theme : undefined}>
+    <div className="app-shell">
       {mobileMenuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
       <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} onNavigate={navigate} manager={readOnly} />
 
@@ -223,12 +220,6 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{pendingCharges > 0 && <span className="notification-dot" />}</button>
               {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{pendingCharges > 0 ? `${pendingCharges} pendente${pendingCharges > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p><button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
             </div>
-            {readOnly && (
-              <div className="theme-switch" role="group" aria-label="Cor do painel">
-                <button type="button" className={theme === "padrao" ? "active" : ""} aria-pressed={theme === "padrao"} onClick={() => chooseTheme("padrao")}><i className="swatch swatch-default" />Padrão</button>
-                <button type="button" className={theme === "roxo" ? "active" : ""} aria-pressed={theme === "roxo"} onClick={() => chooseTheme("roxo")}><i className="swatch swatch-purple" />Roxo</button>
-              </div>
-            )}
             <span className="topbar-divider" />
             {/* Único lugar com o usuário e o "Sair". */}
             <div className="top-action-wrap">
@@ -236,12 +227,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               {profileOpen && (
                 <div className="notification-popover profile-popover" role="menu" onKeyDown={(event) => { if (event.key === "Escape") setProfileOpen(false); }}>
                   <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
-                  {readOnly ? (
-                    <div className="theme-picker" role="group" aria-label="Cor do painel">
-                      <button type="button" role="menuitemradio" aria-checked={theme === "padrao"} className={theme === "padrao" ? "active" : ""} onClick={() => chooseTheme("padrao")}><i className="swatch swatch-default" /> Padrão</button>
-                      <button type="button" role="menuitemradio" aria-checked={theme === "roxo"} className={theme === "roxo" ? "active" : ""} onClick={() => chooseTheme("roxo")}><i className="swatch swatch-purple" /> Roxo</button>
-                    </div>
-                  ) : <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>}
+                  {readOnly ? null : <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>}
                   {isSuperAdmin && <button role="menuitem" onClick={() => { setProfileOpen(false); router.push("/admin"); }}><Icon name="settings" size={15} /> Administração da plataforma</button>}
                   <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
                 </div>
@@ -278,19 +264,12 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               </section>
               )}
 
-              {manager && portfolio.clients.length === 0 ? (
-              <section className="manager-welcome" aria-label="Boas-vindas">
-                <div className="manager-welcome-orb"><Icon name="users" size={30} /></div>
-                <h2>Sua vitrine de comissões está pronta</h2>
-                <p>Assim que o seu primeiro cliente indicado for vinculado ao seu painel, aqui aparecem as cobranças, os pagamentos e a comissão que você ganha, atualizados na hora.</p>
-                <div className="manager-welcome-steps">
-                  <div><span>1</span><strong>Você indica</strong><small>O cliente é vinculado ao seu nome com a sua porcentagem.</small></div>
-                  <div><span>2</span><strong>Ele paga os juros</strong><small>Cada pagamento recebido entra na conta da comissão.</small></div>
-                  <div><span>3</span><strong>Você acompanha</strong><small>Veja o saldo a receber e o que já foi pago a você.</small></div>
-                </div>
-                <small className="manager-welcome-note"><Icon name="shield" size={13} /> Painel somente leitura, com acesso apenas aos seus clientes.</small>
+              {manager && portfolio.clients.length === 0 && (
+              <section className="manager-banner" aria-label="Aviso">
+                <Icon name="users" size={18} />
+                <div><strong>Você ainda não tem clientes indicados.</strong><span> Quando o primeiro for vinculado ao seu nome, as cobranças, os pagamentos e a sua comissão aparecem aqui.</span></div>
               </section>
-              ) : (<>
+              )}
               {payables && <PayablesDashboard overview={payables} availableCents={summary.availableCents} />}
               <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
 
@@ -348,8 +327,6 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                   <button className="activity-link" onClick={() => navigate("Cobranças")}>Ver central de cobranças <Icon name="arrow" size={14} /></button>
                 </article>
               </section>
-
-              </>)}
 
               <footer className="page-footer"><span>CrediAI <i /> Gestão de carteira inteligente</span><span><Icon name="shield" size={13} /> {manager ? "Somente leitura" : "Dados da sua carteira"}</span></footer>
             </>
