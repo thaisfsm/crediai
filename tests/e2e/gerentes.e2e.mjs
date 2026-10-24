@@ -59,6 +59,12 @@ async function action(cookie, name, fields, path = "/gerentes") {
   const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
   return { status: response.status, result: result ? JSON.parse(result) : null, location: response.headers.get("location") };
 }
+// Ação com argumentos simples (texto), não FormData.
+async function actionArgs(cookie, name, args, path = "/") {
+  const response = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual", headers: { cookie, "next-action": actionId(name), accept: "text/x-component", origin: BASE, "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify(args) });
+  const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
+  return { status: response.status, result: result ? JSON.parse(result) : null };
+}
 const get = (cookie, path) => fetch(`${BASE}${path}`, { redirect: "manual", headers: { cookie } });
 const poll = async (query, expected) => { for (let i = 0; i < 60; i++) { if (String(await one(query)) === String(expected)) return; await sleep(250); } assert.equal(String(await one(query)), String(expected)); };
 
@@ -180,7 +186,8 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   // Operações: só leitura, com detalhes do histórico (sem registrar pagamento nem editar).
   await manager.locator(".side-nav").getByText("Operações", { exact: true }).click();
   await manager.getByRole("region", { name: "Lista de operações" }).waitFor();
-  assert.equal(await manager.getByRole("region", { name: /Nova operação/ }).count(), 0);
+  assert.equal(await manager.getByRole("region", { name: /Nova operação/ }).count(), 1, "só o formulário de pedido para aprovação");
+  assert.ok(!(await manager.getByRole("region", { name: /Nova operação/ }).innerText()).includes("Cadastrar operação"));
   assert.equal(await manager.getByRole("button", { name: /Registrar pagamento|Editar|Excluir/ }).count(), 0, "sem botões de gravação");
   await manager.getByRole("button", { name: "Detalhes" }).first().click();
   await manager.getByRole("button", { name: /Registrar pagamento|Quitar|Renegociar/ }).count().then((count) => assert.equal(count, 0, "detalhe sem ações de gravação"));
@@ -273,6 +280,88 @@ test("G11. a gerente cadastra cliente: campos obrigatórios, ligado a ela, sem b
   await admin(`delete from client where name in ('${CLIENT_FIELDS.name}','Com Banco Forjado') and tenant_id='ten_roberio'`);
 });
 
+test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou reprova; nada entra no capital antes", async () => {
+  const hadWallet = Number(await one(`select count(*) from wallet where tenant_id='ten_roberio'`)) > 0;
+  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents + 50000000 where tenant_id='ten_roberio'`);
+  else await admin(`insert into wallet(id, tenant_id, initial_capital_cents) values ('wal_g12','ten_roberio',50000000)`);
+  const before = await tenantHash("ten_roberio");
+  const opsBefore = Number(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`));
+  const ddMmYyyy = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+  await manager.goto(`${BASE}/gerente?tela=operacoes`);
+  await manager.getByRole("region", { name: "Nova operação" }).waitFor();
+  assert.ok((await manager.getByRole("region", { name: "Nova operação" }).innerText()).includes("para aprovação"));
+  assert.ok(!(await manager.getByRole("region", { name: "Nova operação" }).innerText()).includes("Capital disponível"), "gerente não vê o capital do dono");
+  const form = manager.getByRole("region", { name: "Nova operação" });
+  await form.locator('select[name="clientId"]').selectOption({ label: "Ana Indicada" });
+  await form.locator('input[name="principal"]').fill("2.000,00");
+  await form.locator('input[name="rate"]').fill("10");
+  await form.getByLabel("Vencimento", { exact: true }).fill(ddMmYyyy(day(30)));
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-pedido-operacao.png`, fullPage: true });
+  await manager.getByRole("button", { name: "Enviar para aprovação" }).click();
+  await poll(`select count(*) from operation_request where tenant_id='ten_roberio' and status='PENDING'`, 1);
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore, "nenhuma operação nasce antes da aprovação");
+  assert.equal(await tenantHash("ten_roberio"), before, "capital, operações e pagamentos não mudaram");
+  await manager.getByText("Aguardando aprovação").first().waitFor();
+  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_REQUESTED_BY_MANAGER' and tenant_id='ten_roberio'`) >= 1, true, "pedido auditado");
+  // Servidor: cliente de outro gerente/sem gerente e campos fora do formulário.
+  const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
+  const terms = { modality: "SINGLE", frequency: "MONTHLY", principal: "500,00", rate: "10", loanDate: day(0), dueDate: day(30) };
+  const foreign = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_dora", ...terms }, "/gerente");
+  assert.equal(foreign.result?.ok, false);
+  assert.match(String(foreign.result?.error), /entre os seus clientes/);
+  const invalid = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_ana", ...terms, principal: "" }, "/gerente");
+  assert.equal(invalid.result?.ok, false);
+  assert.equal(await one(`select count(*) from operation_request where tenant_id='ten_roberio'`), 1);
+  // Ela não aprova nem reprova o próprio pedido.
+  const requestId = await one(`select id from operation_request where status='PENDING'`);
+  for (const [name, fields] of [["approveOperationRequestAction", [requestId]], ["rejectOperationRequestAction", [requestId, "x"]]]) {
+    const response = await actionArgs(cookie, name, fields, "/gerente").catch(() => ({ status: 500 }));
+    assert.ok(response.status >= 300 || response.result?.ok !== true, `${name} recusada para a gerente`);
+  }
+  assert.equal(await one(`select status from operation_request where id='${requestId}'`), "PENDING");
+  // Dono: vê o pedido e aprova pela tela.
+  await owner.goto(`${BASE}/?tela=operacoes`);
+  await owner.getByRole("region", { name: "Pedidos de operação" }).waitFor();
+  await owner.getByText("Enviado por Gabrielle Teste").first().waitFor();
+  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-aprova-operacao.png`, fullPage: true });
+  await owner.getByRole("button", { name: "Aprovar" }).first().click();
+  await poll(`select status from operation_request where id='${requestId}'`, "APPROVED");
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1);
+  assert.equal(await one(`select o.status||'/'||o.principal_cents||'/'||o.client_id from loan_operation o join operation_request r on r.operation_id = o.id where r.id='${requestId}'`), "OPEN/200000/c_g_ana");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_REQUEST_APPROVED' and tenant_id='ten_roberio'`) >= 1, true);
+  // Decidido não muda: aprovar de novo não cria outra operação.
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const again = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
+  assert.equal(again.result?.ok, false);
+  assert.match(String(again.result?.error), /já foi decidido/);
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1);
+  // Segundo pedido: reprovado com motivo, que a gerente vê.
+  const second = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_beto", ...terms }, "/gerente");
+  assert.equal(second.result?.ok, true, JSON.stringify(second));
+  await owner.goto(`${BASE}/?tela=operacoes`);
+  await owner.getByRole("button", { name: "Reprovar" }).first().click();
+  await owner.getByLabel("Motivo da reprovação").fill("Cliente com atraso, ajustar o prazo");
+  await owner.getByRole("button", { name: "Confirmar reprovação" }).click();
+  await poll(`select status from operation_request where client_id='c_g_beto'`, "REJECTED");
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1, "reprovado não cria operação");
+  await manager.goto(`${BASE}/gerente?tela=operacoes`);
+  await manager.getByText("Motivo: Cliente com atraso, ajustar o prazo").waitFor();
+  // Sem capital suficiente a aprovação é recusada e o pedido continua pendente.
+  const big = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_ana", ...terms, principal: "9.000.000,00" }, "/gerente");
+  assert.equal(big.result?.ok, true, JSON.stringify(big));
+  const bigId = await one(`select id from operation_request where status='PENDING'`);
+  const refused = await actionArgs(ownerCookie, "approveOperationRequestAction", [bigId]);
+  assert.equal(refused.result?.ok, false);
+  assert.match(String(refused.result?.error), /Capital disponível insuficiente/);
+  assert.equal(await one(`select status from operation_request where id='${bigId}'`), "PENDING");
+  // Limpeza: volta o tenant ao estado original.
+  const createdOperation = await one(`select operation_id from operation_request where id='${requestId}'`);
+  await admin(`delete from operation_request where tenant_id='ten_roberio'`);
+  await admin(`delete from loan_operation where id='${createdOperation}'`);
+  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents - 50000000 where tenant_id='ten_roberio'`);
+  else await admin(`delete from wallet where id='wal_g12'`);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);
@@ -305,7 +394,7 @@ test("G5. só leitura: o gerente não alcança nenhuma tela nem ação da cartei
     ["unlinkClientAction", { clientId: "c_g_ana" }, "/gerentes"], ["deleteManagerAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`) }, "/gerentes"],
     ["deleteClientAction", { clientId: "c_g_ana" }, "/"], ["registerPaymentAction", { operationId: "op_g_ana_open", amount: "100,00", paidOn: TODAY }, "/"],
     ["updateClientAction", { clientId: "c_g_ana", name: "Renomeada" }, "/"], ["cancelOperationAction", { operationId: "op_g_ana_open" }, "/"],
-    ["uploadClientDocumentAction", { clientId: "c_g_ana" }, "/"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
+    ["uploadClientDocumentAction", { clientId: "c_g_ana" }, "/"], ["createOperationAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: TODAY, dueDate: day(30) }, "/"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
   ];
   for (const [name, fields, path] of forged) {
     const response = await action(managerCookie, name, fields, path);

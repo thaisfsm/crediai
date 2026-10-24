@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -1014,7 +1014,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
 // Nova operação. Pagamento único com periodicidade mensal, quinzenal (juros recorrentes, renovação pagando só os juros)
 // ou diária (total dividido em pagamentos diários); ou parcelado (valor emprestado, parcela fixa, primeiro vencimento e
 // prazo). A prévia usa as mesmas funções de rules.ts que o servidor usa ao gravar.
-function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void }) {
+function OperationForm({ portfolio, onChanged, onNewClient, request }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; request?: (data: FormData) => Promise<ActionResult> }) {
   const [modality, setModality] = useState<"SINGLE" | "INSTALLMENT">("SINGLE");
   const [frequency, setFrequency] = useState<Frequency>("MONTHLY");
   // Parcelado: parcelas mensais (padrão) ou quinzenais.
@@ -1032,7 +1032,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
   const [loanDate, setLoanDate] = useState(portfolio.today);
   const [dueDate, setDueDate] = useState("");
   const [resetKey, setResetKey] = useState(0);
-  const { pending, feedback, onSubmit } = useFormAction(createOperationAction, () => {
+  const { pending, feedback, onSubmit } = useFormAction(request ?? createOperationAction, () => {
     setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
@@ -1086,7 +1086,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
 
   return (
     <section className="panel form-panel" aria-label="Nova operação">
-      <div className="panel-header"><div><h2>Nova operação</h2><p>{description}</p></div></div>
+      <div className="panel-header"><div><h2>{request ? "Nova operação para aprovação" : "Nova operação"}</h2><p>{request ? "Preencha como o Fernando. Ao enviar, o pedido vai para a aprovação dele e só vira operação ativa depois que ele aprovar. " : ""}{description}</p></div></div>
       <div className="modality-switch" role="radiogroup" aria-label="Modalidade">
         <button type="button" role="radio" aria-checked={single} className={single ? "is-active" : ""} onClick={() => setModality("SINGLE")}>Pagamento único</button>
         <button type="button" role="radio" aria-checked={!single} className={!single ? "is-active" : ""} onClick={() => setModality("INSTALLMENT")}>Parcelado</button>
@@ -1145,7 +1145,7 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           <div><span>{single ? "Juros" : "Lucro"}</span><strong>{preview && preview.interestCents >= 0 ? formatMoney(preview.interestCents) : "—"}</strong></div>
           <div><span>Total a receber</span><strong>{preview ? formatMoney(preview.totalCents) : "—"}</strong></div>
           {rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
-          <div><span>Capital disponível após</span><strong>{formatMoney(Math.max(availableAfterCents, 0))}</strong><small>Hoje: {formatMoney(portfolio.summary.availableCents)}</small></div>
+          {!request && <div><span>Capital disponível após</span><strong>{formatMoney(Math.max(availableAfterCents, 0))}</strong><small>Hoje: {formatMoney(portfolio.summary.availableCents)}</small></div>}
         </div>
         {!single && installmentPreview && installmentPreview.interestCents >= 0 && upcoming.length > 0 && (
           <div className="schedule-preview field-wide" aria-label="Prévia dos vencimentos">
@@ -1154,8 +1154,8 @@ function OperationForm({ portfolio, onChanged, onNewClient }: { portfolio: Tenan
           </div>
         )}
         {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor emprestado.</p>}
-        {exceeds && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
-        <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar operação"}</button></div>
+        {exceeds && !request && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
+        <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Enviando…" : request ? "Enviar para aprovação" : "Cadastrar operação"}</button></div>
       </form>
       <Feedback feedback={feedback} />
     </section>
@@ -1729,7 +1729,59 @@ const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode 
   { key: "ALL", label: "Todos", icon: <><path d="M4 6h16M4 12h16M4 18h16" /></> },
 ];
 
-export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus, readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void; readOnly?: boolean }) {
+// Pedidos de operação das gerentes de contas. O dono aprova (a operação nasce ativa) ou reprova com o motivo; a gerente acompanha o andamento.
+function OperationRequestsPanel({ requests, owner, onChanged }: { requests: TenantPortfolio["operationRequests"]; owner: boolean; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const pending = requests.filter((request) => request.status === "PENDING");
+  const decided = requests.filter((request) => request.status !== "PENDING").slice(0, owner ? 8 : 20);
+  const run = async (id: string, action: () => Promise<ActionResult>) => {
+    setBusy(id); setFeedback(null);
+    try {
+      const result = await action();
+      setFeedback(result.ok ? { tone: "ok", text: result.message } : { tone: "error", text: result.error });
+      if (result.ok) { setRejecting(null); setReason(""); onChanged(); }
+    } catch { setFeedback({ tone: "error", text: "Não foi possível concluir. Tente novamente." }); } finally { setBusy(null); }
+  };
+  const statusLabel = { PENDING: "Aguardando aprovação", APPROVED: "Aprovada", REJECTED: "Reprovada" } as const;
+  const row = (request: (typeof requests)[number]) => (
+    <li key={request.id} className={`request-row request-${request.status.toLowerCase()}`}>
+      <div className="request-main">
+        <strong>{request.clientName}</strong>
+        <span>{formatMoney(request.principalCents)} emprestados · total a receber {formatMoney(request.totalCents)} · {request.modality} · empréstimo em {formatDate(request.loanDate)}</span>
+        {owner && <span>Enviado por {request.managerName} em {formatDate(request.createdAt.slice(0, 10))}</span>}
+        {request.status === "REJECTED" && request.decisionNote && <span className="request-note">Motivo: {request.decisionNote}</span>}
+      </div>
+      <span className={`request-badge request-badge-${request.status.toLowerCase()}`}>{statusLabel[request.status]}</span>
+      {owner && request.status === "PENDING" && (
+        rejecting === request.id ? (
+          <div className="request-actions">
+            <input aria-label="Motivo da reprovação" placeholder="Motivo para a gerente" value={reason} maxLength={300} onChange={(event) => setReason(event.target.value)} />
+            <button type="button" className="primary-button danger-button" disabled={busy === request.id} onClick={() => void run(request.id, () => rejectOperationRequestAction(request.id, reason))}>Confirmar reprovação</button>
+            <button type="button" className="secondary-button" onClick={() => { setRejecting(null); setReason(""); }}>Voltar</button>
+          </div>
+        ) : (
+          <div className="request-actions">
+            <button type="button" className="primary-button" disabled={busy === request.id} onClick={() => void run(request.id, () => approveOperationRequestAction(request.id))}>{busy === request.id ? "Aprovando…" : "Aprovar"}</button>
+            <button type="button" className="secondary-button" disabled={busy === request.id} onClick={() => { setRejecting(request.id); setReason(""); }}>Reprovar</button>
+          </div>
+        )
+      )}
+    </li>
+  );
+  return (
+    <section className="panel" aria-label="Pedidos de operação">
+      <div className="panel-header"><div><div className="panel-title-row"><h2>{owner ? "Operações aguardando aprovação" : "Meus pedidos de operação"}</h2><span className="today-count">{pending.length}</span></div><p>{owner ? "Aprove para a operação ficar ativa e faça o Pix. Reprove com o motivo para a gerente ajustar." : "Acompanhe o que você enviou. Quando o Fernando aprovar, a operação fica ativa."}</p></div></div>
+      {pending.length === 0 ? <p className="muted">Nenhum pedido aguardando aprovação.</p> : <ul className="request-list">{pending.map(row)}</ul>}
+      {decided.length > 0 && <><h3 className="request-subtitle">Decididos</h3><ul className="request-list">{decided.map(row)}</ul></>}
+      <Feedback feedback={feedback} />
+    </section>
+  );
+}
+
+export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus, readOnly = false, request }: { request?: (data: FormData) => Promise<ActionResult>; portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void; readOnly?: boolean }) {
   const ids = focus ? new Set(portfolio.operations.filter((operation) => operation.status === "OPEN" && (focus === "lent" ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0)).map((operation) => operation.id)) : null;
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
   const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
@@ -1753,8 +1805,9 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   });
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Acompanhe os empréstimos dos clientes que você indicou. Somente leitura." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
-      {readOnly ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
+      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Cadastre operações dos clientes que você indicou (elas vão para a aprovação do Fernando) e acompanhe os empréstimos." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
+      {portfolio.operationRequests.length > 0 && <OperationRequestsPanel requests={portfolio.operationRequests} owner={!readOnly} onChanged={onChanged} />}
+      {readOnly && !request ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} request={request} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
         {!focus && focused.length > 0 && (

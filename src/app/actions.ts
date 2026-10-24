@@ -4,12 +4,13 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
 import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps, todayIso } from "@/lib/finance/format";
+import { operationTermsFromForm } from "@/lib/finance/operation-terms";
 import { clientFields, duplicateCpfError, isDuplicateCpf } from "@/lib/clients/fields";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { loadAllCyclesOperations } from "@/lib/finance/queries";
@@ -159,67 +160,28 @@ export async function lookupRegisteredPersonAction(document: string): Promise<{ 
   });
 }
 
-// Modalidades (regras em src/lib/finance/rules.ts):
-//  • Pagamento único mensal ou quinzenal: principal + taxa do período; pagando só os juros, o período é renovado.
-//  • Pagamento único diário: principal + taxa do período, total dividido em N pagamentos diários.
-//  • Parcelado: valor emprestado, parcela fixa, primeiro vencimento e prazo em meses (taxa simples calculada pelo sistema).
-function operationTermsFromForm(data: FormData) {
-  const loanDate = text(data, "loanDate", 10);
-  if (!isIsoDate(loanDate)) return { ok: false as const, error: "Informe a data do empréstimo." };
-  if (text(data, "modality", 20) === "INSTALLMENT") {
-    const principalCents = parseMoneyToCents(text(data, "loanAmount", 40));
-    const installmentCents = parseMoneyToCents(text(data, "installment", 40));
-    const termInput = text(data, "term", 10);
-    const installmentCount = /^\d+$/.test(termInput) ? Number(termInput) : NaN;
-    const firstDueDate = text(data, "firstDueDate", 10);
-    // Periodicidade das parcelas: mensal (padrão, como as operações antigas) ou quinzenal.
-    const installmentFrequency: InstallmentFrequency = text(data, "installmentFrequency", 20) === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
-    if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor emprestado em reais, por exemplo 10.000,00." };
-    if (installmentCents === null || installmentCents <= 0 || installmentCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor de cada parcela em reais, por exemplo 1.200,00." };
-    if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: installmentFrequency === "BIWEEKLY" ? "Informe a quantidade de parcelas quinzenais, de 1 a 360." : "Informe o prazo total em meses, de 1 a 360." };
-    if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
-    if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount, frequency: installmentFrequency });
-    if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
-    return {
-      ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount, installmentFrequency),
-      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
-    };
+// Cria a operação (ativa) dentro da transação: mesmas travas de capital para o cadastro do dono e para a aprovação de um pedido de gerente.
+async function insertOperation(tx: TenantTransaction, tenantId: string, clientId: string, terms: Extract<ReturnType<typeof operationTermsFromForm>, { ok: true }>): Promise<ActionResult & { operationId?: string }> {
+  const { principalCents, loanDate, dueDate } = terms;
+  const client = await tx.query.clients.findFirst({ where: and(eq(clients.id, clientId), eq(clients.tenantId, tenantId), isNull(clients.archivedAt)) });
+  if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
+  // Trava a carteira do tenant para que duas operações simultâneas não usem o mesmo capital.
+  const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets)
+    .where(eq(wallets.tenantId, tenantId)).for("update");
+  const cycleNumber = wallet?.cycleNumber ?? 1;
+  const availableCents = await availableCapitalCents(tx, tenantId, { initialCapitalCents: wallet?.initialCapitalCents ?? 0, cycleNumber });
+  if (principalCents > availableCents) {
+    return { ok: false, error: `Capital disponível insuficiente. Disponível para novas operações: ${formatMoney(Math.max(availableCents, 0))}.` };
   }
-  const frequencyInput = text(data, "frequency", 20);
-  const frequency: Frequency = frequencyInput === "BIWEEKLY" || frequencyInput === "DAILY" ? frequencyInput : "MONTHLY";
-  const principalCents = parseMoneyToCents(text(data, "principal", 40));
-  if (principalCents === null || principalCents <= 0 || principalCents > MAX_CENTS) return { ok: false as const, error: "Informe o valor principal em reais, por exemplo 1.000,00." };
-  // Quinzenal com valor fixo de juros por quinzena (ex.: R$ 1.200): o sistema calcula a taxa equivalente.
-  const fixedInterest = frequency === "BIWEEKLY" && text(data, "interestMode", 10) === "FIXED";
-  const fixedInterestCents = fixedInterest ? parseMoneyToCents(text(data, "interestAmount", 40)) : null;
-  if (fixedInterest && (fixedInterestCents === null || fixedInterestCents <= 0 || fixedInterestCents > MAX_CENTS)) return { ok: false as const, error: "Informe os juros por quinzena em reais, por exemplo 1.200,00." };
-  const interestRateBps = fixedInterest ? 0 : parseLoanRateToBps(text(data, "rate", 20));
-  if (interestRateBps === null || interestRateBps > 100_000) return { ok: false as const, error: "Informe a taxa de juros em %, por exemplo 30." };
-  if (frequency === "DAILY") {
-    const daysInput = text(data, "days", 10);
-    const days = /^\d+$/.test(daysInput) ? Number(daysInput) : NaN;
-    const firstDueDate = text(data, "firstDueDate", 10);
-    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false as const, error: "Informe a quantidade de dias (pagamentos), de 1 a 365." };
-    if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
-    if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const plan = calculateDaily({ principalCents, interestRateBps, days, loanDate, firstDueDate });
-    return {
-      ok: true as const, principalCents, loanDate, dueDate: plan.lastDueDate,
-      values: { modality: "SINGLE", frequency, interestRateBps, interestCents: plan.interestCents, totalCents: plan.totalCents, calculationRule: plan.calculationRule, installmentCount: plan.installmentCount, installmentCents: plan.installmentCents, firstDueDate: plan.firstDueDate },
-    };
-  }
-  const dueDate = text(data, "dueDate", 10);
-  if (!isIsoDate(dueDate)) return { ok: false as const, error: frequency === "BIWEEKLY" ? "Informe o primeiro vencimento." : "Informe a data de vencimento." };
-  if (dueDate < loanDate) return { ok: false as const, error: "O vencimento não pode ser antes da data do empréstimo." };
-  if (fixedInterestCents !== null) {
-    return { ok: true as const, principalCents, loanDate, dueDate, values: { modality: "SINGLE", frequency, ...calculateFixedInterest({ principalCents, interestCents: fixedInterestCents }), firstDueDate: dueDate } };
-  }
-  const calculated = calculateOperation({ principalCents, interestRateBps });
-  return {
-    ok: true as const, principalCents, loanDate, dueDate,
-    values: { modality: "SINGLE", frequency, interestRateBps, ...calculated, ...(frequency === "BIWEEKLY" ? { calculationRule: BIWEEKLY_RULE } : {}), firstDueDate: dueDate },
-  };
+  // Empréstimo retroativo: o dinheiro sai na data do empréstimo, então nenhum saldo do extrato a partir dela pode
+  // ficar negativo (mesma regra das retiradas e das saídas do Financeiro).
+  const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { add: { date: loanDate, amountCents: -principalCents } });
+  if (negative) return { ok: false, error: capitalGapError("este empréstimo", loanDate, negative) };
+  const operationId = id("op");
+  await tx.insert(loanOperations).values({
+    id: operationId, tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
+  });
+  return { ok: true, message: `Operação de ${client.name} cadastrada.`, operationId };
 }
 
 export async function createOperationAction(data: FormData): Promise<ActionResult> {
@@ -227,28 +189,54 @@ export async function createOperationAction(data: FormData): Promise<ActionResul
   if (!clientId) return { ok: false, error: "Selecione o cliente." };
   const terms = operationTermsFromForm(data);
   if (!terms.ok) return terms;
-  const { principalCents, loanDate, dueDate } = terms;
-  const result = await withTenantContext(async (tx, { tenantId }): Promise<ActionResult> => {
-    const client = await tx.query.clients.findFirst({ where: and(eq(clients.id, clientId), eq(clients.tenantId, tenantId), isNull(clients.archivedAt)) });
-    if (!client) return { ok: false, error: "Cliente não encontrado nesta carteira." };
-    // Trava a carteira do tenant para que duas operações simultâneas não usem o mesmo capital.
-    const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets)
-      .where(eq(wallets.tenantId, tenantId)).for("update");
-    const cycleNumber = wallet?.cycleNumber ?? 1;
-    const availableCents = await availableCapitalCents(tx, tenantId, { initialCapitalCents: wallet?.initialCapitalCents ?? 0, cycleNumber });
-    if (principalCents > availableCents) {
-      return { ok: false, error: `Capital disponível insuficiente. Disponível para novas operações: ${formatMoney(Math.max(availableCents, 0))}.` };
-    }
-    // Empréstimo retroativo: o dinheiro sai na data do empréstimo, então nenhum saldo do extrato a partir dela pode
-    // ficar negativo (mesma regra das retiradas e das saídas do Financeiro).
-    const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { add: { date: loanDate, amountCents: -principalCents } });
-    if (negative) return { ok: false, error: capitalGapError("este empréstimo", loanDate, negative) };
-    await tx.insert(loanOperations).values({
-      id: id("op"), tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
-    });
-    return { ok: true, message: `Operação de ${client.name} cadastrada.` };
-  });
+  const result = await withTenantContext((tx, { tenantId }) => insertOperation(tx, tenantId, clientId, terms));
   if (result.ok) revalidatePath("/");
+  return result.ok ? { ok: true, message: result.message } : result;
+}
+
+// Pedido de operação de um gerente de contas: o dono aprova (a operação nasce ativa, com as mesmas travas de capital do cadastro)
+// ou reprova com o motivo. Só o dono da carteira decide; o pedido já decidido não muda.
+export async function approveOperationRequestAction(requestId: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [request] = await tx.select().from(operationRequests).where(and(eq(operationRequests.id, String(requestId).slice(0, 80)), eq(operationRequests.tenantId, tenantId))).for("update");
+    if (!request) return { ok: false, error: "Pedido não encontrado." };
+    if (request.status !== "PENDING") return { ok: false, error: "Este pedido já foi decidido." };
+    const form = new FormData();
+    for (const [key, value] of Object.entries(request.form)) form.set(key, String(value));
+    const terms = operationTermsFromForm(form);
+    if (!terms.ok) return terms;
+    const created = await insertOperation(tx, tenantId, request.clientId, terms);
+    if (!created.ok || !created.operationId) return created.ok ? { ok: false, error: "Não foi possível criar a operação." } : created;
+    await tx.update(operationRequests).set({ status: "APPROVED", decidedByUserId: session.user.id, decidedAt: sql`now()`, operationId: created.operationId })
+      .where(and(eq(operationRequests.id, request.id), eq(operationRequests.tenantId, tenantId)));
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_REQUEST_APPROVED", entity: "account_manager", entityId: request.managerId, tenantId, tenantName: tenant?.name ?? null,
+      description: `Pedido de operação de ${formatMoney(request.principalCents)} aprovado.`, after: { requestId: request.id, operationId: created.operationId, clientId: request.clientId },
+    });
+    return { ok: true, message: "Pedido aprovado: a operação está ativa. Agora é só fazer o Pix." };
+  });
+  if (result.ok) { revalidatePath("/"); revalidatePath("/gerente"); }
+  return result;
+}
+
+export async function rejectOperationRequestAction(requestId: string, reason: string): Promise<ActionResult> {
+  const note = String(reason ?? "").trim().slice(0, 300);
+  if (!note) return { ok: false, error: "Escreva o motivo para a gerente saber o que ajustar." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [request] = await tx.select().from(operationRequests).where(and(eq(operationRequests.id, String(requestId).slice(0, 80)), eq(operationRequests.tenantId, tenantId))).for("update");
+    if (!request) return { ok: false, error: "Pedido não encontrado." };
+    if (request.status !== "PENDING") return { ok: false, error: "Este pedido já foi decidido." };
+    await tx.update(operationRequests).set({ status: "REJECTED", decisionNote: note, decidedByUserId: session.user.id, decidedAt: sql`now()` })
+      .where(and(eq(operationRequests.id, request.id), eq(operationRequests.tenantId, tenantId)));
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, {
+      action: "OPERATION_REQUEST_REJECTED", entity: "account_manager", entityId: request.managerId, tenantId, tenantName: tenant?.name ?? null,
+      description: `Pedido de operação de ${formatMoney(request.principalCents)} reprovado.`, after: { requestId: request.id, reason: note },
+    });
+    return { ok: true, message: "Pedido reprovado." };
+  });
+  if (result.ok) { revalidatePath("/"); revalidatePath("/gerente"); }
   return result;
 }
 
