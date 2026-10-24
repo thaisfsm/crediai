@@ -163,7 +163,7 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   text = await flat();
   for (const name of ["Ana Indicada", "Beto Indicado", "Carla Indicada"]) assert.ok(text.includes(name), `${name} aparece`);
   assert.ok(!text.includes("Dora Sem Gerente"), "cliente sem gerente (ou de outro gerente) não aparece");
-  assert.equal(await manager.getByRole("button", { name: /Editar|Excluir|Cadastrar cliente/ }).count(), 0, "sem botões de edição");
+  assert.equal(await manager.getByRole("button", { name: /Editar|Excluir/ }).count(), 0, "sem botões de edição");
   assert.equal(await manager.getByRole("region", { name: "Novo cliente" }).count(), 0);
   await manager.getByPlaceholder("Buscar por nome ou CPF").fill("carla");
   assert.equal(await manager.locator("tbody tr").count(), 1);
@@ -214,6 +214,63 @@ test("G3b. sem clientes ainda: aviso amigável e o painel completo", async () =>
   } finally {
     for (const row of linked) await admin(`update client set account_manager_id='${row.account_manager_id}', account_manager_bps=${row.account_manager_bps ?? "null"} where id='${row.id}'`);
   }
+});
+
+function cpfFrom(base) {
+  const digits = base.split("").map(Number);
+  for (const size of [9, 10]) {
+    const sum = digits.slice(0, size).reduce((total, digit, index) => total + digit * (size + 1 - index), 0);
+    digits.push(((sum * 10) % 11) % 10);
+  }
+  return digits.join("");
+}
+const CLIENT_FIELDS = {
+  name: "Maria Cadastrada Pela Gerente", document: cpfFrom("123456780"), phone: "11988880001", whatsapp: "11988880001",
+  residentialCep: "01310100", residentialStreet: "Avenida Paulista", residentialNumber: "1000", residentialDistrict: "Bela Vista", residentialCity: "São Paulo", residentialState: "SP",
+  reference1Name: "Ref Um", reference1Phone: "11977770001", reference1Relationship: "Irmã", reference2Name: "Ref Dois", reference2Phone: "11977770002", reference2Relationship: "Vizinho",
+};
+test("G11. a gerente cadastra cliente: campos obrigatórios, ligado a ela, sem banco, CPF único", async () => {
+  await manager.goto(`${BASE}/gerente?tela=clientes`);
+  await manager.getByRole("heading", { name: "Cadastrar cliente indicado por você" }).waitFor();
+  const countOf = async (name) => Number(await one(`select count(*) from client where tenant_id='ten_roberio' and name='${name}'`));
+  // Sem os obrigatórios o navegador nem envia.
+  await manager.locator('input[name="name"]').fill(CLIENT_FIELDS.name);
+  await manager.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await sleep(1500);
+  assert.equal(await countOf(CLIENT_FIELDS.name), 0, "sem os campos obrigatórios nada é gravado");
+  assert.ok(await manager.locator('input[name="document"]').evaluate((input) => input.required), "CPF é obrigatório na tela");
+  assert.ok(!(await manager.locator("form.form-grid").innerText()).includes("Dados bancários"), "gerente não vê dados bancários");
+  // Servidor também recusa (formulário forjado sem os obrigatórios).
+  const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
+  const incomplete = await action(cookie, "registerClientAction", { name: "Forjada Incompleta" }, "/gerente");
+  assert.equal(incomplete.result?.ok, false);
+  assert.match(String(incomplete.result?.error), /campos obrigatórios/);
+  assert.equal(await countOf("Forjada Incompleta"), 0);
+  // Preenche tudo e cadastra pela tela.
+  await manager.locator('input[name="residentialCep"]').fill("01310-100");
+  for (const [name, value] of Object.entries(CLIENT_FIELDS)) {
+    if (name === "residentialCep") continue;
+    const control = manager.locator(`[name="${name}"]`);
+    if ((await control.evaluate((element) => element.tagName)) === "SELECT") await control.selectOption(value);
+    else await control.fill(value);
+  }
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-cadastro-cliente.png`, fullPage: true });
+  await manager.getByRole("button", { name: "Cadastrar cliente" }).click();
+  await poll(`select count(*) from client where tenant_id='ten_roberio' and name='${CLIENT_FIELDS.name}'`, 1);
+  const gabrielle = await one(`select id from account_manager where name='Gabrielle Teste'`);
+  assert.equal(await one(`select account_manager_id from client where name='${CLIENT_FIELDS.name}'`), gabrielle, "nasce ligado à gerente");
+  assert.equal(await one(`select account_manager_bps is null from client where name='${CLIENT_FIELDS.name}'`), true, "usa a comissão padrão até o dono definir a do cliente");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CLIENT_REGISTERED_BY_MANAGER' and tenant_id='ten_roberio'`) >= 1, true, "auditado");
+  await manager.getByText(CLIENT_FIELDS.name).first().waitFor();
+  // CPF repetido é recusado.
+  const repeated = await action(cookie, "registerClientAction", { ...CLIENT_FIELDS, name: "Outra Pessoa" }, "/gerente");
+  assert.equal(repeated.result?.ok, false);
+  assert.match(String(repeated.result?.error), /Já existe um cliente com o CPF/);
+  // Formulário forjado com banco e marcação interna: o servidor ignora.
+  const forged = await action(cookie, "registerClientAction", { ...CLIENT_FIELDS, name: "Com Banco Forjado", document: cpfFrom("987654320"), bankName: "Banco X", bankAccount: "123", onlineCasinoBettor: "on" }, "/gerente");
+  assert.equal(forged.result?.ok, true, JSON.stringify(forged));
+  assert.equal(await one(`select bank_name is null and not online_casino_bettor from client where name='Com Banco Forjado'`), true);
+  await admin(`delete from client where name in ('${CLIENT_FIELDS.name}','Com Banco Forjado') and tenant_id='ten_roberio'`);
 });
 
 test("G4. celular: painel sem rolagem lateral", async () => {

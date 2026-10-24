@@ -464,10 +464,12 @@ export function useCompanyNamePrefill() {
   return { notice, onInput };
 }
 
+export type ManagerRegistration = { submit: (data: FormData) => Promise<ActionResult>; required: Record<string, string> };
+
 // Formulário de cadastro e edição. CPF e telefone recebem máscara enquanto o usuário digita; o servidor grava só os dígitos.
 // Cliente existente: abre em modo de visualização (campos realmente bloqueados) e "Editar" libera os campos. Ao salvar volta
 // para a visualização com os dados novos; "Cancelar" descarta o que foi digitado. `onMode` troca o modo a partir do pai.
-function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, onSaved, notice = null }: { editing: ClientRow | null; readOnly?: boolean; onChanged: () => void; onCancel: () => void; onEdit?: () => void; onSaved?: (message: string) => void; notice?: string | null }) {
+function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, onSaved, notice = null, manager }: { editing: ClientRow | null; readOnly?: boolean; onChanged: () => void; onCancel: () => void; onEdit?: () => void; onSaved?: (message: string) => void; notice?: string | null; manager?: ManagerRegistration }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
   const [resetKey, setResetKey] = useState(0);
   const [docRows, setDocRows] = useState(1);
@@ -503,13 +505,24 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
     if (failed.length > 0) return { ok: true, message: `${created.message} Mas não foi possível anexar: ${failed.join("; ")}. Anexe na página do cliente.` };
     return { ok: true, message: `${created.message} ${documents.length === 1 ? "1 documento anexado." : `${documents.length} documentos anexados.`}` };
   };
-  const { pending, feedback, onSubmit } = useFormAction(editing ? updateClientAction : createWithDocuments, afterSave, !editing);
+  const { pending, feedback, onSubmit } = useFormAction(manager ? manager.submit : editing ? updateClientAction : createWithDocuments, afterSave, !editing);
+  // Gerente de contas: os campos obrigatórios ganham "required" e um asterisco; o servidor confere de novo.
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (!manager) return;
+    for (const name of Object.keys(manager.required)) {
+      const control = formRef.current?.querySelector<HTMLElement>(`[name="${name}"]`);
+      if (!control) continue;
+      control.setAttribute("required", "");
+      control.closest("label")?.classList.add("is-required");
+    }
+  }, [manager, resetKey]);
   const prefill = usePersonPrefill("client");
   const company = useCompanyNamePrefill();
   return (
-    <section className="panel form-panel" aria-label={editing ? "Editar cliente" : "Novo cliente"}>
-      <div className="panel-header"><div><h2>{editing ? `${readOnly ? "Cadastro de" : "Editar"} ${editing.name}` : "Novo cliente"}</h2><p>{readOnly ? "Clique em Editar para alterar os dados." : "Somente o nome é obrigatório."}</p></div></div>
-      <form className="form-grid" onSubmit={onSubmit} onInput={(event) => { if (!editing) prefill.onInput(event); company.onInput(event); }} key={resetKey}>
+    <section className="panel form-panel" aria-label={editing ? "Editar cliente" : manager ? "Cadastro de cliente indicado" : "Novo cliente"}>
+      <div className="panel-header"><div><h2>{editing ? `${readOnly ? "Cadastro de" : "Editar"} ${editing.name}` : manager ? "Cadastrar cliente indicado por você" : "Novo cliente"}</h2><p>{readOnly ? "Clique em Editar para alterar os dados." : manager ? "Os campos com * são obrigatórios: sem eles o cadastro não é gravado. O cliente fica ligado a você." : "Somente o nome é obrigatório."}</p></div></div>
+      <form className="form-grid" ref={formRef} onSubmit={onSubmit} onInput={(event) => { if (manager) return; if (!editing) prefill.onInput(event); company.onInput(event); }} key={resetKey}>
         {editing && <input type="hidden" name="clientId" value={editing.id} />}
         <fieldset className="client-fields" disabled={readOnly}>
         {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
@@ -531,7 +544,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
           </div>
         </fieldset>
         <AddressFields kind="business" client={editing} />
-        <BankFieldset initial={editing} />
+        {!manager && <BankFieldset initial={editing} />}
         <fieldset className="form-section field-wide">
           <legend>Referências pessoais</legend>
           <div className="form-grid">
@@ -554,7 +567,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
             <p className="capital-note field-wide">O avalista fica no cadastro do cliente e aparece em todas as operações dele.</p>
           </div>
         </fieldset>
-        {!editing && (
+        {!editing && !manager && (
           <fieldset className="form-section field-wide">
             <legend>Documentos (opcional)</legend>
             <div className="form-grid">
@@ -573,8 +586,8 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
             <legend>Observações e risco</legend>
             <div className="form-grid">
               <label className="field field-wide"><span>Observações</span><textarea name="notes" rows={4} maxLength={2000} placeholder="Escreva o que desejar sobre o cliente (opcional)" defaultValue={editing?.notes ?? ""} /></label>
-              <label className="check-field field-wide"><input type="checkbox" name="onlineCasinoBettor" defaultChecked={editing?.onlineCasinoBettor ?? false} /><span>Apostadora de cassino online</span></label>
-              <p className="capital-note field-wide">Marcação interna: quando houver score de concessão de crédito, ela vai tirar muitos pontos do cliente. Por enquanto só fica registrada no cadastro.</p>
+              {!manager && <><label className="check-field field-wide"><input type="checkbox" name="onlineCasinoBettor" defaultChecked={editing?.onlineCasinoBettor ?? false} /><span>Apostadora de cassino online</span></label>
+              <p className="capital-note field-wide">Marcação interna: quando houver score de concessão de crédito, ela vai tirar muitos pontos do cliente. Por enquanto só fica registrada no cadastro.</p></>}
             </div>
           </fieldset>
         </fieldset>
@@ -584,7 +597,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
             <button type="button" className="primary-button" onClick={onEdit}><Icon name="check" size={16} /> Editar</button>
           </>}
           {editing && !readOnly && <button type="button" className="outline-button" onClick={onCancel}>Cancelar</button>}
-          {!readOnly && <button className="primary-button" disabled={pending}><Icon name={editing || saved ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : saved ? "Salvo" : editing ? "Salvar alterações" : "Cadastrar cliente"}</button>}
+          {!readOnly && <button className="primary-button" disabled={pending}><Icon name={editing || saved ? "check" : "plus"} size={16} /> {pending ? "Salvando…" : saved ? "Salvo" : editing ? "Salvar alterações" : manager ? "Cadastrar cliente" : "Cadastrar cliente"}</button>}
         </div>
       </form>
       <Feedback feedback={feedback ?? (notice ? { tone: "ok", text: notice } : null)} />
@@ -942,7 +955,7 @@ function ClientSearch({ onOpen, onEdit, onDelete }: { onOpen: (id: string) => vo
   );
 }
 
-export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null, readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null; readOnly?: boolean }) {
+export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null, readOnly = false, manager }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null; readOnly?: boolean; manager?: ManagerRegistration }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   // Número que muda a cada Editar/Cancelar/Salvar: o formulário recomeça com os dados mais recentes salvos.
@@ -977,6 +990,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
         notice={savedNotice} onEdit={() => { setEditMode(true); setSavedNotice(null); setFormVersion((version) => version + 1); }}
         onSaved={(message) => { setSavedNotice(message); setEditMode(false); }}
         onCancel={() => { setSavedNotice(null); if (editing && editMode) { setEditMode(false); setFormVersion((version) => version + 1); } else { setEditingId(null); setEditMode(false); } }} />}
+      {readOnly && manager && <ClientForm editing={null} manager={manager} onChanged={onChanged} onCancel={() => {}} />}
       {!readOnly && editing && (() => {
         // Documentos também na edição (anexar depois do cadastro). Usa a linha atual da carteira para a lista refletir os envios.
         const current = portfolio.clients.find((client) => client.id === editing.id);
@@ -984,7 +998,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
       })()}
       <section className="panel table-panel" aria-label="Lista de clientes">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{shownClients.length}</span></div></div></div>
-        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text={readOnly ? "Você ainda não tem clientes indicados. Quando o Fernando ligar um cliente a você, ele aparece aqui." : "Nenhum cliente cadastrado ainda."} /> : (
+        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text={readOnly ? "Você ainda não tem clientes indicados. Cadastre o primeiro no formulário acima." : "Nenhum cliente cadastrado ainda."} /> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Operações</th><th>Emprestado</th><th>Juros recebidos</th><th>Saldo</th><th /></tr></thead>
             <tbody>{shownClients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button>{!readOnly && <><button className="outline-button" onClick={() => startEdit(client)}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></>}</span></td></tr>)}</tbody>

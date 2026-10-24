@@ -1298,3 +1298,6 @@ button { color:inherit; }
 .manager-banner{display:flex;gap:12px;align-items:center;padding:14px 18px;border-radius:14px;border:1px solid rgba(57,202,255,.28);background:linear-gradient(90deg,rgba(57,202,255,.12),rgba(57,202,255,.03));margin-bottom:16px;line-height:1.45}
 .manager-banner svg{flex:none;color:#39caff}
 .manager-banner span{opacity:.75}
+
+/* Cadastro pela gerente: campo obrigatório */
+.field.is-required > span::after { content: " *"; color: #f87171; font-weight: 700; }
