@@ -661,12 +661,12 @@ function OperationProfitHero({ operation }: { operation: OperationView }) {
   );
 }
 
-function OperationDetailsButton({ operation, today, onChanged }: { operation: OperationView; today: string; onChanged: () => void }) {
+function OperationDetailsButton({ operation, today, onChanged, readOnly = false }: { operation: OperationView; today: string; onChanged: () => void; readOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button className="outline-button" onClick={() => setOpen(true)}>Detalhes</button>
-      {open && <PaymentPanel operation={operation} today={today} onClose={() => setOpen(false)} onChanged={onChanged} />}
+      {open && <PaymentPanel operation={operation} today={today} onClose={() => setOpen(false)} onChanged={onChanged} readOnly={readOnly} />}
     </>
   );
 }
@@ -737,14 +737,14 @@ function ClientDocuments({ client, onChanged }: { client: ClientRow; onChanged: 
 }
 
 // Dados do cadastro completo: endereços, referências e avalista.
-function ClientProfilePanel({ client }: { client: ClientRow }) {
+function ClientProfilePanel({ client, readOnly = false }: { client: ClientRow; readOnly?: boolean }) {
   const references = referenceSlots.map((slot) => ({
     slot, name: client[referenceKey(slot, "Name")], phone: formatPhone(client[referenceKey(slot, "Phone")]), relationship: client[referenceKey(slot, "Relationship")],
   }));
   const guarantor = [client.guarantorName, formatCpf(client.guarantorDocument) && `CPF ${formatCpf(client.guarantorDocument)}`, formatPhone(client.guarantorPhone), client.guarantorNotes].filter(Boolean).join(" · ");
   return (
     <section className="panel form-panel" aria-label={`Cadastro de ${client.name}`}>
-      <div className="panel-header"><div><h2>Cadastro</h2><p>Use &quot;Editar&quot; na lista de clientes para alterar estes dados.</p></div></div>
+      <div className="panel-header"><div><h2>Cadastro</h2><p>{readOnly ? "Dados de contato do cliente que você indicou." : "Use \"Editar\" na lista de clientes para alterar estes dados."}</p></div></div>
       <dl className="payment-summary profile-summary">
         <div><dt>CPF</dt><dd>{formatCpf(client.document) ?? "—"}</dd></div>
         <div><dt>Telefone</dt><dd>{formatPhone(client.phone) ?? "—"}</dd></div>
@@ -756,7 +756,7 @@ function ClientProfilePanel({ client }: { client: ClientRow }) {
         })}
         {(Object.keys(addressKinds) as AddressKind[]).map((kind) => <div key={kind}><dt>{addressKinds[kind]}</dt><dd>{formatAddress(client, kind) ?? "Não informado"}</dd></div>)}
         <div><dt>Empresa</dt><dd>{[client.businessCompanyName, client.businessCnpj && `CNPJ ${formatCnpj(client.businessCnpj)}`, client.businessAdmissionDate && `admitido em ${formatDate(client.businessAdmissionDate)}`].filter(Boolean).join(" · ") || "Não informada"}</dd></div>
-        <BankSummaryRows values={client} />
+        {!readOnly && <BankSummaryRows values={client} />}
         {references.map((reference) => (
           <div key={reference.slot}><dt>Referência {reference.slot}</dt><dd>{reference.name ? [reference.name, reference.relationship, reference.phone].filter(Boolean).join(" · ") : "Não informada"}</dd></div>
         ))}
@@ -814,7 +814,7 @@ function ClientProfitPanel({ client, portfolio }: { client: ClientRow; portfolio
 }
 
 // Página do cliente: cadastro, documentos, resumo financeiro e cada operação separada. Valores só do ciclo atual da carteira.
-function ClientDetail({ client, portfolio, onBack, onChanged }: { client: ClientRow; portfolio: TenantPortfolio; onBack: () => void; onChanged: () => void }) {
+function ClientDetail({ client, portfolio, onBack, onChanged, readOnly = false }: { client: ClientRow; portfolio: TenantPortfolio; onBack: () => void; onChanged: () => void; readOnly?: boolean }) {
   const profile = client.profile;
   const operations = portfolio.operations.filter((operation) => operation.clientId === client.id);
   const open = operations.filter((operation) => operation.status === "OPEN");
@@ -882,14 +882,14 @@ function ClientDetail({ client, portfolio, onBack, onChanged }: { client: Client
                 <td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
                 <AmountToCollectCell operation={operation} />
                 <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installmentTotal}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
-                <td className="actions-cell"><OperationDetailsButton operation={operation} today={portfolio.today} onChanged={onChanged} /></td>
+                <td className="actions-cell"><OperationDetailsButton operation={operation} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} /></td>
               </tr>
             ))}</tbody>
           </table></div>
         )}
       </section>
-      <ClientProfilePanel client={client} />
-      <ClientDocuments client={client} onChanged={onChanged} />
+      <ClientProfilePanel client={client} readOnly={readOnly} />
+      {!readOnly && <ClientDocuments client={client} onChanged={onChanged} />}
     </div>
   );
 }
@@ -942,7 +942,7 @@ function ClientSearch({ onOpen, onEdit, onDelete }: { onOpen: (id: string) => vo
   );
 }
 
-export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null }) {
+export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClientId = null, readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; onNewOperation: () => void; initialClientId?: string | null; readOnly?: boolean }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   // Número que muda a cada Editar/Cancelar/Salvar: o formulário recomeça com os dados mais recentes salvos.
@@ -954,30 +954,40 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
   const [viewingId, setViewingId] = useState<string | null>(initialClientId);
   // Busca o cliente de novo a cada atualização para que a página mostre os valores mais recentes.
   const viewing = portfolio.clients.find((client) => client.id === viewingId);
-  if (viewing) return <ClientDetail client={viewing} portfolio={portfolio} onBack={() => setViewingId(null)} onChanged={onChanged} />;
+  const [localFilter, setLocalFilter] = useState("");
+  if (viewing) return <ClientDetail client={viewing} portfolio={portfolio} onBack={() => setViewingId(null)} onChanged={onChanged} readOnly={readOnly} />;
+  const foldText = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const shownClients = readOnly && localFilter.trim() ? portfolio.clients.filter((client) => foldText(client.name).includes(foldText(localFilter.trim())) || (client.document ?? "").includes(onlyDigits(localFilter)) && onlyDigits(localFilter).length >= 3) : portfolio.clients;
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · CLIENTES" title="Clientes" description="Cadastre os clientes da sua carteira para vincular operações.">
-        <button className="primary-button" onClick={onNewOperation}><Icon name="plus" size={17} /> Nova operação</button>
+      <PageHeading eyebrow="CREDIAI · CLIENTES" title="Clientes" description={readOnly ? "Os clientes que você indicou, com a situação real de cada um. Somente leitura." : "Cadastre os clientes da sua carteira para vincular operações."}>
+        {!readOnly && <button className="primary-button" onClick={onNewOperation}><Icon name="plus" size={17} /> Nova operação</button>}
       </PageHeading>
-      <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }}
+      {readOnly && (
+        <section className="panel table-panel" aria-label="Buscar cliente">
+          <div className="client-search" role="search"><label className="client-search-box"><span className="search-icon"><Icon name="search" size={16} /></span>
+            <input type="search" aria-label="Buscar cliente por nome ou CPF" placeholder="Buscar por nome ou CPF" value={localFilter} maxLength={120} onChange={(event) => setLocalFilter(event.target.value)} />
+            {localFilter && <button type="button" className="search-clear" aria-label="Limpar busca" onClick={() => setLocalFilter("")}>×</button>}</label></div>
+        </section>
+      )}
+      {!readOnly && <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }}
         onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) startEdit(row); }}
-        onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />
-      <ClientForm key={`${editing?.id ?? "new"}:${formVersion}:${editing ? JSON.stringify(editing) : ""}`} editing={editing} readOnly={editing !== null && !editMode} onChanged={onChanged}
+        onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />}
+      {!readOnly && <ClientForm key={`${editing?.id ?? "new"}:${formVersion}:${editing ? JSON.stringify(editing) : ""}`} editing={editing} readOnly={editing !== null && !editMode} onChanged={onChanged}
         notice={savedNotice} onEdit={() => { setEditMode(true); setSavedNotice(null); setFormVersion((version) => version + 1); }}
         onSaved={(message) => { setSavedNotice(message); setEditMode(false); }}
-        onCancel={() => { setSavedNotice(null); if (editing && editMode) { setEditMode(false); setFormVersion((version) => version + 1); } else { setEditingId(null); setEditMode(false); } }} />
-      {editing && (() => {
+        onCancel={() => { setSavedNotice(null); if (editing && editMode) { setEditMode(false); setFormVersion((version) => version + 1); } else { setEditingId(null); setEditMode(false); } }} />}
+      {!readOnly && editing && (() => {
         // Documentos também na edição (anexar depois do cadastro). Usa a linha atual da carteira para a lista refletir os envios.
         const current = portfolio.clients.find((client) => client.id === editing.id);
         return current ? <ClientDocuments key={current.id} client={current} onChanged={onChanged} /> : null;
       })()}
       <section className="panel table-panel" aria-label="Lista de clientes">
-        <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{portfolio.clients.length}</span></div></div></div>
-        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente cadastrado ainda." /> : (
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{shownClients.length}</span></div></div></div>
+        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text={readOnly ? "Você ainda não tem clientes indicados. Quando o Fernando ligar um cliente a você, ele aparece aqui." : "Nenhum cliente cadastrado ainda."} /> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Operações</th><th>Emprestado</th><th>Juros recebidos</th><th>Saldo</th><th /></tr></thead>
-            <tbody>{portfolio.clients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button><button className="outline-button" onClick={() => startEdit(client)}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></span></td></tr>)}</tbody>
+            <tbody>{shownClients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button>{!readOnly && <><button className="outline-button" onClick={() => startEdit(client)}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></>}</span></td></tr>)}</tbody>
           </table></div>
         )}
         {portfolio.archivedClients.length > 0 && <p className="capital-note">Arquivados ({portfolio.archivedClients.length}): {portfolio.archivedClients.map((client) => client.name).join(", ")}. O histórico deles continua em Operações e Pagamentos.</p>}
@@ -1646,7 +1656,7 @@ function AmountToCollectCell({ operation }: { operation: OperationView }) {
   return <td data-label="A cobrar no vencimento">{operation.nextOpenDueDate && due.cents > 0 ? <><strong>{formatMoney(due.cents)}</strong><small>{due.note}</small></> : <span>—</span>}</td>;
 }
 
-function OperationsTable({ operations, clients, today, onChanged }: { operations: OperationView[]; clients: ClientOption[]; today: string; onChanged: () => void }) {
+function OperationsTable({ operations, clients, today, onChanged, readOnly = false }: { operations: OperationView[]; clients: ClientOption[]; today: string; onChanged: () => void; readOnly?: boolean }) {
   // Tabela compacta: cabe na largura da tela sem rolar para o lado. Dados menos usados ficam como linha pequena sob o principal.
   return (
     <div className="table-scroll"><table className="data-table fit-table">
@@ -1658,7 +1668,7 @@ function OperationsTable({ operations, clients, today, onChanged }: { operations
           <td data-label="Total">{formatMoney(operation.totalCents)}</td><td data-label="Recebido">{formatMoney(operation.paidCents)}</td><td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
           <AmountToCollectCell operation={operation} />
           <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installmentTotal}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
-          <td className="actions-cell"><span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span></td>
+          <td className="actions-cell">{readOnly ? <OperationDetailsButton operation={operation} today={today} onChanged={onChanged} readOnly /> : <span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span>}</td>
         </tr>
       ))}</tbody>
     </table></div>
@@ -1705,7 +1715,7 @@ const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode 
   { key: "ALL", label: "Todos", icon: <><path d="M4 6h16M4 12h16M4 18h16" /></> },
 ];
 
-export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void }) {
+export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus, readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void; readOnly?: boolean }) {
   const ids = focus ? new Set(portfolio.operations.filter((operation) => operation.status === "OPEN" && (focus === "lent" ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0)).map((operation) => operation.id)) : null;
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
   const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
@@ -1729,8 +1739,8 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   });
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description="Cadastre e acompanhe os empréstimos da sua carteira." />
-      {focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
+      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Acompanhe os empréstimos dos clientes que você indicou. Somente leitura." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
+      {readOnly ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
         {!focus && focused.length > 0 && (
@@ -1753,7 +1763,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
             {wanted && <p className="client-search-status" role="status">{operations.length === 0 ? "Nenhuma operação encontrada para esse cliente." : `${operations.length} ${operations.length === 1 ? "operação" : "operações"} de ${wanted}.`}</p>}
           </div>
         )}
-        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? (wanted ? `Nenhuma operação ${situation === "OPEN" ? "ativa" : situation === "PAID" ? "quitada" : ""} encontrada para essa busca.`.replace("  ", " ") : situation === "PAID" ? "Nenhuma operação quitada." : "Nenhuma operação ativa.") : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
+        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? (wanted ? `Nenhuma operação ${situation === "OPEN" ? "ativa" : situation === "PAID" ? "quitada" : ""} encontrada para essa busca.`.replace("  ", " ") : situation === "PAID" ? "Nenhuma operação quitada." : "Nenhuma operação ativa.") : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} />}
       </section>
     </div>
   );
@@ -1957,7 +1967,7 @@ export function PaymentsPage({ portfolio }: { portfolio: TenantPortfolio }) {
 
 export type ChargesView = ChargeFilter | "Em aberto";
 
-export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto" }: { portfolio: TenantPortfolio; onChanged: () => void; initialFilter?: ChargesView }) {
+export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto", readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; initialFilter?: ChargesView; readOnly?: boolean }) {
   const filters: ChargesView[] = ["Em aberto", "Em atraso", "Hoje", "Amanhã", "Próximas"];
   const [filter, setFilter] = useState<ChargesView>(initialFilter);
   const open = portfolio.operations.filter((operation) => operation.status === "OPEN");
@@ -1969,11 +1979,11 @@ export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto" 
   const balance = operations.reduce((total, operation) => total + operation.balanceCents, 0);
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · COBRANÇAS" title="Cobranças" description="Operações em aberto por vencimento. Registre cada pagamento quando receber." />
+      <PageHeading eyebrow="CREDIAI · COBRANÇAS" title="Cobranças" description={readOnly ? "Operações em aberto dos seus clientes, por vencimento. Somente leitura." : "Operações em aberto por vencimento. Registre cada pagamento quando receber."} />
       <section className="panel table-panel">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{filter === "Em aberto" ? `Total a receber: ${formatMoney(portfolio.summary.receivableCents)}` : `${filter}: ${formatMoney(balance)}`}</h2></div><p>{filter === "Em aberto" ? "Principal + juros ainda não recebidos de todas as operações em aberto." : "Saldo em aberto das operações deste filtro."}</p></div></div>
         <div className="charge-tabs" role="tablist" aria-label="Filtro de cobranças">{filters.map((item) => <button key={item} role="tab" aria-selected={filter === item} className={filter === item ? "charge-tab-active" : ""} onClick={() => setFilter(item)}>{item} ({countOf(item)})</button>)}</div>
-        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} />}
+        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} />}
       </section>
     </div>
   );

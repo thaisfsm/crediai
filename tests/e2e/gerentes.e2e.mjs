@@ -140,54 +140,77 @@ test("G2. senha provisória: o gerente só passa pela troca de senha e depois en
   await manager.waitForURL((url) => url.pathname === "/gerente", { timeout: 15_000 });
 });
 
-test("G3. painel: só os clientes dele, números certos, sem dados pessoais, com as duas cores", async () => {
+test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, sem edição, sem banco, com as duas cores", async () => {
+  // Dados bancários e observação do cliente existem no cadastro do dono, mas não podem chegar à gerente.
+  await admin(`update client set bank_name='Banco Secreto', pix_key_type='EMAIL', pix_key='chave-pix-secreta@teste.local', notes='observação interna do dono', online_casino_bettor=true where id='c_g_ana'`);
   await manager.goto(`${BASE}/gerente`);
-  await manager.locator(".mgr-hero-value").waitFor();
-  const text = await manager.locator("body").innerText();
-  // Ganho: Ana 10% de R$ 100,00 + Carla 20% de R$ 100,00 = R$ 30,00; paga R$ 10,00; a receber R$ 20,00; prevista (Ana e Beto 10% de R$ 100,00) R$ 20,00.
-  assert.match((await manager.locator(".mgr-hero-value").innerText()).replace(/\s/g, " "), /R\$ 20,00/);
-  assert.match(text.replace(/\s/g, " "), /Já recebida R\$ 10,00/);
-  assert.match(text.replace(/\s/g, " "), /Prevista \(juros ainda a pagar\) R\$ 17,50/);
-  assert.match(text.replace(/\s/g, " "), /Comissão gerada até hoje\s*R\$ 30,00/);
+  await manager.locator(".metric-featured .metric-value").waitFor();
+  const flat = async () => (await manager.locator("body").innerText()).replace(/\s+/g, " ");
+  // Ganho: Ana 10% de R$ 100,00 + Carla 20% de R$ 100,00 = R$ 30,00; paga R$ 10,00; a receber R$ 20,00; prevista (Ana 10% + Beto 7,5%) R$ 17,50.
+  assert.match((await manager.locator(".metric-featured .metric-value").innerText()).replace(/\s/g, ""), /R\$20,00/);
+  let text = await flat();
+  assert.match(text, /Já recebida R\$ 10,00/);
+  assert.match(text, /Clientes indicados/);
+  assert.ok(!/Capital disponível|Contas a pagar|Investidores|Financeiro|Configurações|Nova operação/.test(text), "nada do caixa nem de cadastros do dono");
+  // Menu: só as telas dela.
+  const menu = (await manager.locator(".side-nav").innerText()).replace(/\s+/g, " ");
+  for (const item of ["Visão geral", "Clientes", "Operações", "Pagamentos", "Cobranças", "Comissão"]) assert.ok(menu.includes(item), `menu tem ${item}`);
+  for (const item of ["Capital", "Financeiro", "Contas a pagar", "Investidores", "Gerentes", "Relatórios", "Renegociação"]) assert.ok(!menu.includes(item), `menu não tem ${item}`);
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-visao-geral-padrao.png`, fullPage: true });
+  // Clientes: só os dela, sem cadastro nem edição.
+  await manager.locator(".side-nav").getByText("Clientes", { exact: true }).click();
+  await manager.getByRole("region", { name: "Lista de clientes" }).waitFor();
+  text = await flat();
   for (const name of ["Ana Indicada", "Beto Indicado", "Carla Indicada"]) assert.ok(text.includes(name), `${name} aparece`);
-  assert.ok(!text.includes("Dora Sem Gerente"), "cliente de outro gerente/sem gerente não aparece");
+  assert.ok(!text.includes("Dora Sem Gerente"), "cliente sem gerente (ou de outro gerente) não aparece");
+  assert.equal(await manager.getByRole("button", { name: /Editar|Excluir|Cadastrar cliente/ }).count(), 0, "sem botões de edição");
+  assert.equal(await manager.getByRole("region", { name: "Novo cliente" }).count(), 0);
+  await manager.getByPlaceholder("Buscar por nome ou CPF").fill("carla");
+  assert.equal(await manager.locator("tbody tr").count(), 1);
+  await manager.getByPlaceholder("Buscar por nome ou CPF").fill("");
+  // Ficha do cliente: contato visível (como o dono vê), mas nada de banco, observações nem documentos.
+  await manager.getByRole("button", { name: "Ver" }).first().click();
+  await manager.getByText("Resumo do cliente").waitFor();
+  const detail = await flat();
+  assert.ok(detail.includes("CPF"), "cadastro com CPF, como o dono vê");
+  assert.ok(!/Banco Secreto|chave-pix-secreta|observação interna|Apostadora|Dados bancários/.test(detail), "sem dados bancários, observações nem sinalização interna");
+  assert.equal(await manager.getByText("Documentos", { exact: false }).count() > 0 && (await manager.getByRole("button", { name: /Enviar|Anexar|Excluir/ }).count()) > 0, false, "sem envio de documentos");
   const html = await manager.content();
-  for (const secret of ["11144477735", "111.444.777-35", "11999990001", "52998224725", "12345678909", "Dora"]) assert.ok(!html.includes(secret), `dado pessoal ${secret} não aparece`);
-  // Situação real: Beto em atraso, Ana em dia, Carla quitada.
-  const card = (name) => manager.locator(".mgr-client", { hasText: name });
-  assert.match(await card("Beto Indicado").innerText(), /Em atraso · 5 dias/);
-  assert.match(await card("Ana Indicada").innerText(), /Em dia/);
-  assert.match(await card("Carla Indicada").innerText(), /Quitado/);
-  assert.match((await card("Carla Indicada").innerText()).replace(/\s/g, " "), /Sua comissão \(20%\) R\$ 20,00/);
-  // Filtros e busca.
-  await manager.getByRole("button", { name: /^Em atraso/ }).click();
-  assert.equal(await manager.locator(".mgr-client").count(), 1);
-  await manager.getByRole("button", { name: /^Todos/ }).click();
-  await manager.getByPlaceholder("Buscar cliente pelo nome").fill("carla");
-  assert.equal(await manager.locator(".mgr-client").count(), 1);
-  await manager.getByPlaceholder("Buscar cliente pelo nome").fill("");
-  // Operações do cliente.
-  await card("Ana Indicada").locator(".mgr-client-head").click();
-  assert.equal(await card("Ana Indicada").locator(".mgr-ops tbody tr").count(), 2);
+  for (const secret of ["12345678909", "Dora", "Banco Secreto", "chave-pix-secreta"]) assert.ok(!html.includes(secret), `${secret} não está na página`);
+  // Operações: só leitura, com detalhes do histórico (sem registrar pagamento nem editar).
+  await manager.locator(".side-nav").getByText("Operações", { exact: true }).click();
+  await manager.getByRole("region", { name: "Lista de operações" }).waitFor();
+  assert.equal(await manager.getByRole("region", { name: /Nova operação/ }).count(), 0);
+  assert.equal(await manager.getByRole("button", { name: /Registrar pagamento|Editar|Excluir/ }).count(), 0, "sem botões de gravação");
+  await manager.getByRole("button", { name: "Detalhes" }).first().click();
+  await manager.getByRole("button", { name: /Registrar pagamento|Quitar|Renegociar/ }).count().then((count) => assert.equal(count, 0, "detalhe sem ações de gravação"));
+  await manager.keyboard.press("Escape");
+  await manager.goto(`${BASE}/gerente?tela=comissao`);
+  text = await flat();
+  assert.match(text, /A receber agora R\$ 20,00/);
+  assert.match(text, /Prevista \(juros ainda a pagar\) R\$ 17,50/);
+  assert.match(text, /Comissão gerada até hoje R\$ 30,00/);
+  // Telas do dono por endereço direto não abrem para ela.
+  await manager.goto(`${BASE}/gerente?tela=capital`);
+  assert.ok(!/Capital disponível/.test(await flat()), "?tela=capital não mostra o capital");
   // Cores: padrão e roxo, guardada num cookie (nada no banco).
   const before = await tenantHash("ten_roberio");
-  assert.equal(await manager.locator(".mgr-root").getAttribute("data-theme"), "padrao");
-  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-painel-padrao.png`, fullPage: true });
-  await manager.getByRole("button", { name: "Roxo" }).click();
-  await manager.waitForFunction(() => document.querySelector(".mgr-root")?.getAttribute("data-theme") === "roxo");
-  await sleep(600);
-  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-painel-roxo.png`, fullPage: true });
+  assert.equal(await manager.locator(".app-shell").getAttribute("data-theme"), "padrao");
+  await manager.getByRole("button", { name: "Roxo" }).first().click();
+  await manager.waitForFunction(() => document.querySelector(".app-shell")?.getAttribute("data-theme") === "roxo");
+  await sleep(700);
+  if (SHOTS) { await manager.goto(`${BASE}/gerente`); await manager.locator(".metric-featured").waitFor(); await manager.screenshot({ path: `${SHOTS}/gerente-visao-geral-roxo.png`, fullPage: true }); }
   await manager.reload();
-  assert.equal(await manager.locator(".mgr-root").getAttribute("data-theme"), "roxo", "a escolha da cor continua depois de recarregar");
+  assert.equal(await manager.locator(".app-shell").getAttribute("data-theme"), "roxo", "a escolha da cor continua depois de recarregar");
   assert.equal(await tenantHash("ten_roberio"), before, "escolher a cor não grava nada nos dados");
 });
 
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);
-  await phone.locator(".mgr-hero-value").waitFor();
+  await phone.locator(".metric-featured").waitFor();
   assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, "sem rolagem lateral");
-  if (SHOTS) await phone.screenshot({ path: `${SHOTS}/gerente-painel-celular.png`, fullPage: true });
+  if (SHOTS) await phone.screenshot({ path: `${SHOTS}/gerente-celular.png`, fullPage: true });
   await phone.context().close();
 });
 
@@ -211,7 +234,10 @@ test("G5. só leitura: o gerente não alcança nenhuma tela nem ação da cartei
     ["createClientAction", { name: "Forjado" }, "/"], ["createManagerAction", { name: "Forjada", commission: "50" }, "/gerentes"],
     ["registerManagerPayoutAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), amount: "999,00", paidOn: TODAY }, "/gerentes"],
     ["linkClientAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), clientId: "c_g_dora" }, "/gerentes"],
-    ["unlinkClientAction", { clientId: "c_g_ana" }, "/gerentes"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
+    ["unlinkClientAction", { clientId: "c_g_ana" }, "/gerentes"], ["deleteManagerAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`) }, "/gerentes"],
+    ["deleteClientAction", { clientId: "c_g_ana" }, "/"], ["registerPaymentAction", { operationId: "op_g_ana_open", amount: "100,00", paidOn: TODAY }, "/"],
+    ["updateClientAction", { clientId: "c_g_ana", name: "Renomeada" }, "/"], ["cancelOperationAction", { operationId: "op_g_ana_open" }, "/"],
+    ["uploadClientDocumentAction", { clientId: "c_g_ana" }, "/"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
   ];
   for (const [name, fields, path] of forged) {
     const response = await action(managerCookie, name, fields, path);
