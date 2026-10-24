@@ -154,8 +154,8 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   assert.ok(!/Capital disponível|Contas a pagar|Investidores|Financeiro|Configurações|Nova operação/.test(text), "nada do caixa nem de cadastros do dono");
   // Menu: só as telas dela.
   const menu = (await manager.locator(".side-nav").innerText()).replace(/\s+/g, " ");
-  for (const item of ["Visão geral", "Clientes", "Operações", "Pagamentos", "Cobranças", "Comissão"]) assert.ok(menu.includes(item), `menu tem ${item}`);
-  for (const item of ["Capital", "Financeiro", "Contas a pagar", "Investidores", "Gerentes", "Relatórios", "Renegociação"]) assert.ok(!menu.includes(item), `menu não tem ${item}`);
+  for (const item of ["Visão geral", "Clientes", "Operações", "Cobranças", "Comissão"]) assert.ok(menu.includes(item), `menu tem ${item}`);
+  for (const item of ["Pagamentos", "Capital", "Financeiro", "Contas a pagar", "Investidores", "Gerentes", "Relatórios", "Renegociação"]) assert.ok(!menu.includes(item), `menu não tem ${item}`);
   if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-visao-geral-padrao.png`, fullPage: true });
   // Clientes: só os dela, sem cadastro nem edição.
   await manager.locator(".side-nav").getByText("Clientes", { exact: true }).click();

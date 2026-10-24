@@ -28,7 +28,7 @@ const itemHref = (label: NavLabel, base = "/") => PAGE_ROUTES[label] ?? navHref(
 // Menu do gerente de contas (só leitura): as mesmas telas do dono que mostram clientes e cobranças, sem capital, financeiro nem cadastros.
 const managerNavGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
   { title: "MEUS CLIENTES", items: [{ label: "Visão geral", icon: "grid" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
-  { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }] },
+  { title: "ACOMPANHAMENTO", items: [{ label: "Cobranças", icon: "calendar" }] },
   { title: "MINHA COMISSÃO", items: [{ label: "Comissão", icon: "dollar" }] },
 ];
 
