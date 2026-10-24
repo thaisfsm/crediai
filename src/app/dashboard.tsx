@@ -139,7 +139,7 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 
 // Modo gerente de contas: as mesmas telas do dono, só com os clientes dele, sem edição, sem capital e com o resumo da comissão.
 export type ManagerMode = { panel: ManagerPanel };
-const MANAGER_SECTIONS: NavKey[] = ["Visão geral", "Clientes", "Operações", "Pagamentos", "Cobranças", "Comissão"];
+const MANAGER_SECTIONS: NavKey[] = ["Visão geral", "Clientes", "Operações", "Cobranças", "Comissão"];
 
 export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection, manager }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview | null; isSuperAdmin?: boolean; initialSection?: string; manager?: ManagerMode }) {
   const router = useRouter();
@@ -300,7 +300,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                 </article>
 
                 <article className="panel yield-panel">
-                  <div className="panel-header"><div><div className="panel-title-row"><h2>Resultados</h2><span className="info-dot" title="Juros efetivamente recebidos nos pagamentos e juros que ainda faltam receber">i</span></div><p>Juros da carteira</p></div><button className="more-button" aria-label="Mais opções" onClick={() => navigate("Pagamentos")}><Icon name="more" size={18} /></button></div>
+                  <div className="panel-header"><div><div className="panel-title-row"><h2>Resultados</h2><span className="info-dot" title="Juros efetivamente recebidos nos pagamentos e juros que ainda faltam receber">i</span></div><p>Juros da carteira</p></div><button className="more-button" aria-label="Mais opções" onClick={() => navigate(readOnly ? "Cobranças" : "Pagamentos")}><Icon name="more" size={18} /></button></div>
                   <div className="yield-total"><Money cents={summary.receivedInterestCents} /><small>juros recebidos</small></div>
                   <div className="yield-chart-wrap"><div className="yield-donut" style={{ ["--yield" as string]: `${receivedShare}%` }}><div><strong>{receivedShare}%</strong><small>da projeção</small></div></div><div className="yield-legend"><div><i className="legend-received" /><span>Recebidos</span><strong>{formatMoney(summary.receivedInterestCents)}</strong></div><div><i className="legend-pending" /><span>A receber</span><strong>{formatMoney(summary.expectedInterestCents)}</strong></div></div></div>
                   <div className="yield-foot"><span><Icon name="trend" size={14} /> Total recebido</span><strong>{formatMoney(summary.receivedCents)}</strong></div>
