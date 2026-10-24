@@ -16,6 +16,7 @@ export type ManagerActions = {
   updateManager: (data: FormData) => Promise<Result>;
   linkClient: (data: FormData) => Promise<Result>;
   unlinkClient: (data: FormData) => Promise<Result>;
+  deleteManager: (data: FormData) => Promise<Result>;
   registerPayout: (data: FormData) => Promise<Result>;
   createAccess: (data: FormData) => Promise<AccessResult>;
   resetPassword: (data: FormData) => Promise<AccessResult>;
@@ -159,6 +160,26 @@ function ClientRow({ manager, client }: { manager: Manager; client: Manager["cli
   );
 }
 
+function DeleteManager({ manager }: { manager: Manager }) {
+  const { actions } = useScope();
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const form = useFormAction(actions.deleteManager, () => router.refresh(), false);
+  if (!confirming) return <button type="button" className="outline-button" onClick={() => setConfirming(true)}>Excluir</button>;
+  return (
+    <form onSubmit={form.onSubmit} className="capital-note" role="alert">
+      <input type="hidden" name="managerId" value={manager.id} /><TenantField />
+      <strong>Excluir {manager.name}?</strong>
+      <p>{manager.clients.length > 0 ? `Os ${manager.clients.length} clientes indicados ficam sem gerente (os clientes e as operações não mudam). ` : ""}{manager.hasLogin ? "O acesso de leitura do gerente será apagado. " : ""}Não dá para desfazer. Com comissão já paga registrada, só é possível desativar.</p>
+      <div className="form-actions">
+        <button type="button" className="outline-button" onClick={() => setConfirming(false)}>Cancelar</button>
+        <button className="primary-button" disabled={form.pending}>{form.pending ? "Excluindo…" : "Sim, excluir"}</button>
+      </div>
+      <Feedback feedback={form.feedback} />
+    </form>
+  );
+}
+
 function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: ManagersPage["unassigned"] }) {
   const [editing, setEditing] = useState(false);
   const [paying, setPaying] = useState(false);
@@ -173,6 +194,7 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
         <div className="heading-actions">
           <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); }}>{editing ? "Fechar" : "Editar"}</button>
           <button type="button" className="outline-button" onClick={() => { setPaying(!paying); setEditing(false); }}>{paying ? "Fechar" : "Pagar comissão"}</button>
+          <DeleteManager manager={manager} />
         </div>
       </div>
       <dl className="detail-grid manager-summary">

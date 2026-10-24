@@ -317,3 +317,37 @@ test("G9. MASTER vê e cria gerentes de qualquer cliente SaaS, e o gerente não 
   assert.equal(await one(`select count(*) from account_manager`), before);
   assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_fernando' and id like 'op\\_g\\_%'`), 0);
 });
+
+test("G10. excluir gerente: sem comissão paga apaga (e desvincula clientes e remove o login); com comissão paga recusa", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  // Gabrielle já recebeu comissão (R$ 10,00): não pode ser excluída, nada muda.
+  const gabrielle = await one(`select id from account_manager where name='Gabrielle Teste'`);
+  const refused = await action(ownerCookie, "deleteManagerAction", { managerId: gabrielle });
+  assert.equal(refused.result?.ok, false);
+  assert.match(refused.result?.error ?? "", /não pode ser excluído/);
+  assert.equal(await one(`select count(*) from account_manager where id='${gabrielle}'`), 1);
+  assert.equal(await one(`select count(*) from client where account_manager_id='${gabrielle}'`), 3);
+  // "Outro Gerente" (sem pagamentos, com o cliente Dora) pela tela do dono.
+  const beforeOps = await tenantHash("ten_roberio");
+  owner = await signIn("roberio@teste.local"); // o bloqueio/desbloqueio do MASTER (G9) encerrou a sessão anterior
+  await owner.goto(`${BASE}/gerentes`);
+  const region = owner.getByRole("region", { name: "Gerente Outro Gerente" });
+  await region.getByRole("button", { name: "Excluir", exact: true }).click();
+  await region.getByRole("button", { name: "Sim, excluir" }).click();
+  await poll(`select count(*) from account_manager where name='Outro Gerente'`, 0);
+  assert.equal(await one(`select account_manager_id from client where id='c_g_dora'`), null, "Dora voltou a ficar sem gerente");
+  assert.equal(await one(`select count(*) from client where id='c_g_dora'`), 1, "o cliente continua existindo");
+  assert.equal(await tenantHash("ten_roberio"), beforeOps, "operações, pagamentos e capital intactos");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='MANAGER_DELETED' and tenant_id='ten_roberio'`), 1);
+  // O MASTER exclui o gerente que criou para o Fernando (com login e cliente vinculado).
+  const thais = await apiLogin("thais@teste.local");
+  const masterManager = await one(`select id from account_manager where name='Gerente Do Master'`);
+  const deleted = await action(thais, "adminDeleteManagerAction", { tenantId: "ten_fernando", managerId: masterManager }, "/admin");
+  assert.equal(deleted.result?.ok, true);
+  assert.equal(await one(`select count(*) from "user" where email='gerente.master@teste.local'`), 0, "login removido");
+  assert.equal(await one(`select account_manager_id from client where id='c_g_fer'`), null);
+  // Outro tenant não exclui gerente alheio.
+  const foreign = await action(await apiLogin("fernando@teste.local"), "deleteManagerAction", { managerId: gabrielle });
+  assert.equal(foreign.result?.ok, false);
+  assert.equal(await one(`select count(*) from account_manager where id='${gabrielle}'`), 1);
+});

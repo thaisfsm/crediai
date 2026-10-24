@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { generateTemporaryPassword, hashPassword } from "@/lib/admin/passwords";
 import { withPlatformContext, type TenantTransaction } from "@/lib/auth/guards";
 import { tenants, users } from "@/lib/db/schema";
-import { createManager, createManagerAccess, linkClient, registerPayout, resetManagerPassword, text, unlinkClient, updateManager, type AccessCommandResult, type CommandResult } from "@/lib/managers/commands";
+import { createManager, createManagerAccess, deleteManager, linkClient, registerPayout, resetManagerPassword, text, unlinkClient, updateManager, type AccessCommandResult, type CommandResult } from "@/lib/managers/commands";
 
 // Gerentes de contas pelo MASTER (SUPER_ADMIN), em nome de um cliente SaaS. O tenant vem do formulário, mas só vale se existir e não
 // for o ambiente de um SUPER_ADMIN; as regras e a auditoria são as mesmas do dono da carteira (src/lib/managers/commands.ts),
@@ -35,6 +35,7 @@ export async function adminCreateManagerAction(data: FormData) { return run(data
 export async function adminUpdateManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => updateManager(tx, tenantId, session, data)); }
 export async function adminLinkClientAction(data: FormData) { return run(data, (tx, tenantId, session) => linkClient(tx, tenantId, session, data)); }
 export async function adminUnlinkClientAction(data: FormData) { return run(data, (tx, tenantId, session) => unlinkClient(tx, tenantId, session, data)); }
+export async function adminDeleteManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => deleteManager(tx, tenantId, session, data)); }
 export async function adminRegisterManagerPayoutAction(data: FormData) { return run(data, (tx, tenantId, session) => registerPayout(tx, tenantId, session, data)); }
 
 async function access(data: FormData, command: typeof createManagerAccess): Promise<AccessCommandResult> {

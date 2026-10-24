@@ -170,3 +170,24 @@ export async function resetManagerPassword(tx: TenantTransaction, tenantId: stri
   });
   return { ok: true, message: "Nova senha provisória gerada.", email: user.email, temporaryPassword };
 }
+
+// Exclusão definitiva: só de gerente sem comissão paga (o histórico de pagamentos não se apaga). Desvincula os clientes (os clientes
+// em si não mudam) e apaga o login de leitura, se houver. Com pagamentos registrados, o gerente só pode ser desativado.
+export async function deleteManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const managerId = text(data, "managerId", 80);
+  const manager = await ownManager(tx, tenantId, managerId);
+  if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  const [paid] = await tx.select({ id: accountManagerPayouts.id }).from(accountManagerPayouts)
+    .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).limit(1);
+  if (paid) return { ok: false, error: `${manager.name} já recebeu comissão registrada e não pode ser excluído (o histórico financeiro fica). Desative o gerente.` };
+  const unlinked = await tx.update(clients).set({ accountManagerId: null, accountManagerBps: null, updatedAt: sql`now()` })
+    .where(and(eq(clients.tenantId, tenantId), eq(clients.accountManagerId, manager.id))).returning({ id: clients.id });
+  await tx.delete(accountManagers).where(and(eq(accountManagers.id, manager.id), eq(accountManagers.tenantId, tenantId)));
+  if (manager.userId) await tx.delete(users).where(and(eq(users.id, manager.userId), eq(users.tenantId, tenantId), eq(users.role, "ACCOUNT_MANAGER")));
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_DELETED", entity: "account_manager", entityId: manager.id, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Gerente ${manager.name} excluído (${unlinked.length} cliente(s) desvinculado(s)${manager.userId ? ", acesso de leitura removido" : ""}).`,
+    before: { name: manager.name, email: manager.email, commissionBps: manager.commissionBps, hadAccess: Boolean(manager.userId) }, after: { clientsUnlinked: unlinked.length },
+  });
+  return { ok: true, message: `Gerente ${manager.name} excluído.` };
+}

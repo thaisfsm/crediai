@@ -2,10 +2,10 @@
 
 import { ManagersHome, type ManagerActions } from "@/app/gerentes/managers-ui";
 import type { ManagersPage } from "@/lib/managers/queries";
-import { adminCreateManagerAccessAction, adminCreateManagerAction, adminLinkClientAction, adminRegisterManagerPayoutAction, adminResetManagerPasswordAction, adminUnlinkClientAction, adminUpdateManagerAction } from "../../gerentes-actions";
+import { adminCreateManagerAccessAction, adminCreateManagerAction, adminDeleteManagerAction, adminLinkClientAction, adminRegisterManagerPayoutAction, adminResetManagerPasswordAction, adminUnlinkClientAction, adminUpdateManagerAction } from "../../gerentes-actions";
 
 const actions: ManagerActions = {
-  createManager: adminCreateManagerAction, updateManager: adminUpdateManagerAction, linkClient: adminLinkClientAction, unlinkClient: adminUnlinkClientAction,
+  createManager: adminCreateManagerAction, updateManager: adminUpdateManagerAction, linkClient: adminLinkClientAction, unlinkClient: adminUnlinkClientAction, deleteManager: adminDeleteManagerAction,
   registerPayout: adminRegisterManagerPayoutAction, createAccess: adminCreateManagerAccessAction, resetPassword: adminResetManagerPasswordAction,
 };
 
