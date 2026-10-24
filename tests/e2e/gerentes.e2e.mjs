@@ -193,27 +193,23 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   // Telas do dono por endereço direto não abrem para ela.
   await manager.goto(`${BASE}/gerente?tela=capital`);
   assert.ok(!/Capital disponível/.test(await flat()), "?tela=capital não mostra o capital");
-  // Cores: padrão e roxo, guardada num cookie (nada no banco).
+  // Sem seletor de cor: o visual é o mesmo do dono.
+  assert.equal(await manager.locator(".theme-switch").count(), 0, "sem seletor de cor");
+  if (SHOTS) { await manager.goto(`${BASE}/gerente`); await manager.locator(".metric-featured").waitFor(); await manager.screenshot({ path: `${SHOTS}/gerente-visao-geral.png`, fullPage: true }); }
   const before = await tenantHash("ten_roberio");
-  assert.equal(await manager.locator(".app-shell").getAttribute("data-theme"), "padrao");
-  await manager.getByRole("button", { name: "Roxo" }).first().click();
-  await manager.waitForFunction(() => document.querySelector(".app-shell")?.getAttribute("data-theme") === "roxo");
-  await sleep(700);
-  if (SHOTS) { await manager.goto(`${BASE}/gerente`); await manager.locator(".metric-featured").waitFor(); await manager.screenshot({ path: `${SHOTS}/gerente-visao-geral-roxo.png`, fullPage: true }); }
   await manager.reload();
-  assert.equal(await manager.locator(".app-shell").getAttribute("data-theme"), "roxo", "a escolha da cor continua depois de recarregar");
-  assert.equal(await tenantHash("ten_roberio"), before, "escolher a cor não grava nada nos dados");
+  assert.equal(await tenantHash("ten_roberio"), before, "abrir o painel não grava nada nos dados");
 });
 
-test("G3b. sem clientes ainda: tela de boas-vindas bonita no lugar dos zeros", async () => {
+test("G3b. sem clientes ainda: aviso amigável e o painel completo", async () => {
   const linked = await admin(`select id, account_manager_id, account_manager_bps from client where account_manager_id is not null`);
   await admin(`update client set account_manager_id = null, account_manager_bps = null where account_manager_id is not null`);
   try {
     await manager.goto(`${BASE}/gerente`);
-    await manager.locator(".manager-welcome").waitFor();
+    await manager.locator(".manager-banner").waitFor();
     const text = (await manager.locator("body").innerText()).replace(/\s+/g, " ");
-    assert.match(text, /Sua vitrine de comissões está pronta/);
-    assert.ok(!/Evolução da carteira/.test(text), "sem gráficos vazios");
+    assert.match(text, /Você ainda não tem clientes indicados/);
+    assert.match(text, /Evolução da carteira/, "mesmo painel do dono, mesmo vazio");
     if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-sem-clientes.png`, fullPage: true });
   } finally {
     for (const row of linked) await admin(`update client set account_manager_id='${row.account_manager_id}', account_manager_bps=${row.account_manager_bps ?? "null"} where id='${row.id}'`);
