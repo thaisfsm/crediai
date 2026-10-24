@@ -16,6 +16,9 @@ import { PayablesDashboard } from "./payables-dashboard";
 import { ReceivablesDashboard } from "./receivables-dashboard";
 import { receivablesOverview } from "@/lib/finance/receivables";
 import type { PayablesOverview } from "@/lib/investors/payables";
+import type { ManagerPanel } from "@/lib/managers/queries";
+import { ManagerCommissionPage } from "./gerente/commission-page";
+import { setManagerThemeAction } from "./gerente/actions";
 import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
@@ -135,10 +138,17 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 }
 
 
-export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview; isSuperAdmin?: boolean; initialSection?: string }) {
+// Modo gerente de contas: as mesmas telas do dono, só com os clientes dele, sem edição, sem capital e com o resumo da comissão.
+export type ManagerMode = { panel: ManagerPanel; initialTheme: "padrao" | "roxo" };
+const MANAGER_SECTIONS: NavKey[] = ["Visão geral", "Clientes", "Operações", "Pagamentos", "Cobranças", "Comissão"];
+
+export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection, manager }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview | null; isSuperAdmin?: boolean; initialSection?: string; manager?: ManagerMode }) {
   const router = useRouter();
   const initials = initialsOfUser(userName);
-  const [active, setActive] = useState<NavKey>(() => navKeyFromSlug(initialSection));
+  const [active, setActive] = useState<NavKey>(() => { const key = navKeyFromSlug(initialSection); return manager && !MANAGER_SECTIONS.includes(key) ? "Visão geral" : key; });
+  const [theme, setTheme] = useState<"padrao" | "roxo">(manager?.initialTheme ?? "padrao");
+  const chooseTheme = (next: "padrao" | "roxo") => { setTheme(next); void setManagerThemeAction(next); };
+  const readOnly = Boolean(manager);
   const [period, setPeriod] = useState<ChartPeriod>("30D");
   const [chargeFilter, setChargeFilter] = useState<ChargeFilter>("Hoje");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -176,7 +186,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
     setActive(label);
     setMobileMenuOpen(false);
     // Endereço da tela atual (recarregar a página mantém a tela). replaceState não refaz a requisição ao servidor.
-    if (window.location.pathname === "/" && window.location.search !== navHref(label).slice(1)) window.history.replaceState(window.history.state, "", navHref(label));
+    if (window.location.pathname === (manager ? "/gerente" : "/") && window.location.search !== navHref(label, "").replace(/^\//, "")) window.history.replaceState(window.history.state, "", navHref(label, manager ? "/gerente" : "/"));
   };
 
   // Só dados da carteira já carregados pelo servidor com o tenant da sessão: a busca não consulta nada novo.
@@ -189,17 +199,17 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-theme={manager ? theme : undefined}>
       {mobileMenuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
-      <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} onNavigate={navigate} />
+      <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} onNavigate={navigate} manager={readOnly} />
 
       <main className="main-area">
         <header className="topbar">
           <button className="mobile-menu-button icon-button" aria-label={mobileMenuOpen ? "Fechar menu" : "Abrir menu"} onClick={() => setMobileMenuOpen(!mobileMenuOpen)}><span className="hamburger"><i /><i /><i /></span></button>
           <div className="breadcrumbs"><span>CrediAI</span><Icon name="chevron" size={14} /><strong>{active}</strong></div>
           <div className="topbar-actions">
-            <IntelligenceCore open={intelligenceCoreOpen} fast={intelligenceCoreHovered || intelligenceCoreOpen} onToggle={() => setIntelligenceCoreOpen(!intelligenceCoreOpen)} onClose={() => setIntelligenceCoreOpen(false)} onPointerEnter={() => setIntelligenceCoreHovered(true)} onPointerLeave={() => setIntelligenceCoreHovered(false)} />
-            <span className="secure-label"><Icon name="sparkles" size={14} /> Prévia local</span>
+            {!readOnly && <IntelligenceCore open={intelligenceCoreOpen} fast={intelligenceCoreHovered || intelligenceCoreOpen} onToggle={() => setIntelligenceCoreOpen(!intelligenceCoreOpen)} onClose={() => setIntelligenceCoreOpen(false)} onPointerEnter={() => setIntelligenceCoreHovered(true)} onPointerLeave={() => setIntelligenceCoreHovered(false)} />}
+            {!readOnly && <span className="secure-label"><Icon name="sparkles" size={14} /> Prévia local</span>}
             <div className="top-action-wrap">
               <button className={`icon-button ${searchOpen ? "icon-button-selected" : ""}`} aria-label="Abrir busca" onClick={() => setSearchOpen(!searchOpen)}><Icon name="search" size={18} /></button>
               {searchOpen && <div className="search-popover search-popover-results">
@@ -213,6 +223,12 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{pendingCharges > 0 && <span className="notification-dot" />}</button>
               {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{pendingCharges > 0 ? `${pendingCharges} pendente${pendingCharges > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p><button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
             </div>
+            {readOnly && (
+              <div className="theme-switch" role="group" aria-label="Cor do painel">
+                <button type="button" className={theme === "padrao" ? "active" : ""} aria-pressed={theme === "padrao"} onClick={() => chooseTheme("padrao")}><i className="swatch swatch-default" />Padrão</button>
+                <button type="button" className={theme === "roxo" ? "active" : ""} aria-pressed={theme === "roxo"} onClick={() => chooseTheme("roxo")}><i className="swatch swatch-purple" />Roxo</button>
+              </div>
+            )}
             <span className="topbar-divider" />
             {/* Único lugar com o usuário e o "Sair". */}
             <div className="top-action-wrap">
@@ -220,7 +236,12 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               {profileOpen && (
                 <div className="notification-popover profile-popover" role="menu" onKeyDown={(event) => { if (event.key === "Escape") setProfileOpen(false); }}>
                   <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
-                  <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>
+                  {readOnly ? (
+                    <div className="theme-picker" role="group" aria-label="Cor do painel">
+                      <button type="button" role="menuitemradio" aria-checked={theme === "padrao"} className={theme === "padrao" ? "active" : ""} onClick={() => chooseTheme("padrao")}><i className="swatch swatch-default" /> Padrão</button>
+                      <button type="button" role="menuitemradio" aria-checked={theme === "roxo"} className={theme === "roxo" ? "active" : ""} onClick={() => chooseTheme("roxo")}><i className="swatch swatch-purple" /> Roxo</button>
+                    </div>
+                  ) : <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>}
                   {isSuperAdmin && <button role="menuitem" onClick={() => { setProfileOpen(false); router.push("/admin"); }}><Icon name="settings" size={15} /> Administração da plataforma</button>}
                   <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
                 </div>
@@ -230,31 +251,42 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
         </header>
 
         <div className="page-content">
-          {active === "Visão geral" ? (
+          {active === "Comissão" && manager ? (
+            <ManagerCommissionPage panel={manager.panel} />
+          ) : active === "Visão geral" ? (
             <>
               <section className="page-heading">
-                <div><div className="eyebrow">{longDate(portfolio.today)}</div><h1 suppressHydrationWarning>{greetingFor(new Date())}, {userName.split(" ")[0]} <span className="greeting-mark" aria-hidden="true"><svg viewBox="0 0 26 26" fill="none"><defs><linearGradient id="greetingDollar" x1="7" y1="5" x2="20" y2="22" gradientUnits="userSpaceOnUse"><stop stopColor="#91fff0" /><stop offset="1" stopColor="#39caff" /></linearGradient></defs><path d="M18 7.8c-1-1.2-2.5-1.8-4.6-1.8-2.7 0-4.5 1.3-4.5 3.2 0 2 1.7 2.8 4.6 3.4 2.9.6 4.6 1.4 4.6 3.4 0 2.1-1.9 3.6-4.9 3.6-2.2 0-3.9-.7-5.1-2" stroke="url(#greetingDollar)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.1 3.8v18.4" stroke="url(#greetingDollar)" strokeWidth="1.8" strokeLinecap="round" /></svg></span></h1><p>Acompanhe o panorama da sua carteira em um só lugar.</p></div>
-                <div className="heading-actions"><button className="primary-button" onClick={() => navigate("Operações")}><Icon name="plus" size={17} /> Nova operação</button></div>
+                <div><div className="eyebrow">{longDate(portfolio.today)}</div><h1 suppressHydrationWarning>{greetingFor(new Date())}, {userName.split(" ")[0]} <span className="greeting-mark" aria-hidden="true"><svg viewBox="0 0 26 26" fill="none"><defs><linearGradient id="greetingDollar" x1="7" y1="5" x2="20" y2="22" gradientUnits="userSpaceOnUse"><stop stopColor="#91fff0" /><stop offset="1" stopColor="#39caff" /></linearGradient></defs><path d="M18 7.8c-1-1.2-2.5-1.8-4.6-1.8-2.7 0-4.5 1.3-4.5 3.2 0 2 1.7 2.8 4.6 3.4 2.9.6 4.6 1.4 4.6 3.4 0 2.1-1.9 3.6-4.9 3.6-2.2 0-3.9-.7-5.1-2" stroke="url(#greetingDollar)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="M13.1 3.8v18.4" stroke="url(#greetingDollar)" strokeWidth="1.8" strokeLinecap="round" /></svg></span></h1><p>{manager ? "Acompanhe os clientes que você indicou e quanto isso rende para você." : "Acompanhe o panorama da sua carteira em um só lugar."}</p></div>
+                {!readOnly && <div className="heading-actions"><button className="primary-button" onClick={() => navigate("Operações")}><Icon name="plus" size={17} /> Nova operação</button></div>}
               </section>
 
-              {summary.needsInitialCapital && <WalletSetup onSaved={refresh} cycleNumber={summary.cycleNumber} />}
+              {!readOnly && summary.needsInitialCapital && <WalletSetup onSaved={refresh} cycleNumber={summary.cycleNumber} />}
 
+              {manager ? (
+              <section className="metric-grid" aria-label="Indicadores da comissão e da carteira indicada">
+                <Link prefetch={false} href="/gerente?tela=comissao" className="metric-card metric-card-clickable metric-featured" aria-label="Comissão a receber, abrir minha comissão" onClick={(event) => { event.preventDefault(); navigate("Comissão"); }}><div className="metric-top"><span>Comissão a receber</span><span className="metric-icon metric-icon-dark"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={manager!.panel.summary.balanceCents} /></div><div className="metric-foot"><span className="metric-caption">Comissão gerada menos a já recebida</span><span className="metric-neutral">Já recebida {formatMoney(manager!.panel.summary.paidOutCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></Link>
+                <Link prefetch={false} href="/gerente?tela=clientes" className="metric-card metric-card-clickable" aria-label="Clientes indicados, ver clientes" onClick={(event) => { event.preventDefault(); navigate("Clientes"); }}><div className="metric-top"><span>Clientes indicados</span><span className="metric-icon metric-icon-teal"><Icon name="users" size={17} /></span></div><div className="metric-value">{portfolio.clients.length}</div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">{counts.overdue} em atraso</span></div><MetricSignal /></Link>
+                <Link prefetch={false} href="/gerente?tela=cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber dos seus clientes, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber dos clientes</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></Link>
+                <Link prefetch={false} href="/gerente?tela=comissao" className="metric-card metric-card-clickable" aria-label="Comissão prevista, abrir minha comissão" onClick={(event) => { event.preventDefault(); navigate("Comissão"); }}><div className="metric-top"><span>Comissão prevista</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={manager!.panel.summary.expectedCents} /></div><div className="metric-foot"><span className="metric-caption">Sobre juros ainda a pagar</span><span className="metric-neutral">Gerada {formatMoney(manager!.panel.summary.earnedCents)}</span></div><MetricSignal variant="violet" /></Link>
+              </section>
+              ) : (
               <section className="metric-grid" aria-label="Indicadores financeiros da carteira">
                 <Link prefetch={false} href="/?tela=capital" className="metric-card metric-card-clickable metric-featured" aria-label="Capital disponível, abrir capital da carteira" onClick={(event) => { event.preventDefault(); navigate("Capital"); }}><div className="metric-top"><span>Capital disponível</span><span className="metric-icon metric-icon-dark"><Icon name="wallet" size={17} /></span></div><div className="metric-value"><Money cents={summary.availableCents} /></div><div className="metric-foot"><span className="metric-caption">Disponível para novas operações</span><span className="metric-neutral">Aportado {formatMoney(summary.investedCents)}</span></div><MetricSignal /><div className="metric-accent-line" /></Link>
                 <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Capital emprestado, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "lent" }); }}><div className="metric-top"><span>Capital emprestado</span><span className="metric-icon metric-icon-teal"><Icon name="dollar" size={17} /></span></div><div className="metric-value"><Money cents={summary.lentCents} /></div><div className="metric-foot"><span className="metric-caption">Em {counts.active} operaç{counts.active === 1 ? "ão ativa" : "ões ativas"}</span><span className="metric-neutral">Principal a receber</span></div><MetricSignal /></Link>
                 <Link prefetch={false} href="/?tela=cobrancas" className="metric-card metric-card-clickable" aria-label="Total a receber, ver saldos em aberto" onClick={(event) => { event.preventDefault(); navigate("Cobranças", { charges: "Em aberto" }); }}><div className="metric-top"><span>Total a receber</span><span className="metric-icon metric-icon-blue"><Icon name="receipt" size={17} /></span></div><div className="metric-value"><Money cents={summary.receivableCents} /></div><div className="metric-foot"><span className="metric-caption">Principal + juros previstos</span><span className="metric-neutral">Em aberto</span></div><MetricSignal variant="blue" /></Link>
                 <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></Link>
               </section>
+              )}
 
-              <PayablesDashboard overview={payables} availableCents={summary.availableCents} />
+              {payables && <PayablesDashboard overview={payables} availableCents={summary.availableCents} />}
               <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
 
-              <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
+              {!readOnly && <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
                 <div className="intelligence-orb"><Icon name="sparkles" size={21} /></div>
                 <div className="intelligence-copy"><span className="intelligence-kicker">CREDIAI INTELLIGENCE <i /> PRÉVIA</span><h2>Uma visão mais clara da sua carteira.</h2><p>Indicadores calculados com os dados cadastrados na sua carteira. Nenhuma IA está ativa nesta etapa.</p></div>
                 <div className="intelligence-stat"><strong>{String(counts.active).padStart(2, "0")}</strong><span>operações ativas</span></div><div className="intelligence-stat"><strong>{String(counts.dueToday).padStart(2, "0")}</strong><span>cobranças hoje</span></div>
                 <button className="intelligence-action" onClick={() => navigate("Cobranças")}>Ver cobranças <Icon name="chevron" size={15} /></button>
-              </section>
+              </section>}
 
               <section className="secondary-metrics" aria-label="Situação das operações">
                 <div className="secondary-title"><span className="secondary-title-mark" />Resumo das operações · {counts.total}</div>
@@ -304,18 +336,18 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                 </article>
               </section>
 
-              <footer className="page-footer"><span>CrediAI <i /> Gestão de carteira inteligente</span><span><Icon name="shield" size={13} /> Dados da sua carteira</span></footer>
+              <footer className="page-footer"><span>CrediAI <i /> Gestão de carteira inteligente</span><span><Icon name="shield" size={13} /> {manager ? "Somente leitura" : "Dados da sua carteira"}</span></footer>
             </>
           ) : active === "Capital" ? (
             <CapitalPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Clientes" ? (
-            <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} />
+            <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} readOnly={readOnly} />
           ) : active === "Operações" ? (
-            <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} />
+            <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} readOnly={readOnly} />
           ) : active === "Pagamentos" ? (
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
-            <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} />
+            <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} readOnly={readOnly} />
           ) : active === "Renegociação" ? (
             <RenegotiationPage portfolio={portfolio} />
           ) : active === "Relatórios" ? (

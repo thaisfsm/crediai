@@ -7,7 +7,7 @@ import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
 // Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro, /contas-a-pagar).
-export type NavKey = "Visão geral" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
+export type NavKey = "Visão geral" | "Comissão" | "Capital" | "Clientes" | "Operações" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
 export type NavLabel = NavKey | "Investidores" | "Financeiro" | "Contas a pagar" | "Gerentes";
 // Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
 const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro", "Contas a pagar": "/contas-a-pagar", Gerentes: "/gerentes" };
@@ -16,14 +16,21 @@ const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investi
 // JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
 // o clique troca a tela na hora, sem recarregar, e só atualiza o endereço.
 export const NAV_SLUGS: Record<NavKey, string> = {
-  "Visão geral": "visao-geral", Capital: "capital", Clientes: "clientes", Operações: "operacoes",
+  "Visão geral": "visao-geral", Comissão: "comissao", Capital: "capital", Clientes: "clientes", Operações: "operacoes",
   Pagamentos: "pagamentos", Cobranças: "cobrancas", Renegociação: "renegociacao", Relatórios: "relatorios", Configurações: "configuracoes",
 };
 export function navKeyFromSlug(slug: string | undefined): NavKey {
   return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
 }
-export const navHref = (label: NavKey) => (label === "Visão geral" ? "/" : `/?tela=${NAV_SLUGS[label]}`);
-const itemHref = (label: NavLabel) => PAGE_ROUTES[label] ?? navHref(label as NavKey);
+export const navHref = (label: NavKey, base = "/") => (label === "Visão geral" ? base : `${base}?tela=${NAV_SLUGS[label]}`);
+const itemHref = (label: NavLabel, base = "/") => PAGE_ROUTES[label] ?? navHref(label as NavKey, base);
+
+// Menu do gerente de contas (só leitura): as mesmas telas do dono que mostram clientes e cobranças, sem capital, financeiro nem cadastros.
+const managerNavGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
+  { title: "MEUS CLIENTES", items: [{ label: "Visão geral", icon: "grid" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }] },
+  { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }] },
+  { title: "MINHA COMISSÃO", items: [{ label: "Comissão", icon: "dollar" }] },
+];
 
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
   { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "file" }, { label: "Investidores", icon: "briefcase" }, { label: "Gerentes", icon: "users" }] },
@@ -56,9 +63,11 @@ export function useTableLabels() {
 }
 
 // Com onNavigate (dashboard), as telas do dashboard trocam sem recarregar; sem ele, todo item é um link normal.
-export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNavigate }: {
-  active: NavLabel; initials: string; mobileOpen: boolean; pendingCharges?: number; onNavigate?: (label: NavKey) => void;
+export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNavigate, manager = false }: {
+  active: NavLabel; initials: string; mobileOpen: boolean; pendingCharges?: number; onNavigate?: (label: NavKey) => void; manager?: boolean;
 }) {
+  const base = manager ? "/gerente" : "/";
+  const groups = manager ? managerNavGroups : navGroups;
   const intercept = (label: NavLabel) => (event: MouseEvent) => {
     if (!onNavigate || PAGE_ROUTES[label] || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
@@ -66,20 +75,20 @@ export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNa
   };
   return (
     <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`} aria-label="Navegação principal">
-      <Link prefetch={false} className="brand" href="/" onClick={intercept("Visão geral")} aria-label="CrediAI, início">
+      <Link prefetch={false} className="brand" href={base} onClick={intercept("Visão geral")} aria-label="CrediAI, início">
         <span className="brand-logo-image" role="img" aria-label="CrediAI — Crédito + Inteligência" />
       </Link>
       <div className="workspace-switcher">
         <div className="workspace-avatar">{initials}</div>
-        <div className="workspace-copy"><span>Minha carteira</span><small>Espaço de trabalho</small></div>
+        <div className="workspace-copy"><span>{manager ? "Painel da gerente" : "Minha carteira"}</span><small>{manager ? "Somente leitura" : "Espaço de trabalho"}</small></div>
         <Icon name="chevron" size={15} />
       </div>
       <nav className="side-nav">
-        {navGroups.map((group) => (
+        {groups.map((group) => (
           <div className="nav-group" key={group.title}>
             <p className="nav-heading">{group.title}</p>
             {group.items.map((item) => (
-              <Link prefetch={false} key={item.label} href={itemHref(item.label)} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={intercept(item.label)} aria-current={active === item.label ? "page" : undefined}>
+              <Link prefetch={false} key={item.label} href={itemHref(item.label, base)} className={`nav-item ${active === item.label ? "nav-item-active" : ""}`} onClick={intercept(item.label)} aria-current={active === item.label ? "page" : undefined}>
                 <Icon name={item.icon} size={18} /><span>{item.label}</span>
                 {item.label === "Cobranças" && pendingCharges > 0 && <span className="nav-count">{pendingCharges}</span>}
               </Link>
@@ -89,7 +98,7 @@ export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, onNa
       </nav>
       <div className="sidebar-bottom">
         <div className="security-note"><span className="security-icon"><Icon name="shield" size={15} /></span><span><strong>Ambiente isolado</strong><small>Separação reforçada por tenant</small></span></div>
-        <Link prefetch={false} className="nav-item help-link" href={navHref("Configurações")} onClick={intercept("Configurações")}><Icon name="help" size={18} /><span>Central de ajuda</span><Icon name="arrow" size={14} /></Link>
+        {!manager && <Link prefetch={false} className="nav-item help-link" href={navHref("Configurações")} onClick={intercept("Configurações")}><Icon name="help" size={18} /><span>Central de ajuda</span><Icon name="arrow" size={14} /></Link>}
       </div>
     </aside>
   );

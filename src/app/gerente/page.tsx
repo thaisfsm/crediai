@@ -1,19 +1,23 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import Dashboard from "../dashboard";
 import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
+import { loadManagerPortfolio } from "@/lib/finance/queries";
 import { loadManagerPanel } from "@/lib/managers/queries";
 import { THEME_COOKIE, type ManagerTheme } from "./theme";
-import { ManagerPanelView } from "./manager-panel";
-import "./gerente.css";
 
 export const dynamic = "force-dynamic";
 
-export default async function ManagerPage() {
+// Painel da gerente de contas: as mesmas telas do dono (visão geral, clientes, operações, pagamentos, cobranças), só com os clientes
+// indicados por ela, sem nenhuma edição, sem capital e sem cadastro bancário. Tudo passa por requireAccountManager (sessão, conta ativa,
+// papel, tenant ativo e cadastro de gerente ativo) e cada consulta filtra tenant e os clientes dela.
+export default async function ManagerPage({ searchParams }: { searchParams: Promise<{ tela?: string }> }) {
   const gate = await databaseGate();
   if (gate === "not_configured") redirect("/setup");
   if (gate !== "ok") return <DatabaseErrorState kind={gate} />;
-  // loadManagerPanel passa por requireAccountManager: sessão, conta ativa, papel de gerente, tenant ativo e cadastro de gerente ativo.
   const panel = await loadManagerPanel();
+  const { portfolio } = await loadManagerPortfolio();
   const theme: ManagerTheme = (await cookies()).get(THEME_COOKIE)?.value === "roxo" ? "roxo" : "padrao";
-  return <ManagerPanelView panel={panel} initialTheme={theme} />;
+  const { tela } = await searchParams;
+  return <Dashboard userName={panel.userName} portfolio={portfolio} payables={null} initialSection={tela} manager={{ panel, initialTheme: theme }} />;
 }

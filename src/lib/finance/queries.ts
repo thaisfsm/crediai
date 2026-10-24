@@ -1,7 +1,8 @@
 import "server-only";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { withTenantContext } from "@/lib/auth/guards";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { capitalMovements, clientDocuments, clients, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
 import { buildPortfolio, summarizeOperations, type ClientRecord, type DeferralRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
@@ -9,56 +10,64 @@ import { toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord,
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
 // para que o isolamento não dependa só do papel de banco usado em produção.
-export async function loadTenantPortfolio() {
-  const data = await withTenantContext(async (tx, { tenantId }) => {
-    const wallet = await tx.query.wallets.findFirst({ where: eq(wallets.tenantId, tenantId) });
+// scope: carteira inteira do tenant (null) ou só os clientes indicados por UM gerente de contas (todos os ciclos, sem capital: o gerente
+// não vê o caixa do dono). Toda consulta filtra tenant_id e, no escopo do gerente, os clientes dele.
+export type PortfolioScope = { managerId: string } | null;
+type PortfolioTx = Parameters<Parameters<typeof withTenantContext>[0]>[0];
+
+async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: PortfolioScope) {
+    const wallet = scope ? undefined : await tx.query.wallets.findFirst({ where: eq(wallets.tenantId, tenantId) });
+    const scopedClients = scope ? (await tx.select({ id: clients.id }).from(clients).where(and(eq(clients.tenantId, tenantId), eq(clients.accountManagerId, scope.managerId)))).map((row) => row.id) : null;
+    // Ciclo atual (carteira inteira) ou todos os ciclos dos clientes do gerente.
+    const cycleOf = (column: typeof loanOperations.cycleNumber) => (scope ? undefined : eq(column, cycleNumber));
+    const clientIn = (column: typeof loanOperations.clientId) => (scopedClients ? inArray(column, scopedClients.length ? scopedClients : ["-"]) : undefined);
     // Só o ciclo atual entra nos cálculos; os pagamentos seguem o ciclo da operação.
     const cycleNumber = wallet?.cycleNumber ?? 1;
-    const movementRows = await tx.select().from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber))).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
+    const movementRows = scope ? [] : await tx.select().from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber))).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
     // Aportes indicados como a entrada do dinheiro de um contrato antigo de investidor (migração 0023): não se estornam.
-    const investorLinkedRows = await tx.select({ id: investmentPriorContributions.capitalMovementId }).from(investmentPriorContributions).where(eq(investmentPriorContributions.tenantId, tenantId));
-    const clientRows = await tx.select().from(clients).where(eq(clients.tenantId, tenantId)).orderBy(asc(clients.name));
+    const investorLinkedRows = scope ? [] : await tx.select({ id: investmentPriorContributions.capitalMovementId }).from(investmentPriorContributions).where(eq(investmentPriorContributions.tenantId, tenantId));
+    const clientRows = await tx.select().from(clients).where(and(eq(clients.tenantId, tenantId), scope ? eq(clients.accountManagerId, scope.managerId) : undefined)).orderBy(asc(clients.name));
     const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name })
       .from(loanOperations)
       .innerJoin(clients, eq(clients.id, loanOperations.clientId))
-      .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(loanOperations.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(desc(loanOperations.loanDate), desc(loanOperations.createdAt));
     const paymentRows = await tx.select({ payment: payments, clientName: clients.name })
       .from(payments)
       .innerJoin(loanOperations, eq(loanOperations.id, payments.operationId))
       .innerJoin(clients, eq(clients.id, loanOperations.clientId))
-      .where(and(eq(payments.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(payments.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(desc(payments.paidAt), desc(payments.createdAt));
     // Quem fez a correção: usuário do mesmo tenant (a tabela de usuários não tem RLS, por isso o filtro explícito).
     const revisionRows = await tx.select({ payment_revision: paymentRevisions, editorName: users.name }).from(paymentRevisions)
       .innerJoin(payments, eq(payments.id, paymentRevisions.paymentId))
       .leftJoin(users, and(eq(users.id, paymentRevisions.editedByUserId), eq(users.tenantId, tenantId)))
       .innerJoin(loanOperations, eq(loanOperations.id, payments.operationId))
-      .where(and(eq(paymentRevisions.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(paymentRevisions.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(asc(paymentRevisions.editedAt));
     const renewalRows = await tx.select({ renewal: loanRenewals }).from(loanRenewals)
       .innerJoin(loanOperations, eq(loanOperations.id, loanRenewals.operationId))
-      .where(and(eq(loanRenewals.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(loanRenewals.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(asc(loanRenewals.periodNumber));
     const deferralRows = await tx.select({ deferral: installmentDeferrals }).from(installmentDeferrals)
       .innerJoin(loanOperations, eq(loanOperations.id, installmentDeferrals.operationId))
-      .where(and(eq(installmentDeferrals.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(installmentDeferrals.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(asc(installmentDeferrals.createdAt));
     // Correções de operação (Etapa G): motivo, campos alterados e quem corrigiu (usuário do mesmo tenant).
     const correctionRows = await tx.select({ revision: loanOperationRevisions, editorName: users.name }).from(loanOperationRevisions)
       .innerJoin(loanOperations, eq(loanOperations.id, loanOperationRevisions.operationId))
       .leftJoin(users, and(eq(users.id, loanOperationRevisions.editedByUserId), eq(users.tenantId, tenantId)))
-      .where(and(eq(loanOperationRevisions.tenantId, tenantId), eq(loanOperations.cycleNumber, cycleNumber)))
+      .where(and(eq(loanOperationRevisions.tenantId, tenantId), cycleOf(loanOperations.cycleNumber), clientIn(loanOperations.clientId)))
       .orderBy(asc(loanOperationRevisions.createdAt));
     // Documentos: só os dados do arquivo; o conteúdo é baixado sob demanda pela rota de download.
-    const documentRows = await tx.select({
+    const documentRows = scope ? [] : await tx.select({
       id: clientDocuments.id, clientId: clientDocuments.clientId, label: clientDocuments.label, fileName: clientDocuments.fileName,
       contentType: clientDocuments.contentType, sizeBytes: clientDocuments.sizeBytes, createdAt: clientDocuments.createdAt,
     }).from(clientDocuments).where(eq(clientDocuments.tenantId, tenantId)).orderBy(asc(clientDocuments.createdAt));
     // Clientes com operações em qualquer ciclo têm histórico: são arquivados, nunca apagados.
-    const historyRows = await tx.select({ clientId: loanOperations.clientId }).from(loanOperations).where(eq(loanOperations.tenantId, tenantId));
+    const historyRows = await tx.select({ clientId: loanOperations.clientId }).from(loanOperations).where(and(eq(loanOperations.tenantId, tenantId), clientIn(loanOperations.clientId)));
     // Ciclos encerrados, com a contagem do que ficou guardado em cada um.
-    const closedCycles = await tx.select({
+    const closedCycles = scope ? [] : await tx.select({
       cycleNumber: walletCycles.cycleNumber, initialCapitalCents: walletCycles.initialCapitalCents, startedAt: walletCycles.startedAt, closedAt: walletCycles.closedAt,
       // Nomes qualificados à mão: dentro de sql`` o Drizzle não qualifica colunas de outras tabelas.
       operationCount: sql<string>`(select count(*) from loan_operation o where o.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number and o.status <> 'CANCELED')`,
@@ -66,7 +75,22 @@ export async function loadTenantPortfolio() {
       receivedCents: sql<string>`(select coalesce(sum(p.amount_cents), 0) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = wallet_cycle.tenant_id and o.cycle_number = wallet_cycle.cycle_number)`,
     }).from(walletCycles).where(eq(walletCycles.tenantId, tenantId)).orderBy(desc(walletCycles.cycleNumber));
     return { wallet, cycleNumber, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
-  });
+}
+
+export async function loadTenantPortfolio() {
+  const data = await withTenantContext((tx, { tenantId }) => readPortfolioData(tx, tenantId, null));
+  return assemblePortfolio(data, false);
+}
+
+// Carteira só dos clientes de um gerente de contas (mesmas telas e contas do dono, sem capital, sem cadastro bancário, notas nem documentos).
+export async function loadManagerPortfolio() {
+  const { data, managerName } = await withManagerContext(async (tx, { tenantId, manager }) => ({ data: await readPortfolioData(tx, tenantId, { managerId: manager.id }), managerName: manager.name }));
+  return { portfolio: assemblePortfolio(data, true), managerName };
+}
+
+type PortfolioData = Awaited<ReturnType<typeof readPortfolioData>>;
+
+function assemblePortfolio(data: PortfolioData, scoped: boolean) {
 
   const revisionsByPayment = new Map<string, PaymentRevisionRecord[]>();
   for (const { payment_revision: revision, editorName } of data.revisionRows) {
@@ -94,11 +118,11 @@ export async function loadTenantPortfolio() {
     documentsByClient.set(document.clientId, [...(documentsByClient.get(document.clientId) ?? []), { ...document, createdAt: document.createdAt.toISOString() }]);
   }
   const clientList: ClientRecord[] = data.clientRows.map((client) => ({
-    id: client.id, name: client.name, document: client.document, phone: client.phone, notes: client.notes, onlineCasinoBettor: client.onlineCasinoBettor, archivedAt: client.archivedAt?.toISOString() ?? null, createdAt: client.createdAt.toISOString(),
-    ...(Object.fromEntries(clientProfileKeys.map((key) => [key, client[key]])) as ClientProfile),
+    id: client.id, name: client.name, document: client.document, phone: client.phone, notes: scoped ? null : client.notes, onlineCasinoBettor: scoped ? false : client.onlineCasinoBettor, archivedAt: client.archivedAt?.toISOString() ?? null, createdAt: client.createdAt.toISOString(),
+    ...(Object.fromEntries(clientProfileKeys.map((key) => [key, scoped && (bankKeys as readonly string[]).includes(key) ? null : client[key]])) as ClientProfile),
   }));
   const portfolio = buildPortfolio({
-    hasWallet: Boolean(data.wallet),
+    hasWallet: scoped || Boolean(data.wallet),
     initialCapitalCents: data.wallet?.initialCapitalCents ?? 0,
     walletCreatedOn: data.wallet ? todayIso(data.wallet.cycleStartedAt ?? data.wallet.createdAt) : null,
     cycleNumber: data.cycleNumber,
