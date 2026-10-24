@@ -506,6 +506,8 @@ export const operationRequests = pgTable("operation_request", {
   decidedByUserId: text("decided_by_user_id"),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
   operationId: text("operation_id"),
+  // Dia em que o dono confirmou o Pix ao cliente (compromisso do dia em Contas a pagar). Não mexe no capital: o principal já saiu na aprovação (migração 0038).
+  pixPaidOn: date("pix_paid_on", { mode: "string" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("operation_request_tenant_status_idx").on(table.tenantId, table.status),
@@ -515,6 +517,7 @@ export const operationRequests = pgTable("operation_request", {
   foreignKey({ name: "operation_request_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
   check("operation_request_status_valid", sql`${table.status} in ('PENDING', 'APPROVED', 'REJECTED')`),
   check("operation_request_principal_positive", sql`${table.principalCents} > 0`),
+  check("operation_request_pix_only_approved", sql`${table.pixPaidOn} is null or ${table.status} = 'APPROVED'`),
   ...tenantPolicies("operation_request", table.tenantId),
 ]).enableRLS();
 

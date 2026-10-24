@@ -20,7 +20,7 @@ import type { ManagerPanel } from "@/lib/managers/queries";
 import { MANAGER_REQUIRED_FIELDS } from "@/lib/managers/required-fields";
 import { registerClientAction, submitOperationRequestAction } from "./gerente/actions";
 import { ManagerCommissionPage } from "./gerente/commission-page";
-import { CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
+import { ApprovalsOverview, ApprovalsPage, CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
 const chargeHeadings: Record<ChargeFilter, { heading: string; description: string; totalLabel: string; empty: string }> = {
@@ -200,7 +200,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
   return (
     <div className="app-shell">
       {mobileMenuOpen && <button className="mobile-scrim" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)} />}
-      <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} onNavigate={navigate} manager={readOnly} />
+      <Sidebar active={active} initials={initials} mobileOpen={mobileMenuOpen} pendingCharges={pendingCharges} pendingApprovals={readOnly ? 0 : portfolio.operationRequests.filter((request) => request.status === "PENDING" || (request.status === "APPROVED" && !request.pixPaidOn)).length} onNavigate={navigate} manager={readOnly} />
 
       <main className="main-area">
         <header className="topbar">
@@ -272,6 +272,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                 <div><strong>Você ainda não tem clientes indicados.</strong><span> Quando o primeiro for vinculado ao seu nome, as cobranças, os pagamentos e a sua comissão aparecem aqui.</span></div>
               </section>
               )}
+              {!readOnly && <ApprovalsOverview portfolio={portfolio} onOpen={() => navigate("Aprovações")} />}
               {payables && <PayablesDashboard overview={payables} availableCents={summary.availableCents} />}
               <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
 
@@ -338,6 +339,8 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
             <ClientsPage key={visit} initialClientId={openClientId} portfolio={portfolio} onChanged={refresh} onNewOperation={() => navigate("Operações")} readOnly={readOnly} manager={manager ? { submit: registerClientAction, required: MANAGER_REQUIRED_FIELDS } : undefined} />
           ) : active === "Operações" ? (
             <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} readOnly={readOnly} request={manager ? submitOperationRequestAction : undefined} cashAvailableCents={manager?.panel.cash.availableCents} />
+          ) : active === "Aprovações" ? (
+            <ApprovalsPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Pagamentos" ? (
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (

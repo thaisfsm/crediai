@@ -260,6 +260,13 @@
       "when": 1792863818103,
       "tag": "0037_caixa_da_gerente",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792882354454,
+      "tag": "0038_pix_da_aprovacao",
+      "breakpoints": true
     }
   ]
 }

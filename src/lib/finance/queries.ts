@@ -78,7 +78,7 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
     const requestRows = await tx.select({
       id: operationRequests.id, managerName: accountManagers.name, clientId: operationRequests.clientId, clientName: clients.name, principalCents: operationRequests.principalCents,
       totalCents: operationRequests.totalCents, loanDate: operationRequests.loanDate, form: operationRequests.form, status: operationRequests.status, decisionNote: operationRequests.decisionNote,
-      createdAt: operationRequests.createdAt, decidedAt: operationRequests.decidedAt,
+      createdAt: operationRequests.createdAt, decidedAt: operationRequests.decidedAt, pixPaidOn: operationRequests.pixPaidOn,
     }).from(operationRequests)
       .innerJoin(accountManagers, and(eq(accountManagers.id, operationRequests.managerId), eq(accountManagers.tenantId, operationRequests.tenantId)))
       .innerJoin(clients, and(eq(clients.id, operationRequests.clientId), eq(clients.tenantId, operationRequests.tenantId)))
@@ -158,7 +158,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     operationRequests: data.requestRows.map((row): OperationRequestView => ({
       id: row.id, managerName: row.managerName, clientId: row.clientId, clientName: row.clientName, principalCents: row.principalCents, totalCents: row.totalCents, loanDate: row.loanDate,
       modality: row.form.modality === "INSTALLMENT" ? "Parcelado" : "Pagamento único", status: row.status as OperationRequestView["status"], decisionNote: row.decisionNote,
-      createdAt: row.createdAt.toISOString(), decidedAt: row.decidedAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(), decidedAt: row.decidedAt?.toISOString() ?? null, pixPaidOn: row.pixPaidOn,
     })),
     // Clientes arquivados ficam fora da lista e do cadastro de operação; o histórico das operações continua com o nome.
     clients: clientList.filter((client) => !client.archivedAt).map((client) => ({
@@ -220,7 +220,7 @@ export async function loadAllCyclesOperations() {
 
 export type OperationRequestView = {
   id: string; managerName: string; clientId: string; clientName: string; principalCents: number; totalCents: number; loanDate: string; modality: string;
-  status: "PENDING" | "APPROVED" | "REJECTED"; decisionNote: string | null; createdAt: string; decidedAt: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED"; decisionNote: string | null; createdAt: string; decidedAt: string | null; pixPaidOn: string | null;
 };
 
 export type ClientDocumentInfo = { id: string; clientId: string; label: string; fileName: string; contentType: string; sizeBytes: number; createdAt: string };
