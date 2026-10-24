@@ -91,6 +91,7 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
       <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <label className="field"><span>Nome</span><input name="name" defaultValue={manager.name} required maxLength={120} /></label>
       <label className="field"><span>Comissão sugerida (%) — opcional</span><input name="commission" defaultValue={manager.commissionBps > 0 ? percentInput(manager.commissionBps) : ""} inputMode="decimal" placeholder="Em branco: você define por cliente" /></label>
+      <label className="field"><span>Caixa disponibilizado (R$)</span><MoneyInput name="cashLimit" defaultValue={manager.cash.limitCents > 0 ? (manager.cash.limitCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder="20.000,00" /></label>
       <label className="field"><span>Situação</span><select name="active" defaultValue={manager.active ? "1" : "0"}><option value="1">Ativo</option><option value="0">Inativo (bloqueia o acesso)</option></select></label>
       <div className="form-actions"><button type="button" className="outline-button" onClick={onDone}>Cancelar</button><button className="primary-button" disabled={form.pending}>{form.pending ? "Salvando…" : "Salvar"}</button></div>
       <Feedback feedback={form.feedback} />
@@ -198,6 +199,9 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
         </div>
       </div>
       <dl className="detail-grid manager-summary">
+        <div><dt>Caixa combinado</dt><dd>{formatMoney(manager.cash.limitCents)}</dd></div>
+        <div><dt>Em uso (aberto + pedidos)</dt><dd>{formatMoney(manager.cash.inUseCents + manager.cash.reservedCents)}</dd></div>
+        <div><dt>Caixa disponível</dt><dd><strong>{formatMoney(manager.cash.availableCents)}</strong></dd></div>
         <div><dt>Juros recebidos dos indicados</dt><dd>{formatMoney(summary.interestReceivedCents)}</dd></div>
         <div><dt>Comissão gerada</dt><dd>{formatMoney(summary.earnedCents)}</dd></div>
         <div><dt>Já paga</dt><dd>{formatMoney(summary.paidOutCents)}</dd></div>
@@ -235,6 +239,7 @@ function ManagersBody({ data, standalone }: { data: ManagersPage; standalone: bo
           <TenantField />
           <label className="field"><span>Nome</span><input name="name" required maxLength={120} placeholder="Ex.: Gabrielle" /></label>
           <label className="field"><span>E-mail (para o acesso)</span><input name="email" type="email" maxLength={160} placeholder="Opcional agora" /></label>
+          <label className="field"><span>Caixa disponibilizado (R$)</span><MoneyInput name="cashLimit" placeholder="20.000,00" /></label>
                     <div className="form-actions"><button className="primary-button" disabled={create.pending}>{create.pending ? "Cadastrando…" : "Cadastrar gerente"}</button></div>
           <Feedback feedback={create.feedback} />
         </form>

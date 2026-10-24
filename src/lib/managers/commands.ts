@@ -36,19 +36,29 @@ async function ownManager(tx: TenantTransaction, tenantId: string, managerId: st
 }
 
 // A comissão padrão é opcional (o percentual é definido por cliente, na hora de vincular); em branco fica 0%.
+// Caixa disponibilizado à gerente (R$): em branco vale 0 (ela só envia pedidos depois que o dono definir).
+function readCash(raw: string): { ok: true; cents: number } | { ok: false; error: string } {
+  if (!raw.trim()) return { ok: true, cents: 0 };
+  const cents = parseMoneyToCents(raw);
+  if (cents === null || cents < 0 || cents > 100_000_000_000) return { ok: false, error: "Informe o caixa em reais, por exemplo 20.000,00." };
+  return { ok: true, cents };
+}
+
 export async function createManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
   const name = text(data, "name", 120);
   const email = text(data, "email", 160).toLowerCase();
   const percent = readPercent(text(data, "commission", 10), { required: false });
+  const cash = readCash(text(data, "cashLimit", 20));
   if (name.length < 2) return { ok: false, error: "Informe o nome do gerente." };
   if (email && !EMAIL.test(email)) return { ok: false, error: "E-mail inválido." };
   if (!percent.ok) return percent;
+  if (!cash.ok) return cash;
   const bps = percent.bps ?? 0;
   const managerId = id("mgr");
-  await tx.insert(accountManagers).values({ id: managerId, tenantId, name, email: email || null, commissionBps: bps });
+  await tx.insert(accountManagers).values({ id: managerId, tenantId, name, email: email || null, commissionBps: bps, cashLimitCents: cash.cents });
   await recordAdminAudit(tx, actor, {
     action: "MANAGER_CREATED", entity: "account_manager", entityId: managerId, tenantId, tenantName: await tenantName(tx, tenantId),
-    description: `Gerente de contas ${name} cadastrado${bps ? ` (comissão padrão ${bpsLabel(bps)})` : " (comissão definida por cliente)"}.`, after: { name, email: email || null, commissionBps: bps },
+    description: `Gerente de contas ${name} cadastrado${bps ? ` (comissão padrão ${bpsLabel(bps)})` : " (comissão definida por cliente)"}.`, after: { name, email: email || null, commissionBps: bps, cashLimitCents: cash.cents },
   });
   return { ok: true, message: `Gerente ${name} cadastrado.` };
 }
@@ -59,20 +69,22 @@ export async function updateManager(tx: TenantTransaction, tenantId: string, act
   const name = text(data, "name", 120);
   const percent = readPercent(text(data, "commission", 10), { required: false });
   const active = text(data, "active", 1) !== "0";
+  const cash = readCash(text(data, "cashLimit", 20));
   if (name.length < 2) return { ok: false, error: "Informe o nome do gerente." };
   if (!percent.ok) return percent;
+  if (!cash.ok) return cash;
   const bps = percent.bps ?? 0;
   const manager = await ownManager(tx, tenantId, managerId);
   if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
-  await tx.update(accountManagers).set({ name, commissionBps: bps, active, updatedAt: sql`now()` }).where(and(eq(accountManagers.id, manager.id), eq(accountManagers.tenantId, tenantId)));
+  await tx.update(accountManagers).set({ name, commissionBps: bps, cashLimitCents: cash.cents, active, updatedAt: sql`now()` }).where(and(eq(accountManagers.id, manager.id), eq(accountManagers.tenantId, tenantId)));
   if (manager.userId && manager.active !== active) {
     await tx.update(users).set({ active, updatedAt: sql`now()` }).where(and(eq(users.id, manager.userId), eq(users.tenantId, tenantId), eq(users.role, "ACCOUNT_MANAGER")));
     if (!active) await tx.delete(sessions).where(eq(sessions.userId, manager.userId));
   }
   await recordAdminAudit(tx, actor, {
     action: "MANAGER_UPDATED", entity: "account_manager", entityId: manager.id, tenantId, tenantName: await tenantName(tx, tenantId),
-    description: `Gerente ${name} alterado (${bps ? `comissão padrão ${bpsLabel(bps)}, ` : ""}${active ? "ativo" : "inativo"}).`,
-    before: { name: manager.name, commissionBps: manager.commissionBps, active: manager.active }, after: { name, commissionBps: bps, active },
+    description: `Gerente ${name} alterado (${bps ? `comissão padrão ${bpsLabel(bps)}, ` : ""}caixa ${formatMoney(cash.cents)}, ${active ? "ativo" : "inativo"}).`,
+    before: { name: manager.name, commissionBps: manager.commissionBps, cashLimitCents: manager.cashLimitCents, active: manager.active }, after: { name, commissionBps: bps, cashLimitCents: cash.cents, active },
   });
   return { ok: true, message: "Gerente atualizado." };
 }

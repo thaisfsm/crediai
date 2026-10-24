@@ -253,6 +253,13 @@
       "when": 1792846000000,
       "tag": "0036_pedido_operacao_gerente",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792863818103,
+      "tag": "0037_caixa_da_gerente",
+      "breakpoints": true
     }
   ]
 }
