@@ -1,6 +1,6 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
-import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
+import { withManagerContext, withPlatformContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, payments, users } from "@/lib/db/schema";
 import { todayIso } from "@/lib/finance/format";
 import { buildPortfolio, type DeferralRecord, type OperationView, type RenewalRecord } from "@/lib/finance/portfolio";
@@ -104,7 +104,17 @@ export type ManagerPanel = Awaited<ReturnType<typeof loadManagerPanel>>;
 // Visão do dono da carteira (/gerentes): todos os gerentes do tenant com o resumo da comissão, os clientes ligados (com o percentual
 // de cada um) e os clientes ainda sem gerente. Só leitura; nada é calculado fora do extrato das operações.
 export async function loadManagersPage() {
-  const data = await withTenantContext(async (tx, { tenantId }) => {
+  return withTenantContext((tx, { tenantId }) => loadManagersData(tx, tenantId));
+}
+
+// Mesma tela para o MASTER, de um cliente SaaS escolhido (withPlatformContext exige SUPER_ADMIN na sessão e no banco).
+export async function loadManagersForTenant(tenantId: string) {
+  return withPlatformContext((tx) => loadManagersData(tx, tenantId));
+}
+
+// Montagem da tela de gerentes de UM tenant, dentro da transação de quem chama (dono da carteira ou MASTER).
+export async function loadManagersData(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string) {
+  const data = await (async () => {
     const managerRows = await tx.select({
       id: accountManagers.id, name: accountManagers.name, email: accountManagers.email, userId: accountManagers.userId, commissionBps: accountManagers.commissionBps, active: accountManagers.active,
       loginActive: users.active, mustChangePassword: users.mustChangePassword, lastLoginAt: users.lastLoginAt,
@@ -118,7 +128,7 @@ export async function loadManagersPage() {
     const perManager = [];
     for (const manager of managerRows) perManager.push({ manager, ...(await loadManagerOperations(tx, tenantId, manager.id)) });
     return { perManager, payoutRows, unassigned };
-  });
+  })();
   return {
     today: todayIso(),
     unassigned: data.unassigned,
@@ -136,4 +146,4 @@ export async function loadManagersPage() {
     }),
   };
 }
-export type ManagersPage = Awaited<ReturnType<typeof loadManagersPage>>;
+export type ManagersPage = Awaited<ReturnType<typeof loadManagersData>>;

@@ -32,7 +32,7 @@ export async function loadPlatformOverview() {
     // Relatório por tenant: nomes de tabela qualificados à mão dentro de sql``.
     const tenantRows = await tx.select({
       id: tenants.id, name: tenants.name, status: tenants.status, createdAt: tenants.createdAt, planName: plans.name,
-      owners: sql<string>`(select string_agg(u.email, ', ' order by u.created_at) from "user" u where u.tenant_id = tenant.id)`,
+      owners: sql<string>`(select string_agg(u.email, ', ' order by u.created_at) from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER')`,
       hasSuperAdmin: sql<boolean>`exists(select 1 from "user" u where u.tenant_id = tenant.id and u.role = 'SUPER_ADMIN')`,
       subscriptionStatus: sql<string | null>`(select s.status::text from subscription s where s.tenant_id = tenant.id order by s.created_at desc limit 1)`,
       subscriptionExpiresAt: sql<string | null>`(select s.expires_at::text from subscription s where s.tenant_id = tenant.id order by s.created_at desc limit 1)`,
@@ -115,15 +115,15 @@ async function loadSaasRows(tx: TenantTransaction, tenantIds?: string[]) {
   const rows = await tx.select({
     tenantId: tenants.id, tenantName: tenants.name, status: tenants.status, planId: tenants.planId, planName: plans.name, planPriceInCents: plans.priceInCents, contactPhone: tenants.contactPhone, createdAt: tenants.createdAt,
     // Conta principal do tenant: o primeiro usuário criado nele.
-    userId: sql<string | null>`(select u.id from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
-    userName: sql<string | null>`(select u.name from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
-    email: sql<string | null>`(select u.email from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
-    userActive: sql<boolean | null>`(select u.active from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
-    mustChangePassword: sql<boolean | null>`(select u.must_change_password from "user" u where u.tenant_id = tenant.id order by u.created_at limit 1)`,
+    userId: sql<string | null>`(select u.id from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER' order by u.created_at limit 1)`,
+    userName: sql<string | null>`(select u.name from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER' order by u.created_at limit 1)`,
+    email: sql<string | null>`(select u.email from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER' order by u.created_at limit 1)`,
+    userActive: sql<boolean | null>`(select u.active from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER' order by u.created_at limit 1)`,
+    mustChangePassword: sql<boolean | null>`(select u.must_change_password from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER' order by u.created_at limit 1)`,
     isPlatformOwner: sql<boolean>`exists(select 1 from "user" u where u.tenant_id = tenant.id and u.role = 'SUPER_ADMIN')`,
     // Último acesso do ambiente: o mais recente entre os usuários dele, pela regra única de last-access.ts.
-    lastLoginAt: sql<string | null>`(select max(u.last_login_at)::text from "user" u where u.tenant_id = tenant.id)`,
-    lastSessionAt: sql<string | null>`(select max(greatest(s.created_at, s.updated_at))::text from session s join "user" su on su.id = s.user_id where su.tenant_id = tenant.id)`,
+    lastLoginAt: sql<string | null>`(select max(u.last_login_at)::text from "user" u where u.tenant_id = tenant.id and u.role <> 'ACCOUNT_MANAGER')`,
+    lastSessionAt: sql<string | null>`(select max(greatest(s.created_at, s.updated_at))::text from session s join "user" su on su.id = s.user_id where su.tenant_id = tenant.id and su.role <> 'ACCOUNT_MANAGER')`,
     // Assinatura vigente (a mais recente) inteira, e a última mensalidade paga dela.
     subscription: sql<SubscriptionRow | null>`(select json_build_object('id', s.id, 'status', s.status, 'plan_id', s.plan_id, 'expires_at', s.expires_at, 'contracted_price_cents', s.contracted_price_cents, 'commercial_condition', s.commercial_condition, 'activated_at', s.activated_at, 'first_due_date', s.first_due_date, 'next_due_date', s.next_due_date, 'billing_cycle', s.billing_cycle, 'grace_days', s.grace_days, 'last_paid_at', (select max(c.paid_at) from subscription_charge c where c.subscription_id = s.id and c.status = 'PAID')) from subscription s where s.tenant_id = tenant.id order by s.created_at desc limit 1)`,
     clientCount: sql<string>`(select count(*) from client c where c.tenant_id = tenant.id)`,

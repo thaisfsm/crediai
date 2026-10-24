@@ -1,7 +1,7 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withPlatformContext, type TenantTransaction } from "@/lib/auth/guards";
 import { recordAdminAudit } from "@/lib/admin/audit";
@@ -78,7 +78,7 @@ async function emailTaken(tx: TenantTransaction, email: string, exceptUserId?: s
 async function saasAccount(tx: TenantTransaction, tenantId: string) {
   const [tenant] = await tx.select().from(tenants).where(eq(tenants.id, tenantId)).for("update");
   if (!tenant) return { ok: false as const, error: "Cliente SaaS não encontrado." };
-  const tenantUsers = await tx.select({ id: users.id, role: users.role, email: users.email, name: users.name, active: users.active, mustChangePassword: users.mustChangePassword }).from(users).where(eq(users.tenantId, tenantId)).orderBy(users.createdAt);
+  const tenantUsers = await tx.select({ id: users.id, role: users.role, email: users.email, name: users.name, active: users.active, mustChangePassword: users.mustChangePassword }).from(users).where(and(eq(users.tenantId, tenantId), ne(users.role, "ACCOUNT_MANAGER"))).orderBy(users.createdAt);
   if (tenantUsers.some((user) => user.role !== "TENANT_USER")) return { ok: false as const, error: "Este ambiente pertence à administração da plataforma e não pode ser alterado por aqui." };
   const user = tenantUsers[0];
   if (!user) return { ok: false as const, error: "Este cliente SaaS não tem usuário de acesso." };

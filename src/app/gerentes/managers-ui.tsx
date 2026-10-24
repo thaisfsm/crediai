@@ -1,13 +1,32 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { createContext, useContext, useState, type FormEvent } from "react";
 import { formatMoney, todayIso } from "@/lib/finance/format";
 import type { ManagersPage } from "@/lib/managers/queries";
 import { MoneyInput } from "../money-input";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
 import { Icon } from "../ui-icon";
-import { createManagerAccessAction, createManagerAction, linkClientAction, registerManagerPayoutAction, resetManagerPasswordAction, unlinkClientAction, updateManagerAction, type AccessResult } from "./actions";
+import type { AccessResult } from "./actions";
+
+type Result = { ok: true; message: string } | { ok: false; error: string };
+// As mesmas telas servem ao dono da carteira (ações de /gerentes) e ao MASTER (ações de /admin, com o tenant escolhido).
+export type ManagerActions = {
+  createManager: (data: FormData) => Promise<Result>;
+  updateManager: (data: FormData) => Promise<Result>;
+  linkClient: (data: FormData) => Promise<Result>;
+  unlinkClient: (data: FormData) => Promise<Result>;
+  registerPayout: (data: FormData) => Promise<Result>;
+  createAccess: (data: FormData) => Promise<AccessResult>;
+  resetPassword: (data: FormData) => Promise<AccessResult>;
+};
+const Scope = createContext<{ actions: ManagerActions; tenantId?: string } | null>(null);
+function useScope() {
+  const scope = useContext(Scope);
+  if (!scope) throw new Error("ManagersHome ausente.");
+  return scope;
+}
+const TenantField = () => { const { tenantId } = useScope(); return tenantId ? <input type="hidden" name="tenantId" value={tenantId} /> : null; };
 
 type Manager = ManagersPage["managers"][number];
 const percent = (bps: number) => `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
@@ -29,6 +48,7 @@ function TemporaryPassword({ result, onClose }: { result: Extract<AccessResult, 
 }
 
 function AccessBox({ manager }: { manager: Manager }) {
+  const { actions } = useScope();
   const router = useRouter();
   const [result, setResult] = useState<Extract<AccessResult, { ok: true }> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,14 +64,14 @@ function AccessBox({ manager }: { manager: Manager }) {
     <div className="manager-access">
       {result && <TemporaryPassword result={result} onClose={() => setResult(null)} />}
       {!result && (manager.hasLogin ? (
-        <form onSubmit={run(resetManagerPasswordAction)} className="form-actions">
-          <input type="hidden" name="managerId" value={manager.id} />
+        <form onSubmit={run(actions.resetPassword)} className="form-actions">
+          <input type="hidden" name="managerId" value={manager.id} /><TenantField />
           <span className="muted">Acesso de leitura: {manager.email} · {manager.loginActive ? (manager.mustChangePassword ? "aguardando 1º acesso" : "ativo") : "bloqueado"}</span>
           <button className="outline-button" disabled={pending}>{pending ? "Gerando…" : "Nova senha"}</button>
         </form>
       ) : manager.active ? (
-        <form onSubmit={run(createManagerAccessAction)} className="form-grid">
-          <input type="hidden" name="managerId" value={manager.id} />
+        <form onSubmit={run(actions.createAccess)} className="form-grid">
+          <input type="hidden" name="managerId" value={manager.id} /><TenantField />
           <label className="field"><span>E-mail de acesso do gerente</span><input name="email" type="email" defaultValue={manager.email ?? ""} required maxLength={160} placeholder="gerente@email.com" /></label>
           <div className="form-actions"><button className="primary-button" disabled={pending}>{pending ? "Criando…" : "Criar acesso de leitura"}</button></div>
         </form>
@@ -62,13 +82,14 @@ function AccessBox({ manager }: { manager: Manager }) {
 }
 
 function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void }) {
+  const { actions } = useScope();
   const router = useRouter();
-  const form = useFormAction(updateManagerAction, () => { router.refresh(); onDone(); }, false);
+  const form = useFormAction(actions.updateManager, () => { router.refresh(); onDone(); }, false);
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
-      <input type="hidden" name="managerId" value={manager.id} />
+      <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <label className="field"><span>Nome</span><input name="name" defaultValue={manager.name} required maxLength={120} /></label>
-      <label className="field"><span>Comissão padrão (%)</span><input name="commission" defaultValue={percentInput(manager.commissionBps)} inputMode="decimal" required /></label>
+      <label className="field"><span>Comissão sugerida (%) — opcional</span><input name="commission" defaultValue={manager.commissionBps > 0 ? percentInput(manager.commissionBps) : ""} inputMode="decimal" placeholder="Em branco: você define por cliente" /></label>
       <label className="field"><span>Situação</span><select name="active" defaultValue={manager.active ? "1" : "0"}><option value="1">Ativo</option><option value="0">Inativo (bloqueia o acesso)</option></select></label>
       <div className="form-actions"><button type="button" className="outline-button" onClick={onDone}>Cancelar</button><button className="primary-button" disabled={form.pending}>{form.pending ? "Salvando…" : "Salvar"}</button></div>
       <Feedback feedback={form.feedback} />
@@ -77,11 +98,12 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
 }
 
 function PayoutForm({ manager }: { manager: Manager }) {
+  const { actions } = useScope();
   const router = useRouter();
-  const form = useFormAction(registerManagerPayoutAction, () => router.refresh());
+  const form = useFormAction(actions.registerPayout, () => router.refresh());
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
-      <input type="hidden" name="managerId" value={manager.id} />
+      <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" placeholder={(manager.summary.balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required /></label>
       <label className="field"><span>Data</span><input name="paidOn" type="date" defaultValue={todayIso()} max={todayIso()} required /></label>
       <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={300} placeholder="Opcional" /></label>
@@ -92,14 +114,15 @@ function PayoutForm({ manager }: { manager: Manager }) {
 }
 
 function LinkForm({ manager, unassigned }: { manager: Manager; unassigned: ManagersPage["unassigned"] }) {
+  const { actions } = useScope();
   const router = useRouter();
-  const form = useFormAction(linkClientAction, () => router.refresh());
+  const form = useFormAction(actions.linkClient, () => router.refresh());
   if (!manager.active) return null;
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
-      <input type="hidden" name="managerId" value={manager.id} />
+      <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <label className="field"><span>Cliente indicado</span><select name="clientId" required defaultValue=""><option value="" disabled>Escolha um cliente sem gerente</option>{unassigned.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
-      <label className="field"><span>Comissão deste cliente (%)</span><input name="commission" inputMode="decimal" placeholder={`Vazio = padrão (${percent(manager.commissionBps)})`} /></label>
+      <label className="field"><span>Comissão deste cliente (%)</span><input name="commission" inputMode="decimal" required defaultValue={manager.commissionBps > 0 ? percentInput(manager.commissionBps) : ""} placeholder="Ex.: 10 ou 7,5" /></label>
       <div className="form-actions"><button className="primary-button" disabled={form.pending || unassigned.length === 0}>{form.pending ? "Vinculando…" : "Vincular cliente"}</button></div>
       <Feedback feedback={form.feedback} />
     </form>
@@ -107,10 +130,11 @@ function LinkForm({ manager, unassigned }: { manager: Manager; unassigned: Manag
 }
 
 function ClientRow({ manager, client }: { manager: Manager; client: Manager["clients"][number] }) {
+  const { actions } = useScope();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const rate = useFormAction(linkClientAction, () => { setEditing(false); router.refresh(); }, false);
-  const unlink = useFormAction(unlinkClientAction, () => router.refresh());
+  const rate = useFormAction(actions.linkClient, () => { setEditing(false); router.refresh(); }, false);
+  const unlink = useFormAction(actions.unlinkClient, () => router.refresh());
   return (
     <tr>
       <td data-label="Cliente"><strong>{client.name}</strong></td>
@@ -118,18 +142,18 @@ function ClientRow({ manager, client }: { manager: Manager; client: Manager["cli
       <td data-label="Comissão">
         {editing ? (
           <form className="inline-form" onSubmit={rate.onSubmit}>
-            <input type="hidden" name="managerId" value={manager.id} /><input type="hidden" name="clientId" value={client.id} />
-            <input name="commission" aria-label={`Comissão de ${client.name} (%)`} inputMode="decimal" defaultValue={client.customBps === null ? "" : percentInput(client.customBps)} placeholder={`padrão ${percent(manager.commissionBps)}`} size={8} />
+            <input type="hidden" name="managerId" value={manager.id} /><input type="hidden" name="clientId" value={client.id} /><TenantField />
+            <input name="commission" aria-label={`Comissão de ${client.name} (%)`} inputMode="decimal" required defaultValue={percentInput(client.commissionBps)} size={8} />
             <button className="outline-button" disabled={rate.pending}>Salvar</button><button type="button" className="outline-button" onClick={() => setEditing(false)}>Cancelar</button>
             <Feedback feedback={rate.feedback} />
           </form>
-        ) : <>{percent(client.commissionBps)}{client.customBps === null && <small> (padrão)</small>}</>}
+        ) : percent(client.commissionBps)}
       </td>
       <td data-label="Juros recebidos">{formatMoney(client.interestReceivedCents)}</td>
       <td data-label="Comissão gerada"><strong>{formatMoney(client.commissionCents)}</strong></td>
       <td data-label="Ações" className="actions-cell">
         <button type="button" className="outline-button" onClick={() => setEditing(!editing)}>Mudar %</button>
-        <form onSubmit={unlink.onSubmit} style={{ display: "inline" }}><input type="hidden" name="clientId" value={client.id} /><button className="outline-button" disabled={unlink.pending}>Desvincular</button></form>
+        <form onSubmit={unlink.onSubmit} style={{ display: "inline" }}><input type="hidden" name="clientId" value={client.id} /><TenantField /><button className="outline-button" disabled={unlink.pending}>Desvincular</button></form>
       </td>
     </tr>
   );
@@ -144,7 +168,7 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
       <div className="panel-header">
         <div>
           <div className="panel-title-row"><h2>{manager.name}</h2><span className={`status-chip ${manager.active ? "status-active" : "status-muted"}`}><i />{manager.active ? "Ativo" : "Inativo"}</span></div>
-          <p>Comissão padrão {percent(manager.commissionBps)} sobre os juros recebidos · {manager.clients.length} {manager.clients.length === 1 ? "cliente indicado" : "clientes indicados"}</p>
+          <p>Comissão sobre os juros recebidos, definida por cliente · {manager.clients.length} {manager.clients.length === 1 ? "cliente indicado" : "clientes indicados"}</p>
         </div>
         <div className="heading-actions">
           <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); }}>{editing ? "Fechar" : "Editar"}</button>
@@ -172,19 +196,24 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
   );
 }
 
-export function ManagersHome({ data }: { data: ManagersPage }) {
+export function ManagersHome({ data, actions, tenantId, standalone = true }: { data: ManagersPage; actions: ManagerActions; tenantId?: string; standalone?: boolean }) {
+  return <Scope.Provider value={{ actions, tenantId }}><ManagersBody data={data} standalone={standalone} /></Scope.Provider>;
+}
+
+function ManagersBody({ data, standalone }: { data: ManagersPage; standalone: boolean }) {
+  const { actions } = useScope();
   const router = useRouter();
-  const create = useFormAction(createManagerAction, () => router.refresh());
+  const create = useFormAction(actions.createManager, () => router.refresh());
   return (
-    <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · INDICAÇÕES" title="Gerentes de contas" description="Quem indica clientes para você. Defina a comissão de cada cliente indicado e dê a ele um acesso só de leitura." />
+    <div className={standalone ? "workspace-page" : "managers-embedded"}>
+      {standalone && <PageHeading eyebrow="CREDIAI · INDICAÇÕES" title="Gerentes de contas" description="Quem indica clientes para você. Defina a comissão de cada cliente indicado na hora de vincular e dê a ele um acesso só de leitura." />}
       <section className="panel form-panel" aria-label="Novo gerente de contas">
-        <div className="panel-header"><div><h2>Novo gerente de contas</h2><p>A comissão é um percentual sobre os juros que o cliente indicado realmente pagar. Você pode definir um percentual diferente para cada cliente.</p></div></div>
+        <div className="panel-header"><div><h2>Novo gerente de contas</h2><p>A comissão é um percentual sobre os juros que o cliente indicado realmente pagar. O percentual é digitado por você, cliente a cliente, na hora de vincular.</p></div></div>
         <form className="form-grid" onSubmit={create.onSubmit}>
+          <TenantField />
           <label className="field"><span>Nome</span><input name="name" required maxLength={120} placeholder="Ex.: Gabrielle" /></label>
           <label className="field"><span>E-mail (para o acesso)</span><input name="email" type="email" maxLength={160} placeholder="Opcional agora" /></label>
-          <label className="field"><span>Comissão padrão (%)</span><input name="commission" inputMode="decimal" required placeholder="Ex.: 10" /></label>
-          <div className="form-actions"><button className="primary-button" disabled={create.pending}>{create.pending ? "Cadastrando…" : "Cadastrar gerente"}</button></div>
+                    <div className="form-actions"><button className="primary-button" disabled={create.pending}>{create.pending ? "Cadastrando…" : "Cadastrar gerente"}</button></div>
           <Feedback feedback={create.feedback} />
         </form>
       </section>
