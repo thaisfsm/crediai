@@ -153,10 +153,11 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   await manager.locator(".metric-featured .metric-value").waitFor();
   const flat = async () => (await manager.locator("body").innerText()).replace(/\s+/g, " ");
   // Ganho: Ana 10% de R$ 100,00 + Carla 20% de R$ 100,00 = R$ 30,00; paga R$ 10,00; a receber R$ 20,00; prevista (Ana 10% + Beto 7,5%) R$ 17,50.
-  assert.match((await manager.locator(".metric-featured .metric-value").innerText()).replace(/\s/g, ""), /R\$20,00/);
+  assert.match((await manager.getByLabel("Comissão a receber, abrir minha comissão").locator(".metric-value").innerText()).replace(/\s/g, ""), /R\$20,00/);
+  assert.match((await manager.locator(".metric-featured").innerText()).replace(/\s+/g, " "), /Caixa disponível/);
   let text = await flat();
-  assert.match(text, /Já recebida R\$ 10,00/);
-  assert.match(text, /Clientes indicados/);
+  assert.match(text, /Prevista R\$ 17,50/);
+  assert.match(text, /Capital emprestado/);
   assert.ok(!/Capital disponível|Contas a pagar|Investidores|Financeiro|Configurações|Nova operação/.test(text), "nada do caixa nem de cadastros do dono");
   // Menu: só as telas dela.
   const menu = (await manager.locator(".side-nav").innerText()).replace(/\s+/g, " ");
@@ -284,6 +285,7 @@ test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou
   const hadWallet = Number(await one(`select count(*) from wallet where tenant_id='ten_roberio'`)) > 0;
   if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents + 50000000 where tenant_id='ten_roberio'`);
   else await admin(`insert into wallet(id, tenant_id, initial_capital_cents) values ('wal_g12','ten_roberio',50000000)`);
+  await admin(`update account_manager set cash_limit_cents = 2000000000 where name='Gabrielle Teste'`);
   const before = await tenantHash("ten_roberio");
   const opsBefore = Number(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`));
   const ddMmYyyy = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
@@ -358,8 +360,84 @@ test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou
   const createdOperation = await one(`select operation_id from operation_request where id='${requestId}'`);
   await admin(`delete from operation_request where tenant_id='ten_roberio'`);
   await admin(`delete from loan_operation where id='${createdOperation}'`);
+  await admin(`update account_manager set cash_limit_cents = 0 where name='Gabrielle Teste'`);
   if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents - 50000000 where tenant_id='ten_roberio'`);
   else await admin(`delete from wallet where id='wal_g12'`);
+});
+
+test("G13. caixa da gerente: o dono define, ela vê o disponível e não envia pedido acima dele; pagamentos devolvem o caixa", async () => {
+  const hadWallet = Number(await one(`select count(*) from wallet where tenant_id='ten_roberio'`)) > 0;
+  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents + 50000000 where tenant_id='ten_roberio'`);
+  else await admin(`insert into wallet(id, tenant_id, initial_capital_cents) values ('wal_g13','ten_roberio',50000000)`);
+  const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const managerId = await one(`select id from account_manager where name='Gabrielle Teste'`);
+  const terms = { modality: "SINGLE", frequency: "MONTHLY", rate: "10", loanDate: day(0), dueDate: day(30) };
+  const submit = (clientId, principal) => action(cookie, "submitOperationRequestAction", { clientId, principal, ...terms }, "/gerente");
+  // Sem caixa combinado (padrão 0) nenhum pedido chega.
+  const none = await submit("c_g_ana", "100,00");
+  assert.equal(none.result?.ok, false);
+  assert.match(String(none.result?.error), /Caixa insuficiente/);
+  assert.equal(await one(`select count(*) from operation_request`), 0);
+  // O dono define o caixa (R$ 3.000); a gerente já tem R$ 2.000 em aberto nos clientes dela: sobram R$ 1.000.
+  const saved = await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "3.000,00", active: "1" }, "/gerentes");
+  assert.equal(saved.result?.ok, true, JSON.stringify(saved));
+  assert.equal(await one(`select cash_limit_cents from account_manager where id='${managerId}'`), 300000);
+  assert.equal(await one(`select count(*) from admin_audit_log where action='MANAGER_UPDATED' and description like '%caixa R$%3.000,00%'`) >= 1, true, "caixa auditado");
+  await manager.goto(`${BASE}/gerente`);
+  await manager.getByLabel(/Caixa disponível, abrir operações/).waitFor();
+  assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /R\$\s*1\.000,00/);
+  assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /Caixa combinado R\$\s*3\.000,00/);
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-caixa.png`, fullPage: false });
+  // Acima do caixa: recusado; dentro: aceito e o disponível cai (pedido reservado).
+  const above = await submit("c_g_ana", "1.500,00");
+  assert.equal(above.result?.ok, false);
+  assert.match(String(above.result?.error), /Caixa insuficiente/);
+  const within = await submit("c_g_ana", "1.000,00");
+  assert.equal(within.result?.ok, true, JSON.stringify(within));
+  const more = await submit("c_g_beto", "100,00");
+  assert.equal(more.result?.ok, false, "o pedido pendente reserva o caixa");
+  // A tela avisa e trava o envio quando o valor passa do caixa.
+  await manager.goto(`${BASE}/gerente?tela=operacoes`);
+  const form = manager.getByRole("region", { name: "Nova operação" });
+  await form.locator('input[name="principal"]').fill("50,00");
+  await form.locator('input[name="principal"]').blur();
+  assert.equal(await form.getByRole("button", { name: "Enviar para aprovação" }).isDisabled(), true, "caixa zerado trava o envio");
+  assert.match(await form.innerText(), /maior que o seu caixa disponível/);
+  // O dono reduz o caixa abaixo do que está em uso: aprovar estoura o caixa e é recusado; o pedido continua pendente.
+  const requestId = await one(`select id from operation_request where status='PENDING'`);
+  await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "2.500,00", active: "1" }, "/gerentes");
+  const refused = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
+  assert.equal(refused.result?.ok, false);
+  assert.match(String(refused.result?.error), /Estoura o caixa da gerente/);
+  assert.equal(await one(`select status from operation_request where id='${requestId}'`), "PENDING");
+  // Caixa volta a R$ 3.000: aprova; o principal passa de "pedido" para "em aberto" e o disponível fica zerado.
+  await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "3.000,00", active: "1" }, "/gerentes");
+  const approved = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
+  assert.equal(approved.result?.ok, true, JSON.stringify(approved));
+  const none2 = await submit("c_g_beto", "10,00");
+  assert.equal(none2.result?.ok, false);
+  // Cliente paga R$ 200 (juros R$ 100 primeiro e R$ 100 de principal): R$ 100 voltam ao caixa.
+  await admin(`insert into payment(id,tenant_id,operation_id,amount_cents,paid_at) values ('pay_g13','ten_roberio','op_g_ana_open',20000,'${day(0)}')`);
+  const back = await submit("c_g_beto", "100,00");
+  assert.equal(back.result?.ok, true, JSON.stringify(back));
+  const over = await submit("c_g_beto", "0,01");
+  assert.equal(over.result?.ok, false);
+  // O dono vê o caixa de cada gerente.
+  await owner.goto(`${BASE}/gerentes`);
+  const region = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
+  await region.waitFor();
+  assert.match(await region.innerText(), /Caixa combinado\s*R\$\s*3\.000,00/);
+  assert.match(await region.innerText(), /Caixa disponível\s*R\$\s*0,00/);
+  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-caixa-gerente.png`, fullPage: true });
+  // Limpeza.
+  const createdOperation = await one(`select operation_id from operation_request where id='${requestId}'`);
+  await admin(`delete from operation_request where tenant_id='ten_roberio'`);
+  await admin(`delete from payment where id='pay_g13'`);
+  await admin(`delete from loan_operation where id='${createdOperation}'`);
+  await admin(`update account_manager set cash_limit_cents = 0 where id='${managerId}'`);
+  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents - 50000000 where tenant_id='ten_roberio'`);
+  else await admin(`delete from wallet where id='wal_g13'`);
 });
 
 test("G4. celular: painel sem rolagem lateral", async () => {

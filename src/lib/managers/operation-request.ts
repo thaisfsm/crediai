@@ -7,6 +7,7 @@ import { clients, operationRequests, tenants } from "@/lib/db/schema";
 import { formatMoney } from "@/lib/finance/format";
 import { operationTermsFromForm } from "@/lib/finance/operation-terms";
 import type { CommandResult } from "./commands";
+import { loadManagerCash } from "./queries";
 
 // Pedido de operação da gerente de contas: o mesmo formulário do dono, mas nada entra na carteira nem no capital até o dono aprovar.
 // Só os campos do formulário de operação são guardados (qualquer outro é descartado) e o cliente precisa ser dela.
@@ -26,6 +27,11 @@ export async function submitOperationRequest(tx: TenantTransaction, tenantId: st
   for (const [key, value] of Object.entries(form)) clean.set(key, value);
   const terms = operationTermsFromForm(clean);
   if (!terms.ok) return terms;
+  // Caixa combinado com o dono: sem caixa disponível o pedido nem chega para aprovação.
+  const cash = await loadManagerCash(tx, tenantId, manager.id);
+  if (terms.principalCents > cash.availableCents) {
+    return { ok: false, error: `Caixa insuficiente. Seu caixa disponível é ${formatMoney(cash.availableCents)} (caixa combinado ${formatMoney(cash.limitCents)}). Peça ao Fernando para aumentar o caixa ou aguarde os clientes pagarem.` };
+  }
   const requestId = `opr_${randomUUID().replaceAll("-", "")}`;
   await tx.insert(operationRequests).values({
     id: requestId, tenantId, managerId: manager.id, clientId: client.id, form, principalCents: terms.principalCents,

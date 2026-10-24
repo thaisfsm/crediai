@@ -254,6 +254,9 @@ export const accountManagers = pgTable("account_manager", {
   userId: text("user_id").references(() => users.id, { onDelete: "restrict" }),
   // Comissão PADRÃO em pontos-base (10% = 1000) sobre os juros recebidos; cada cliente indicado pode ter o seu percentual (client.account_manager_bps).
   commissionBps: integer("commission_bps").notNull(),
+  // Caixa que o dono disponibiliza à gerente para operar (migração 0037): o que ela tem em aberto (principal ainda não devolvido) e em pedidos
+  // aguardando aprovação sai daqui; conforme os clientes pagam, o principal volta ao caixa dela até este limite.
+  cashLimitCents: bigint("cash_limit_cents", { mode: "number" }).notNull().default(0),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -263,6 +266,7 @@ export const accountManagers = pgTable("account_manager", {
   uniqueIndex("account_manager_user_unique").on(table.userId).where(sql`${table.userId} is not null`),
   check("account_manager_name_not_blank", sql`length(trim(${table.name})) > 0`),
   check("account_manager_commission_range", sql`${table.commissionBps} >= 0 and ${table.commissionBps} <= 10000`),
+  check("account_manager_cash_limit_valid", sql`${table.cashLimitCents} >= 0`),
   ...tenantPolicies("account_manager", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 

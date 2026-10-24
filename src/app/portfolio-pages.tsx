@@ -1014,7 +1014,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
 // Nova operação. Pagamento único com periodicidade mensal, quinzenal (juros recorrentes, renovação pagando só os juros)
 // ou diária (total dividido em pagamentos diários); ou parcelado (valor emprestado, parcela fixa, primeiro vencimento e
 // prazo). A prévia usa as mesmas funções de rules.ts que o servidor usa ao gravar.
-function OperationForm({ portfolio, onChanged, onNewClient, request }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; request?: (data: FormData) => Promise<ActionResult> }) {
+function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailableCents }: { portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; request?: (data: FormData) => Promise<ActionResult>; cashAvailableCents?: number }) {
   const [modality, setModality] = useState<"SINGLE" | "INSTALLMENT">("SINGLE");
   const [frequency, setFrequency] = useState<Frequency>("MONTHLY");
   // Parcelado: parcelas mensais (padrão) ou quinzenais.
@@ -1056,6 +1056,7 @@ function OperationForm({ portfolio, onChanged, onNewClient, request }: { portfol
   const preview = recurringPreview ?? dailyPreview ?? installmentPreview;
   const availableAfterCents = portfolio.summary.availableCents - (principalCents ?? 0);
   const exceeds = principalCents !== null && principalCents > portfolio.summary.availableCents;
+  const exceedsCash = request !== undefined && cashAvailableCents !== undefined && principalCents !== null && principalCents > cashAvailableCents;
   const installmentsBelowValue = !single && preview !== null && preview.interestCents < 0;
   // Próximos vencimentos do mensal/quinzenal (renovando pagando só os juros) e do parcelado.
   const upcoming = validDue ? dueDates(single ? frequency : installmentFrequency, dueDate, single ? 3 : Math.min(count ?? 1, 360)) : [];
@@ -1145,6 +1146,7 @@ function OperationForm({ portfolio, onChanged, onNewClient, request }: { portfol
           <div><span>{single ? "Juros" : "Lucro"}</span><strong>{preview && preview.interestCents >= 0 ? formatMoney(preview.interestCents) : "—"}</strong></div>
           <div><span>Total a receber</span><strong>{preview ? formatMoney(preview.totalCents) : "—"}</strong></div>
           {rows.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
+          {request && cashAvailableCents !== undefined && <div><span>Caixa disponível após</span><strong>{formatMoney(Math.max(cashAvailableCents - (principalCents ?? 0), 0))}</strong><small>Hoje: {formatMoney(cashAvailableCents)}</small></div>}
           {!request && <div><span>Capital disponível após</span><strong>{formatMoney(Math.max(availableAfterCents, 0))}</strong><small>Hoje: {formatMoney(portfolio.summary.availableCents)}</small></div>}
         </div>
         {!single && installmentPreview && installmentPreview.interestCents >= 0 && upcoming.length > 0 && (
@@ -1154,8 +1156,9 @@ function OperationForm({ portfolio, onChanged, onNewClient, request }: { portfol
           </div>
         )}
         {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor emprestado.</p>}
+        {exceedsCash && <p className="form-feedback form-feedback-warning">O valor é maior que o seu caixa disponível ({formatMoney(cashAvailableCents ?? 0)}). Peça ao Fernando para aumentar o caixa.</p>}
         {exceeds && !request && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
-        <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Enviando…" : request ? "Enviar para aprovação" : "Cadastrar operação"}</button></div>
+        <div className="form-actions"><button className="primary-button" disabled={pending || exceedsCash}><Icon name="plus" size={16} /> {pending ? "Enviando…" : request ? "Enviar para aprovação" : "Cadastrar operação"}</button></div>
       </form>
       <Feedback feedback={feedback} />
     </section>
@@ -1781,7 +1784,7 @@ function OperationRequestsPanel({ requests, owner, onChanged }: { requests: Tena
   );
 }
 
-export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus, readOnly = false, request }: { request?: (data: FormData) => Promise<ActionResult>; portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void; readOnly?: boolean }) {
+export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null, onClearFocus, readOnly = false, request, cashAvailableCents }: { request?: (data: FormData) => Promise<ActionResult>; cashAvailableCents?: number; portfolio: TenantPortfolio; onChanged: () => void; onNewClient: () => void; focus?: OperationsFocus; onClearFocus?: () => void; readOnly?: boolean }) {
   const ids = focus ? new Set(portfolio.operations.filter((operation) => operation.status === "OPEN" && (focus === "lent" ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0)).map((operation) => operation.id)) : null;
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
   const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
@@ -1807,7 +1810,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Cadastre operações dos clientes que você indicou (elas vão para a aprovação do Fernando) e acompanhe os empréstimos." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
       {portfolio.operationRequests.length > 0 && <OperationRequestsPanel requests={portfolio.operationRequests} owner={!readOnly} onChanged={onChanged} />}
-      {readOnly && !request ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} request={request} />}
+      {readOnly && !request ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} request={request} cashAvailableCents={cashAvailableCents} />}
       <section className="panel table-panel" aria-label="Lista de operações">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{focus ? "Operações que compõem este valor" : "Operações da carteira"}</h2><span className="today-count">{operations.length}</span></div><p>Ativas: {portfolio.summary.counts.active} · Quitadas: {portfolio.summary.counts.paid} · Em atraso: {portfolio.summary.counts.overdue}</p></div></div>
         {!focus && focused.length > 0 && (

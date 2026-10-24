@@ -1,7 +1,7 @@
 import "server-only";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { withManagerContext, withPlatformContext, withTenantContext } from "@/lib/auth/guards";
-import { accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, payments, users } from "@/lib/db/schema";
+import { accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, users } from "@/lib/db/schema";
 import { todayIso } from "@/lib/finance/format";
 import { buildPortfolio, type DeferralRecord, type OperationView, type RenewalRecord } from "@/lib/finance/portfolio";
 import { toDeferralRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "@/lib/finance/summaries";
@@ -37,6 +37,24 @@ async function loadManagerOperations(tx: Parameters<Parameters<typeof withTenant
     payments: paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName)),
   });
   return { clientRows, operations };
+}
+
+// Caixa da gerente: limite combinado com o dono, menos o principal que ainda não voltou das operações abertas dos clientes dela e o
+// principal dos pedidos aguardando aprovação. Pagamentos dos clientes devolvem o principal ao caixa (até o limite).
+export type ManagerCash = { limitCents: number; inUseCents: number; reservedCents: number; availableCents: number };
+export const managerCashOf = (limitCents: number, operations: OperationView[], reservedCents: number): ManagerCash => {
+  const inUseCents = operations.filter((operation) => operation.status === "OPEN").reduce((total, operation) => total + operation.principalRemainingCents, 0);
+  return { limitCents, inUseCents, reservedCents, availableCents: Math.max(limitCents - inUseCents - reservedCents, 0) };
+};
+
+// Caixa de uma gerente dentro da transação; excludeRequestId deixa de fora o pedido que está sendo decidido.
+export async function loadManagerCash(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string, managerId: string, excludeRequestId?: string): Promise<ManagerCash> {
+  const [manager] = await tx.select({ cashLimitCents: accountManagers.cashLimitCents }).from(accountManagers)
+    .where(and(eq(accountManagers.id, managerId), eq(accountManagers.tenantId, tenantId)));
+  const { operations } = await loadManagerOperations(tx, tenantId, managerId);
+  const [reserved] = await tx.select({ total: sql<string>`coalesce(sum(${operationRequests.principalCents}), 0)` }).from(operationRequests)
+    .where(and(eq(operationRequests.tenantId, tenantId), eq(operationRequests.managerId, managerId), eq(operationRequests.status, "PENDING"), excludeRequestId ? ne(operationRequests.id, excludeRequestId) : undefined));
+  return managerCashOf(manager?.cashLimitCents ?? 0, operations, Number(reserved?.total ?? 0));
 }
 
 export type ManagerOperationRow = {
@@ -81,14 +99,15 @@ export async function loadManagerPanel() {
     const { clientRows, operations } = await loadManagerOperations(tx, tenantId, manager.id);
     const payoutRows = await tx.select({ id: accountManagerPayouts.id, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes })
       .from(accountManagerPayouts).where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
-    return { manager, userName: session.user.name, clientRows, operations, payoutRows };
+    const cash = await loadManagerCash(tx, tenantId, manager.id);
+    return { manager, userName: session.user.name, clientRows, operations, payoutRows, cash };
   });
   const paidOutCents = data.payoutRows.reduce((total, payout) => total + payout.amountCents, 0);
   const summary = managerCommission(data.clientRows.map((client) => ({ bps: effectiveBps(client.bps, data.manager.commissionBps), operations: data.operations.filter((operation) => operation.clientId === client.id) })), paidOutCents);
   const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps);
   const live = data.operations.filter((operation) => operation.status !== "CANCELED");
   return {
-    managerName: data.manager.name, userName: data.userName, today: todayIso(), summary,
+    managerName: data.manager.name, userName: data.userName, today: todayIso(), summary, cash: data.cash,
     counts: {
       clients: cards.length, overdue: cards.filter((card) => card.situation === "OVERDUE").length, onTime: cards.filter((card) => card.situation === "ON_TIME").length,
       paid: cards.filter((card) => card.situation === "PAID").length, none: cards.filter((card) => card.situation === "NO_OPERATIONS").length,
@@ -116,7 +135,7 @@ export async function loadManagersForTenant(tenantId: string) {
 export async function loadManagersData(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string) {
   const data = await (async () => {
     const managerRows = await tx.select({
-      id: accountManagers.id, name: accountManagers.name, email: accountManagers.email, userId: accountManagers.userId, commissionBps: accountManagers.commissionBps, active: accountManagers.active,
+      id: accountManagers.id, name: accountManagers.name, email: accountManagers.email, userId: accountManagers.userId, commissionBps: accountManagers.commissionBps, cashLimitCents: accountManagers.cashLimitCents, active: accountManagers.active,
       loginActive: users.active, mustChangePassword: users.mustChangePassword, lastLoginAt: users.lastLoginAt,
     }).from(accountManagers)
       .leftJoin(users, and(eq(users.id, accountManagers.userId), eq(users.tenantId, tenantId)))
@@ -125,9 +144,12 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
       .from(accountManagerPayouts).where(eq(accountManagerPayouts.tenantId, tenantId)).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
     const unassigned = await tx.select({ id: clients.id, name: clients.name }).from(clients)
       .where(and(eq(clients.tenantId, tenantId), isNull(clients.accountManagerId), isNull(clients.archivedAt))).orderBy(asc(clients.name));
+    const reservedRows = await tx.select({ managerId: operationRequests.managerId, total: sql<string>`coalesce(sum(${operationRequests.principalCents}), 0)` }).from(operationRequests)
+      .where(and(eq(operationRequests.tenantId, tenantId), eq(operationRequests.status, "PENDING"))).groupBy(operationRequests.managerId);
+    const reservedBy = new Map(reservedRows.map((row) => [row.managerId, Number(row.total)]));
     const perManager = [];
     for (const manager of managerRows) perManager.push({ manager, ...(await loadManagerOperations(tx, tenantId, manager.id)) });
-    return { perManager, payoutRows, unassigned };
+    return { perManager, payoutRows, unassigned, reservedBy };
   })();
   return {
     today: todayIso(),
@@ -140,7 +162,7 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
       return {
         id: manager.id, name: manager.name, email: manager.email, active: manager.active, commissionBps: manager.commissionBps,
         hasLogin: Boolean(manager.userId), loginActive: manager.loginActive ?? false, mustChangePassword: manager.mustChangePassword ?? false, lastLoginAt: manager.lastLoginAt?.toISOString() ?? null,
-        summary, payouts,
+        summary, payouts, cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
         clients: cards.map((card) => ({ id: card.id, name: card.name, situation: card.situation, commissionBps: card.commissionBps, customBps: clientRows.find((client) => client.id === card.id)?.bps ?? null, interestReceivedCents: card.interestReceivedCents, commissionCents: card.commissionCents })),
       };
     }),

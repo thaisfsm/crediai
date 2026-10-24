@@ -10,6 +10,7 @@ import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
 import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps, todayIso } from "@/lib/finance/format";
+import { loadManagerCash } from "@/lib/managers/queries";
 import { operationTermsFromForm } from "@/lib/finance/operation-terms";
 import { clientFields, duplicateCpfError, isDuplicateCpf } from "@/lib/clients/fields";
 import { recordAdminAudit } from "@/lib/admin/audit";
@@ -205,6 +206,11 @@ export async function approveOperationRequestAction(requestId: string): Promise<
     for (const [key, value] of Object.entries(request.form)) form.set(key, String(value));
     const terms = operationTermsFromForm(form);
     if (!terms.ok) return terms;
+    // O caixa da gerente também vale na aprovação (o dono pode ter reduzido o caixa ou outros pedidos terem sido aprovados antes).
+    const cash = await loadManagerCash(tx, tenantId, request.managerId, request.id);
+    if (request.principalCents > cash.availableCents) {
+      return { ok: false, error: `Estoura o caixa da gerente: disponível ${formatMoney(cash.availableCents)} de ${formatMoney(cash.limitCents)}. Aumente o caixa dela em Gerentes de contas para aprovar.` };
+    }
     const created = await insertOperation(tx, tenantId, request.clientId, terms);
     if (!created.ok || !created.operationId) return created.ok ? { ok: false, error: "Não foi possível criar a operação." } : created;
     await tx.update(operationRequests).set({ status: "APPROVED", decidedByUserId: session.user.id, decidedAt: sql`now()`, operationId: created.operationId })

@@ -1,0 +1,2 @@
+ALTER TABLE "account_manager" ADD COLUMN "cash_limit_cents" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "account_manager" ADD CONSTRAINT "account_manager_cash_limit_valid" CHECK ("account_manager"."cash_limit_cents" >= 0);
