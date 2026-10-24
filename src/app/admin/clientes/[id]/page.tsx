@@ -10,6 +10,8 @@ import ClientActions from "./client-actions";
 import { planPriceLabel } from "@/lib/admin/plan-price";
 import { CONDITION_LABEL } from "@/lib/billing/rules";
 import { AreaChart, BarChart } from "./charts";
+import { loadManagersForTenant } from "@/lib/managers/queries";
+import ManagersSection from "./managers-section";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
   const detail = await loadSaasClientDetail(id.slice(0, 80));
   if (!detail) notFound();
   const { client, profitability } = detail;
+  const managers = client.isPlatformOwner ? null : await loadManagersForTenant(client.tenantId);
   const { money } = client;
   const { commercial } = client;
   const today = todayIso();
@@ -136,12 +139,19 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
         </section>
       </div>
 
+      {managers && (
+        <section className="central-panel" id="gerentes">
+          <header className="central-panel-head"><div><h2>Gerentes de contas</h2><p>Quem indica clientes para {client.name}, com a comissão de cada um. Você vê e pode cadastrar, vincular clientes, criar o acesso de leitura e registrar pagamentos em nome deste cliente SaaS.</p></div></header>
+          <ManagersSection tenantId={client.tenantId} data={managers} />
+        </section>
+      )}
+
       <section className="central-panel">
         <header className="central-panel-head"><div><h2>Gerenciar acesso</h2><p>Usuários deste ambiente. Toda conta criada pela plataforma é TENANT_USER.</p></div></header>
         <ul className="central-list">
           {detail.users.map((user) => (
             <li key={user.id}>
-              <span><strong>{user.name}</strong><small>{user.email} · {user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "TENANT_USER"} · último acesso {relativeAccess(user.lastAccessAt)}</small></span>
+              <span><strong>{user.name}</strong><small>{user.email} · {user.role === "SUPER_ADMIN" ? "SUPER_ADMIN" : user.role === "ACCOUNT_MANAGER" ? "Gerente de contas (só leitura)" : "TENANT_USER"} · último acesso {relativeAccess(user.lastAccessAt)}</small></span>
               <b className={user.active ? "is-ok" : "is-late"}>{user.active ? (user.mustChangePassword ? "Senha provisória" : "Ativo") : "Bloqueado"}</b>
             </li>
           ))}

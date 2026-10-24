@@ -81,9 +81,9 @@ test("preparação: clientes e operações fictícias do tenant A (indicados e u
 test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente), paga comissão e cria o acesso", async () => {
   await owner.goto(`${BASE}/gerentes`);
   await owner.getByLabel("Nome", { exact: true }).first().fill("Gabrielle Teste");
-  await owner.getByLabel("Comissão padrão (%)").first().fill("10");
+  assert.equal(await owner.getByLabel("Comissão padrão (%)").count(), 0, "o cadastro do gerente não pede percentual: ele é digitado por cliente");
   await owner.getByRole("button", { name: "Cadastrar gerente" }).click();
-  await poll(`select count(*) from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste' and commission_bps=1000`, 1);
+  await poll(`select count(*) from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste' and commission_bps=0`, 1);
   const managerId = await one(`select id from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste'`);
   const region = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
   await region.waitFor();
@@ -94,11 +94,16 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
     await poll(`select count(*) from client where tenant_id='ten_roberio' and name='${label}' and account_manager_id='${managerId}'`, 1);
     await owner.waitForTimeout(400);
   };
-  await link("Ana Indicada");
-  await link("Beto Indicado");
+  // O percentual é obrigatório no vínculo: sem ele o servidor recusa e nada é gravado.
+  const noPercent = await action(await apiLogin("roberio@teste.local"), "linkClientAction", { managerId, clientId: "c_g_ana", commission: "" });
+  assert.equal(noPercent.result?.ok, false);
+  assert.equal(await one(`select account_manager_id from client where id='c_g_ana'`), null);
+  await link("Ana Indicada", "10");
+  await link("Beto Indicado", "7,5");
   await link("Carla Indicada", "20");
   assert.equal(await one(`select account_manager_bps from client where id='c_g_carla'`), 2000, "Carla com 20% próprios");
-  assert.equal(await one(`select account_manager_bps from client where id='c_g_ana'`), null, "Ana usa o padrão do gerente");
+  assert.equal(await one(`select account_manager_bps from client where id='c_g_ana'`), 1000);
+  assert.equal(await one(`select account_manager_bps from client where id='c_g_beto'`), 750);
   assert.equal(await one(`select account_manager_id from client where id='c_g_dora'`), null, "Dora continua sem gerente");
   // Pagamento de comissão de R$ 10,00 registrado pelo dono.
   await region.getByRole("button", { name: "Pagar comissão" }).click();
@@ -142,7 +147,7 @@ test("G3. painel: só os clientes dele, números certos, sem dados pessoais, com
   // Ganho: Ana 10% de R$ 100,00 + Carla 20% de R$ 100,00 = R$ 30,00; paga R$ 10,00; a receber R$ 20,00; prevista (Ana e Beto 10% de R$ 100,00) R$ 20,00.
   assert.match((await manager.locator(".mgr-hero-value").innerText()).replace(/\s/g, " "), /R\$ 20,00/);
   assert.match(text.replace(/\s/g, " "), /Já recebida R\$ 10,00/);
-  assert.match(text.replace(/\s/g, " "), /Prevista \(juros ainda a pagar\) R\$ 20,00/);
+  assert.match(text.replace(/\s/g, " "), /Prevista \(juros ainda a pagar\) R\$ 17,50/);
   assert.match(text.replace(/\s/g, " "), /Comissão gerada até hoje\s*R\$ 30,00/);
   for (const name of ["Ana Indicada", "Beto Indicado", "Carla Indicada"]) assert.ok(text.includes(name), `${name} aparece`);
   assert.ok(!text.includes("Dora Sem Gerente"), "cliente de outro gerente/sem gerente não aparece");
@@ -256,4 +261,59 @@ test("G8. desativar o gerente bloqueia o acesso na hora e nada financeiro mudou"
   await manager.goto(`${BASE}/gerente`);
   assert.match(new URL(manager.url()).pathname, /login|account-disabled/, "sem sessão ou conta desativada");
   assert.equal(await tenantHash("ten_roberio"), ownerBefore, "operações, pagamentos e capital do tenant não mudaram");
+});
+
+test("G9. MASTER vê e cria gerentes de qualquer cliente SaaS, e o gerente não vira \"dono\" do ambiente", async () => {
+  const master = await signIn("thais@teste.local");
+  // Vê o gerente que o dono cadastrou (com percentuais e pagamentos).
+  await master.goto(`${BASE}/admin/clientes/ten_roberio`);
+  const seen = master.locator("#gerentes");
+  await seen.getByRole("region", { name: "Gerente Gabrielle Teste" }).waitFor();
+  assert.match(await seen.innerText(), /Ana Indicada/);
+  assert.match(await seen.innerText(), /7,5%/);
+  assert.match(await master.locator("body").innerText(), /Gerente de contas \(só leitura\)/, "o gerente aparece rotulado em Gerenciar acesso");
+  if (SHOTS) await seen.screenshot({ path: `${SHOTS}/master-ve-gerentes.png` });
+  // Cria, em nome do Fernando (tenant B), um gerente + vínculo + acesso, tudo pela tela.
+  await admin(`insert into client(id, tenant_id, name, document, phone) values ('c_g_fer','ten_fernando','Cliente Fictício do Fernando','15350946056','11999990009')`);
+  await master.goto(`${BASE}/admin/clientes/ten_fernando`);
+  const box = master.locator("#gerentes");
+  await box.getByLabel("Nome", { exact: true }).first().fill("Gerente Do Master");
+  await box.getByRole("button", { name: "Cadastrar gerente" }).click();
+  await poll(`select count(*) from account_manager where tenant_id='ten_fernando' and name='Gerente Do Master'`, 1);
+  const region = box.getByRole("region", { name: "Gerente Gerente Do Master" });
+  await region.waitFor();
+  await region.getByLabel("Cliente indicado").selectOption({ label: "Cliente Fictício do Fernando" });
+  await region.getByLabel("Comissão deste cliente (%)").fill("12,5");
+  await region.getByRole("button", { name: "Vincular cliente" }).click();
+  await poll(`select account_manager_bps from client where id='c_g_fer'`, 1250);
+  await master.waitForTimeout(500);
+  await region.getByLabel("E-mail de acesso do gerente").fill("gerente.master@teste.local");
+  await region.getByRole("button", { name: "Criar acesso de leitura" }).click();
+  await region.locator(".capital-note", { hasText: "Senha provisória" }).waitFor();
+  assert.equal(await one(`select tenant_id from "user" where email='gerente.master@teste.local'`), "ten_fernando");
+  assert.equal(await one(`select role::text from "user" where email='gerente.master@teste.local'`), "ACCOUNT_MANAGER");
+  assert.equal(await one(`select actor_email from admin_audit_log where action='MANAGER_ACCESS_CREATED' and tenant_id='ten_fernando'`), "thais@teste.local", "auditoria: o MASTER é o autor");
+  // O gerente não é a "conta principal" do ambiente: a lista de clientes SaaS continua mostrando o Fernando.
+  const list = await (await get(await apiLogin("thais@teste.local"), "/admin")).text();
+  assert.ok(list.includes("fernando@teste.local"), "o dono do ambiente continua sendo o Fernando");
+  // Bloquear/desbloquear o cliente SaaS (Robério, que tem gerente) continua funcionando e só afeta o dono.
+  const thais = await apiLogin("thais@teste.local");
+  const block = await action(thais, "setSaasClientAccessAction", { tenantId: "ten_roberio", action: "block" }, "/admin");
+  assert.equal(block.result?.ok, true, "ambiente com gerente continua gerenciável pelo MASTER");
+  assert.equal(await one(`select active from "user" where email='roberio@teste.local'`), false);
+  assert.equal(await one(`select active from "user" where email='${EMAIL}'`), false, "o gerente já estava desativado (G8) e continua assim");
+  const unblock = await action(thais, "setSaasClientAccessAction", { tenantId: "ten_roberio", action: "unblock" }, "/admin");
+  assert.equal(unblock.result?.ok, true);
+  assert.equal(await one(`select active from "user" where email='roberio@teste.local'`), true);
+  // Quem não é MASTER não alcança as ações do MASTER, e o ambiente do próprio MASTER é recusado.
+  const before = await one(`select count(*) from account_manager`);
+  const forged = await action(await apiLogin("roberio@teste.local"), "adminCreateManagerAction", { tenantId: "ten_roberio", name: "Forjado" }, "/admin");
+  assert.notEqual(forged.result?.ok, true);
+  const masterTenant = await one(`select tenant_id from "user" where email='thais@teste.local'`);
+  const own = await action(thais, "adminCreateManagerAction", { tenantId: masterTenant, name: "No Ambiente Master" }, "/admin");
+  assert.equal(own.result?.ok, false);
+  const missing = await action(thais, "adminCreateManagerAction", { tenantId: "ten_inexistente", name: "Fantasma" }, "/admin");
+  assert.equal(missing.result?.ok, false);
+  assert.equal(await one(`select count(*) from account_manager`), before);
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_fernando' and id like 'op\\_g\\_%'`), 0);
 });
