@@ -172,6 +172,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       reviews: data.proposalReviewRows.filter((review) => review.proposalId === row.id).map((review) => ({ phase: review.phase, checks: review.checks, note: review.note, completed: review.completed })),
       offer: row.offerCents === null || row.offerTermMonths === null || row.offerRateBps === null ? null : { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps) },
       engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0),
+      acceptedAt: row.acceptedAt?.toISOString() ?? null, acceptedVia: row.acceptedVia,
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,

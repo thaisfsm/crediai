@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { creditProposalDocuments, creditProposals, proposalApplicants } from "@/lib/db/schema";
 import { PROPOSAL_DOCUMENT_KINDS, PROPOSAL_DOCUMENT_MAX_BYTES, type ProposalDocumentKind } from "@/lib/credit/documents";
 import { detectDocumentType } from "@/lib/credit/file-type";
+import { respondToOffer } from "@/lib/credit/acceptance";
 import { endApplicantSession, lockPolicy, passwordTools, requireApplicant, startApplicantSession, withLinkTenant } from "@/lib/credit/portal";
 import { normalizeCpf, normalizePhone, parseMoneyToCents } from "@/lib/finance/format";
 
@@ -129,6 +130,20 @@ export async function submitProposalAction(token: string): Promise<Result> {
     if (missing.length > 0) return { ok: false, error: "Faltam documentos obrigatórios para enviar a proposta." };
     await tx.update(creditProposals).set({ status: "OPEN", phase: "RECEIVED", phaseChangedAt: sql`now()` }).where(eq(creditProposals.id, proposal.id));
     return { ok: true, message: "Proposta enviada! Você será avisado sobre os próximos passos." };
+  });
+  if (result?.ok) revalidatePath(`/proposta/${token}`);
+  return result ?? { ok: false, error: LINK_ERROR };
+}
+
+// Fase 7: o cliente aceita ou recusa a oferta aprovada. Só a própria proposta dele, e só na fase de aceite.
+export async function respondToOfferAction(token: string, decision: string): Promise<Result> {
+  if (decision !== "accept" && decision !== "decline") return { ok: false, error: "Resposta inválida." };
+  const applicant = await requireApplicant(token).catch(() => null);
+  if (!applicant) return { ok: false, error: "Sua sessão expirou. Entre de novo." };
+  const result = await withLinkTenant(token, async (tx, tenantId): Promise<Result> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.applicantId, applicant.id))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada." };
+    return respondToOffer(tx, tenantId, proposal, decision, { user: { id: applicant.id, name: applicant.name, email: applicant.email } }, "APPLICANT");
   });
   if (result?.ok) revalidatePath(`/proposta/${token}`);
   return result ?? { ok: false, error: LINK_ERROR };

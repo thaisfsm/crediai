@@ -4,18 +4,20 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
-import { maskCpf, maskPhone } from "@/lib/finance/format";
+import { formatMoney, formatRate, maskCpf, maskPhone } from "@/lib/finance/format";
 import { MoneyInput } from "@/app/money-input";
-import { loginApplicantAction, logoutApplicantAction, registerApplicantAction, saveProposalDraftAction, submitProposalAction, uploadProposalDocumentAction } from "./actions";
+import { loginApplicantAction, logoutApplicantAction, registerApplicantAction, saveProposalDraftAction, submitProposalAction, respondToOfferAction, uploadProposalDocumentAction } from "./actions";
 
 type Result = { ok: true; message: string } | { ok: false; error: string };
-type Proposal = { status: string; phaseLabel: string; decisionNote: string | null; values: { name: string; cpf: string; phone: string; requested: string; income: string; termMonths: string }; documents: { kind: string; fileName: string }[] } | null;
+type Offer = { cents: number; termMonths: number; rateBps: number; interestCents: number; totalCents: number; installmentCents: number; acceptedAt: string | null };
+type Proposal = { offer: Offer | null; status: string; phaseLabel: string; decisionNote: string | null; values: { name: string; cpf: string; phone: string; requested: string; income: string; termMonths: string }; documents: { kind: string; fileName: string }[] } | null;
 
 export function PortalClient({ token, tenantName, applicant, proposal }: { token: string; tenantName: string; applicant: { name: string; email: string } | null; proposal: Proposal }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("register");
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<"accept" | "decline" | null>(null);
 
   async function run(task: () => Promise<Result>, after?: () => void) {
     if (busy) return;
@@ -81,6 +83,32 @@ export function PortalClient({ token, tenantName, applicant, proposal }: { token
       {proposal.status === "REJECTED"
         ? <div className="auth-error">Sua proposta não foi aprovada.{proposal.decisionNote ? ` Motivo: ${proposal.decisionNote}` : ""}</div>
         : <div className="auth-ok" role="status">Proposta enviada. Etapa atual: <strong>{proposal.phaseLabel}</strong>.</div>}
+      {proposal.status === "OPEN" && proposal.offer && (
+        <div className="proposal-offer" aria-label="Oferta aprovada">
+          <h2>Sua oferta aprovada</h2>
+          <dl>
+            <dt>Valor</dt><dd>{formatMoney(proposal.offer.cents)}</dd>
+            <dt>Prazo</dt><dd>{proposal.offer.termMonths} meses</dd>
+            <dt>Taxa de juros</dt><dd>{formatRate(proposal.offer.rateBps)} ao mês</dd>
+            <dt>Parcela mensal</dt><dd>{formatMoney(proposal.offer.installmentCents)}</dd>
+            <dt>Total a pagar</dt><dd>{formatMoney(proposal.offer.totalCents)}</dd>
+          </dl>
+          {proposal.offer.acceptedAt ? (
+            <div className="auth-ok" role="status">Oferta aceita em {new Date(proposal.offer.acceptedAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}. Entraremos em contato para os próximos passos.</div>
+          ) : confirming ? (
+            <div className="proposal-offer-actions">
+              <strong>{confirming === "accept" ? "Confirmar o aceite desta oferta?" : "Confirmar que você recusa esta oferta?"}</strong>
+              <button className="auth-submit auth-submit-login" disabled={busy} onClick={() => void run(() => respondToOfferAction(token, confirming), () => setConfirming(null))}>{busy ? "Aguarde…" : confirming === "accept" ? "Sim, aceitar" : "Sim, recusar"}</button>
+              <button type="button" className="auth-link-button" disabled={busy} onClick={() => setConfirming(null)}>Voltar</button>
+            </div>
+          ) : (
+            <div className="proposal-offer-actions">
+              <button className="auth-submit auth-submit-login" onClick={() => setConfirming("accept")}>Aceitar oferta<span>→</span></button>
+              <button type="button" className="auth-link-button" onClick={() => setConfirming("decline")}>Recusar oferta</button>
+            </div>
+          )}
+        </div>
+      )}
       <p>Acompanhe por aqui. Entraremos em contato pelo telefone ou e-mail informados.</p>
       {logout}
     </section></main>;

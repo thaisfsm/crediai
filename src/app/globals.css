@@ -1326,6 +1326,10 @@ button { color:inherit; }
 .pipeline-rule-fail strong { color: #ff8a8a; }
 .pipeline-offer-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .pipeline-offer-fields label { display: grid; gap: 2px; font-size: 11px; }
+.proposal-offer dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 8px 0 12px; }
+.proposal-offer dt { color: #8fa6ad; font-size: 13px; }
+.proposal-offer dd { margin: 0; font-weight: 600; text-align: right; }
+.proposal-offer-actions { display: grid; gap: 8px; }
 .pipeline-check { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; }
 .pipeline-review textarea { width: 100%; font-size: 12px; }
 .pipeline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

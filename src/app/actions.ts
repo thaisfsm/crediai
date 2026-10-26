@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
 import { newLinkToken } from "@/lib/credit/link-token";
+import { respondToOffer } from "@/lib/credit/acceptance";
 import { evaluateProposal, type EnginePolicy } from "@/lib/credit/engine";
 import { openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
@@ -297,12 +298,25 @@ export async function moveCreditProposalAction(proposalId: string, direction: st
       const verdict = await engineVerdict(tx, tenantId, proposal);
       if (!verdict.passed) return { ok: false, error: `A oferta saiu da política de crédito: ${failedRules(verdict)}` };
     }
+    if (direction === "back" && proposal.acceptedAt) return { ok: false, error: "O cliente já aceitou a oferta. Esta proposta não volta de fase." };
     const index = PHASE_KEYS.indexOf(proposal.phase as ProposalPhase);
     const target = PHASE_KEYS[index + (direction === "next" ? 1 : -1)];
     if (!target) return { ok: false, error: direction === "next" ? "A proposta já está na última fase." : "A proposta já está na primeira fase." };
     await tx.update(creditProposals).set({ phase: target, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_MOVED", proposal.id, `Proposta de ${proposal.applicantName} movida de ${proposal.phase} para ${target}.`, { from: proposal.phase, to: target });
     return { ok: true, message: "Proposta movida." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Aceite do cliente registrado pelo dono, para propostas cadastradas por ele (sem conta no portal). As do portal só o próprio cliente aceita.
+export async function registerOfferAcceptanceAction(proposalId: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.source !== "OWNER") return { ok: false, error: "Esta proposta veio do portal: só o próprio cliente aceita a oferta por lá." };
+    return respondToOffer(tx, tenantId, proposal, "accept", session, "OWNER");
   });
   if (result.ok) revalidatePath("/");
   return result;
@@ -361,6 +375,7 @@ export async function rejectCreditProposalAction(proposalId: string, reason: str
     const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
     if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
     if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    if (proposal.acceptedAt) return { ok: false, error: "O cliente já aceitou a oferta. Esta proposta não pode ser reprovada." };
     await tx.update(creditProposals).set({ status: "REJECTED", decisionNote: note, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REJECTED", proposal.id, `Proposta de ${proposal.applicantName} reprovada: ${note}`, { phase: proposal.phase, note });
     return { ok: true, message: "Proposta reprovada." };
