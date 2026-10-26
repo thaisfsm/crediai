@@ -8,6 +8,14 @@ export const PHASE_REVIEWS = {
       { key: "noFraudSigns", label: "Sem sinais de fraude ou adulteração nos documentos" },
     ],
   },
+  DOCUMENTS: {
+    title: "Conferência da documentação",
+    checks: [
+      { key: "bankStatementChecked", label: "Extrato bancário conferido (últimos 3 meses, em nome do cliente, sem rasuras)" },
+      { key: "payslipChecked", label: "Holerite conferido (último, empresa e valores legíveis)" },
+      { key: "incomeMatches", label: "Renda do holerite confere com a renda informada na proposta" },
+    ],
+  },
 } as const;
 
 export type ReviewPhase = keyof typeof PHASE_REVIEWS;
