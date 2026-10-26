@@ -211,6 +211,24 @@ const tenantPolicies = (name: string, tenantId: SQLWrapper, { tenantDelete = fal
     : pgPolicy(`${name}_delete_admin_only`, { for: "delete", using: adminScope }),
 ];
 
+// Política de crédito do dono da carteira (migração 0039): limites que ele define. Campo vazio = sem limite definido.
+export const creditPolicies = pgTable("credit_policy", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  maxExposurePerCpfCents: bigint("max_exposure_per_cpf_cents", { mode: "number" }),
+  maxTermMonths: integer("max_term_months"),
+  maxContractCents: bigint("max_contract_cents", { mode: "number" }),
+  // Taxa de juros mínima ao mês, em pontos-base (30% = 3000).
+  minRateBps: integer("min_rate_bps"),
+  updatedByUserId: text("updated_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("credit_policy_tenant_id_unique").on(table.tenantId),
+  check("credit_policy_values_valid", sql`(${table.maxExposurePerCpfCents} is null or ${table.maxExposurePerCpfCents} > 0) and (${table.maxContractCents} is null or ${table.maxContractCents} > 0) and (${table.maxTermMonths} is null or (${table.maxTermMonths} >= 1 and ${table.maxTermMonths} <= 360)) and (${table.minRateBps} is null or (${table.minRateBps} >= 0 and ${table.minRateBps} <= 100000))`),
+  ...tenantPolicies("credit_policy", table.tenantId),
+]).enableRLS();
+
 export const wallets = pgTable("wallet", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
@@ -1118,4 +1136,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

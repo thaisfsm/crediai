@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -223,6 +223,43 @@ export async function approveOperationRequestAction(requestId: string): Promise<
     return { ok: true, message: "Pedido aprovado: a operação está ativa. Agora é só fazer o Pix." };
   });
   if (result.ok) { revalidatePath("/"); revalidatePath("/gerente"); }
+  return result;
+}
+
+// Política de crédito: os limites que o dono define. Campo vazio = sem limite. Por enquanto os valores só ficam guardados (não bloqueiam operações).
+export async function saveCreditPolicyAction(data: FormData): Promise<ActionResult> {
+  const money = (key: string, label: string) => {
+    const raw = text(data, key, 40);
+    if (!raw) return { ok: true as const, value: null };
+    const cents = parseMoneyToCents(raw);
+    if (cents === null || cents <= 0 || cents > MAX_CENTS) return { ok: false as const, error: `Informe ${label} em reais, por exemplo 50.000,00.` };
+    return { ok: true as const, value: cents };
+  };
+  const exposure = money("maxExposurePerCpf", "a exposição máxima por CPF");
+  if (!exposure.ok) return exposure;
+  const contract = money("maxContract", "o limite por contrato");
+  if (!contract.ok) return contract;
+  const termRaw = text(data, "maxTermMonths", 10);
+  const term = termRaw === "" ? null : /^\d+$/.test(termRaw) ? Number(termRaw) : NaN;
+  if (term !== null && (!Number.isInteger(term) || term < 1 || term > 360)) return { ok: false, error: "Informe o prazo máximo em meses, de 1 a 360." };
+  const rateRaw = text(data, "minRate", 20);
+  const parsedRate = rateRaw === "" ? null : parseLoanRateToBps(rateRaw);
+  const rate = parsedRate === null ? null : Math.round(parsedRate);
+  if (rateRaw !== "" && (parsedRate === null || rate === null || rate > 100_000)) return { ok: false, error: "Informe a taxa de juros mínima ao mês em %, por exemplo 10." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [before] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate };
+    await tx.insert(creditPolicies).values({ id: id("pol"), tenantId, ...values, updatedByUserId: session.user.id })
+      .onConflictDoUpdate({ target: creditPolicies.tenantId, set: { ...values, updatedByUserId: session.user.id, updatedAt: sql`now()` } });
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, {
+      action: "CREDIT_POLICY_UPDATED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null,
+      description: "Política de crédito alterada.",
+      before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps } : null, after: values,
+    });
+    return { ok: true, message: "Política de crédito salva." };
+  });
+  if (result.ok) revalidatePath("/");
   return result;
 }
 

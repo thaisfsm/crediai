@@ -340,7 +340,7 @@ test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou
   // Aprovada = Pix a fazer: aparece no menu, na visão geral e em Contas a pagar; "Pix feito" baixa o compromisso e não mexe no capital.
   await owner.goto(`${BASE}/`);
   await owner.getByRole("region", { name: "Aprovações" }).waitFor();
-  assert.match(await owner.getByRole("region", { name: "Aprovações" }).innerText(), /Pix a fazer hoje\s*1/);
+  assert.match(await owner.getByRole("region", { name: "Aprovações" }).innerText(), /Pix a fazer hoje[\s\S]*1 operação aprovada/);
   assert.ok(await owner.getByRole("link", { name: /Aprovações/ }).count() >= 1, "item Aprovações no menu lateral");
   if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-visao-geral-aprovacoes.png`, fullPage: false });
   await owner.goto(`${BASE}/contas-a-pagar`);
@@ -461,6 +461,32 @@ test("G13. caixa da gerente: o dono define, ela vê o disponível e não envia p
   else await admin(`delete from wallet where id='wal_g13'`);
 });
 
+test("G14. política de crédito: o dono salva os limites, campo vazio = sem limite, valores inválidos são recusados e a gerente não alcança", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const good = await save({ maxExposurePerCpf: "50.000,00", maxTermMonths: "24", maxContract: "20.000,00", minRate: "7,5" });
+  assert.equal(good.result?.ok, true, JSON.stringify(good));
+  const row = await admin(`select max_exposure_per_cpf_cents e, max_term_months t, max_contract_cents c, min_rate_bps r from credit_policy where tenant_id='ten_roberio'`);
+  assert.deepEqual([Number(row[0].e), row[0].t, Number(row[0].c), row[0].r], [5000000, 24, 2000000, 750]);
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_POLICY_UPDATED'`) >= 1, true, "auditado");
+  for (const bad of [{ maxTermMonths: "0" }, { maxTermMonths: "abc" }, { maxContract: "-5" }, { maxExposurePerCpf: "xx" }, { minRate: "abc" }]) {
+    const res = await save(bad);
+    assert.equal(res.result?.ok, false, JSON.stringify(bad));
+  }
+  const cleared = await save({});
+  assert.equal(cleared.result?.ok, true);
+  assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and max_term_months is null and max_contract_cents is null and max_exposure_per_cpf_cents is null and min_rate_bps is null`), 1);
+  assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio'`), 1, "uma política por carteira");
+  await save({ maxExposurePerCpf: "50.000,00", maxTermMonths: "24", maxContract: "20.000,00", minRate: "7,5" });
+  const ownerPage = await signIn("roberio@teste.local");
+  await ownerPage.goto(`${BASE}/?tela=politica-de-credito`);
+  await ownerPage.getByRole("heading", { name: "Política de crédito" }).first().waitFor();
+  assert.equal(await ownerPage.locator('input[name="maxTermMonths"]').inputValue(), "24");
+  assert.equal(await ownerPage.locator('input[name="minRate"]').inputValue(), "7,5");
+  if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-politica-de-credito.png` });
+  await admin(`delete from credit_policy where tenant_id='ten_roberio'`);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);
@@ -493,7 +519,7 @@ test("G5. só leitura: o gerente não alcança nenhuma tela nem ação da cartei
     ["unlinkClientAction", { clientId: "c_g_ana" }, "/gerentes"], ["deleteManagerAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`) }, "/gerentes"],
     ["deleteClientAction", { clientId: "c_g_ana" }, "/"], ["registerPaymentAction", { operationId: "op_g_ana_open", amount: "100,00", paidOn: TODAY }, "/"],
     ["updateClientAction", { clientId: "c_g_ana", name: "Renomeada" }, "/"], ["cancelOperationAction", { operationId: "op_g_ana_open" }, "/"],
-    ["uploadClientDocumentAction", { clientId: "c_g_ana" }, "/"], ["createOperationAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: TODAY, dueDate: day(30) }, "/"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
+    ["uploadClientDocumentAction", { clientId: "c_g_ana" }, "/"], ["saveCreditPolicyAction", { maxContract: "1,00" }, "/"], ["createOperationAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: TODAY, dueDate: day(30) }, "/"], ["createManagerAccessAction", { managerId: await one(`select id from account_manager where name='Gabrielle Teste'`), email: "outro@teste.local" }, "/gerentes"],
   ];
   for (const [name, fields, path] of forged) {
     const response = await action(managerCookie, name, fields, path);

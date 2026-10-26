@@ -267,6 +267,13 @@
       "when": 1792882354454,
       "tag": "0038_pix_da_aprovacao",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793022015737,
+      "tag": "0039_politica_de_credito",
+      "breakpoints": true
     }
   ]
 }

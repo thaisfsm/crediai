@@ -20,7 +20,7 @@ import type { ManagerPanel } from "@/lib/managers/queries";
 import { MANAGER_REQUIRED_FIELDS } from "@/lib/managers/required-fields";
 import { registerClientAction, submitOperationRequestAction } from "./gerente/actions";
 import { ManagerCommissionPage } from "./gerente/commission-page";
-import { ApprovalsOverview, ApprovalsPage, CapitalPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
+import { ApprovalsOverview, ApprovalsPage, CapitalPage, CreditPolicyPage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
 const chargeHeadings: Record<ChargeFilter, { heading: string; description: string; totalLabel: string; empty: string }> = {
@@ -341,6 +341,8 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
             <OperationsPage portfolio={portfolio} onChanged={refresh} onNewClient={() => navigate("Clientes")} focus={operationsFocus} onClearFocus={() => setOperationsFocus(null)} readOnly={readOnly} request={manager ? submitOperationRequestAction : undefined} cashAvailableCents={manager?.panel.cash.availableCents} />
           ) : active === "Aprovações" ? (
             <ApprovalsPage portfolio={portfolio} onChanged={refresh} />
+          ) : active === "Política de crédito" ? (
+            <CreditPolicyPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Pagamentos" ? (
             <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
