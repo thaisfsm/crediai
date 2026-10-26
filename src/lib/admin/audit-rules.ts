@@ -49,6 +49,7 @@ export const AUDIT_ACTIONS = {
   MANAGER_UPDATED: "Gerente de contas alterado",
   MANAGER_CLIENT_LINKED: "Cliente indicado vinculado a gerente de contas",
   MANAGER_CLIENT_UNLINKED: "Cliente indicado desvinculado de gerente de contas",
+  MANAGER_OPERATION_TRANSFERRED: "Contrato transferido para gerente de contas",
   MANAGER_COMMISSION_PAID: "Comissão paga a gerente de contas",
   MANAGER_ACCESS_CREATED: "Acesso de leitura criado para gerente de contas",
   MANAGER_PASSWORD_RESET: "Senha de gerente de contas redefinida",

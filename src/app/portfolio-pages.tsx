@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
+import { transferOperationAction } from "./gerentes/actions";
 import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
@@ -1677,19 +1678,53 @@ function AmountToCollectCell({ operation }: { operation: OperationView }) {
   return <td data-label="A cobrar no vencimento">{operation.nextOpenDueDate && due.cents > 0 ? <><strong>{formatMoney(due.cents)}</strong><small>{due.note}</small></> : <span>—</span>}</td>;
 }
 
-function OperationsTable({ operations, clients, today, onChanged, readOnly = false }: { operations: OperationView[]; clients: ClientOption[]; today: string; onChanged: () => void; readOnly?: boolean }) {
+type ManagerOption = { id: string; name: string; commissionBps: number };
+type OperationManagerInfo = { transferredTo: string | null; transferredId: string | null; bps: number | null; clientManager: string | null };
+
+// Transfere SÓ este contrato para um gerente de contas (a comissão vale para o contrato; pagamentos e capital não mudam).
+function TransferOperationButton({ operation, managers, info, onChanged }: { operation: OperationView; managers: ManagerOption[]; info?: OperationManagerInfo; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [managerId, setManagerId] = useState(info?.transferredId ?? "");
+  const [commission, setCommission] = useState(info?.bps != null ? String(info.bps / 100).replace(".", ",") : "");
+  if (operation.status === "CANCELED" || operation.status === "RENEGOTIATED") return null;
+  const pickManager = (id: string) => { setManagerId(id); const manager = managers.find((row) => row.id === id); if (manager && !commission) setCommission(String(manager.commissionBps / 100).replace(".", ",")); };
+  return (
+    <>
+      <button className="outline-button" onClick={() => setOpen(true)}>Transferir</button>
+      {open && (
+        <ConfirmDialog title={`Transferir contrato #${operation.code}`} confirmLabel={managerId ? "Transferir contrato" : "Devolver ao gerente do cliente"} action={transferOperationAction} fields={{ operationId: operation.id, managerId, commission }} onClose={() => setOpen(false)} onDone={onChanged}>
+          <dl className="payment-summary">
+            <div><dt>Cliente</dt><dd>{operation.clientName}</dd></div>
+            <div><dt>Principal</dt><dd>{formatMoney(operation.principalCents)}</dd></div>
+            <div><dt>Gerente hoje</dt><dd>{info?.transferredTo ?? info?.clientManager ?? "Sem gerente"}</dd></div>
+          </dl>
+          <label className="field"><span>Transferir para</span>
+            <select value={managerId} onChange={(event) => pickManager(event.target.value)}>
+              <option value="">{info?.transferredTo ? "Devolver ao gerente do cliente" : "Escolha o gerente"}</option>
+              {managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.name}</option>)}
+            </select>
+          </label>
+          {managerId && <label className="field"><span>Comissão deste contrato (%)</span><input inputMode="decimal" value={commission} onChange={(event) => setCommission(event.target.value)} placeholder="10" /></label>}
+          <p><small>Vale só para este contrato. Os outros contratos do cliente não mudam, e pagamentos e capital continuam como estão.</small></p>
+        </ConfirmDialog>
+      )}
+    </>
+  );
+}
+
+function OperationsTable({ operations, clients, today, onChanged, readOnly = false, managers = [], operationManagers = {} }: { operations: OperationView[]; clients: ClientOption[]; today: string; onChanged: () => void; readOnly?: boolean; managers?: ManagerOption[]; operationManagers?: Record<string, OperationManagerInfo> }) {
   // Tabela compacta: cabe na largura da tela sem rolar para o lado. Dados menos usados ficam como linha pequena sob o principal.
   return (
     <div className="table-scroll"><table className="data-table fit-table">
       <thead><tr><th>Cliente</th><th>Principal e juros</th><th>Total</th><th>Recebido</th><th>Saldo</th><th>A cobrar no vencimento</th><th>Vencimento e situação</th><th /></tr></thead>
       <tbody>{operations.map((operation) => (
         <tr key={operation.id}>
-          <td data-label="Cliente"><strong>{operation.clientName}</strong><small>#{operation.code} · emprestado em {formatDate(operation.loanDate)} · {operationAge(operation)}</small></td>
+          <td data-label="Cliente"><strong>{operation.clientName}</strong><small>#{operation.code} · emprestado em {formatDate(operation.loanDate)} · {operationAge(operation)}</small>{operationManagers[operation.id]?.transferredTo && <small>Gerente do contrato: {operationManagers[operation.id].transferredTo} · comissão {((operationManagers[operation.id].bps ?? 0) / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%</small>}</td>
           <td data-label="Principal e juros">{formatMoney(operation.principalCents)}<small>juros {formatMoney(operation.interestCents)} · {rateLabel(operation)} · {operation.modality === "INSTALLMENT" ? `parcelado ${operation.frequency === "BIWEEKLY" ? "quinzenal" : "mensal"}` : frequencyLabels[operation.frequency].toLowerCase()}</small></td>
           <td data-label="Total">{formatMoney(operation.totalCents)}</td><td data-label="Recebido">{formatMoney(operation.paidCents)}</td><td data-label="Saldo"><strong>{formatMoney(operation.balanceCents)}</strong></td>
           <AmountToCollectCell operation={operation} />
           <td data-label="Vencimento e situação">{formatDate(operation.nextDueDate)}{operation.nextInstallment && <small>Parcela {operation.nextInstallment.number}/{operation.installmentTotal}</small>}{operation.renewalCount > 0 && <small>{plural(operation.renewalCount, "renovação", "renovações")}</small>}<div className="fit-status"><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></div></td>
-          <td className="actions-cell">{readOnly ? <OperationDetailsButton operation={operation} today={today} onChanged={onChanged} readOnly /> : <span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} /><DeleteOperationButton operation={operation} onChanged={onChanged} /></span>}</td>
+          <td className="actions-cell">{readOnly ? <OperationDetailsButton operation={operation} today={today} onChanged={onChanged} readOnly /> : <span className="row-actions"><PaymentButton operation={operation} today={today} onChanged={onChanged} /><EditOperationButton operation={operation} clients={clients} onChanged={onChanged} />{managers.length > 0 && <TransferOperationButton operation={operation} managers={managers} info={operationManagers[operation.id]} onChanged={onChanged} />}<DeleteOperationButton operation={operation} onChanged={onChanged} /></span>}</td>
         </tr>
       ))}</tbody>
     </table></div>
@@ -2081,7 +2116,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
             {wanted && <p className="client-search-status" role="status">{operations.length === 0 ? "Nenhuma operação encontrada para esse cliente." : `${operations.length} ${operations.length === 1 ? "operação" : "operações"} de ${wanted}.`}</p>}
           </div>
         )}
-        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? (wanted ? `Nenhuma operação ${situation === "OPEN" ? "ativa" : situation === "PAID" ? "quitada" : ""} encontrada para essa busca.`.replace("  ", " ") : situation === "PAID" ? "Nenhuma operação quitada." : "Nenhuma operação ativa.") : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} />}
+        {operations.length === 0 ? <EmptyPanel icon="wallet" text={focus ? "Nenhuma operação em aberto." : focused.length > 0 ? (wanted ? `Nenhuma operação ${situation === "OPEN" ? "ativa" : situation === "PAID" ? "quitada" : ""} encontrada para essa busca.`.replace("  ", " ") : situation === "PAID" ? "Nenhuma operação quitada." : "Nenhuma operação ativa.") : "Nenhuma operação cadastrada ainda."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} managers={portfolio.managers} operationManagers={portfolio.operationManagers} />}
       </section>
     </div>
   );
@@ -2301,7 +2336,7 @@ export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto",
       <section className="panel table-panel">
         <div className="panel-header"><div><div className="panel-title-row"><h2>{filter === "Em aberto" ? `Total a receber: ${formatMoney(portfolio.summary.receivableCents)}` : `${filter}: ${formatMoney(balance)}`}</h2></div><p>{filter === "Em aberto" ? "Principal + juros ainda não recebidos de todas as operações em aberto." : "Saldo em aberto das operações deste filtro."}</p></div></div>
         <div className="charge-tabs" role="tablist" aria-label="Filtro de cobranças">{filters.map((item) => <button key={item} role="tab" aria-selected={filter === item} className={filter === item ? "charge-tab-active" : ""} onClick={() => setFilter(item)}>{item} ({countOf(item)})</button>)}</div>
-        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} />}
+        {operations.length === 0 ? <EmptyPanel icon="calendar" text={filter === "Em aberto" ? "Nenhuma operação em aberto." : "Nenhuma cobrança neste filtro."} /> : <OperationsTable operations={operations} clients={portfolio.clients} today={portfolio.today} onChanged={onChanged} readOnly={readOnly} managers={portfolio.managers} operationManagers={portfolio.operationManagers} />}
       </section>
     </div>
   );

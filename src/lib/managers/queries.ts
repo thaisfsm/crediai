@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withPlatformContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, users } from "@/lib/db/schema";
 import { todayIso } from "@/lib/finance/format";
@@ -10,13 +10,21 @@ import { clientSituation, commissionOf, effectiveBps, managerCommission, type Cl
 // Todas as operações (todos os ciclos) dos clientes indicados por um gerente, já calculadas como no extrato. Cada consulta filtra
 // tenant_id e os clientes do gerente: o isolamento não depende do papel de banco (a produção ignora RLS).
 async function loadManagerOperations(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string, managerId: string) {
-  const clientRows = await tx.select({ id: clients.id, name: clients.name, archivedAt: clients.archivedAt, bps: clients.accountManagerBps }).from(clients)
+  // Contratos de um gerente = os dos clientes dele que não foram transferidos + os transferidos para ele (loan_operation.account_manager_id).
+  const linkedRows = await tx.select({ id: clients.id, name: clients.name, archivedAt: clients.archivedAt, bps: clients.accountManagerBps }).from(clients)
     .where(and(eq(clients.tenantId, tenantId), eq(clients.accountManagerId, managerId))).orderBy(asc(clients.name));
+  const transferredIn = await tx.select({ id: loanOperations.id, clientId: loanOperations.clientId, bps: loanOperations.accountManagerBps }).from(loanOperations)
+    .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.accountManagerId, managerId)));
+  const overrideBps = new Map(transferredIn.map((row) => [row.id, row.bps ?? 0]));
+  const extraIds = [...new Set(transferredIn.map((row) => row.clientId))].filter((clientId) => !linkedRows.some((client) => client.id === clientId));
+  const extraRows = extraIds.length === 0 ? [] : await tx.select({ id: clients.id, name: clients.name, archivedAt: clients.archivedAt, bps: sql<number | null>`null` }).from(clients)
+    .where(and(eq(clients.tenantId, tenantId), inArray(clients.id, extraIds)));
+  const clientRows = [...linkedRows, ...extraRows].sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   const clientIds = clientRows.map((client) => client.id);
-  if (clientIds.length === 0) return { clientRows, operations: [] as OperationView[] };
+  if (clientIds.length === 0) return { clientRows, operations: [] as OperationView[], overrideBps };
   const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name }).from(loanOperations)
     .innerJoin(clients, and(eq(clients.id, loanOperations.clientId), eq(clients.tenantId, loanOperations.tenantId)))
-    .where(and(eq(loanOperations.tenantId, tenantId), inArray(loanOperations.clientId, clientIds)))
+    .where(and(eq(loanOperations.tenantId, tenantId), inArray(loanOperations.clientId, clientIds), or(eq(loanOperations.accountManagerId, managerId), and(isNull(loanOperations.accountManagerId), inArray(loanOperations.clientId, linkedRows.length ? linkedRows.map((client) => client.id) : ["-"])))))
     .orderBy(desc(loanOperations.loanDate), desc(loanOperations.createdAt));
   const operationIds = operationRows.map((row) => row.operation.id);
   const paymentRows = operationIds.length === 0 ? [] : await tx.select({ payment: payments, clientName: clients.name }).from(payments)
@@ -36,7 +44,7 @@ async function loadManagerOperations(tx: Parameters<Parameters<typeof withTenant
     operations: operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [], deferralsByOperation.get(operation.id) ?? []), cycleNumber: operation.cycleNumber })),
     payments: paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName)),
   });
-  return { clientRows, operations };
+  return { clientRows, operations, overrideBps };
 }
 
 // Caixa da gerente: limite combinado com o dono, menos o principal que ainda não voltou das operações abertas dos clientes dela e o
@@ -68,7 +76,22 @@ export type ManagerClientCard = {
   interestReceivedCents: number; commissionBps: number; commissionCents: number; nextDueDate: string | null; worstDaysLate: number;
 };
 
-function clientCards(clientRows: { id: string; name: string; bps: number | null }[], operations: OperationView[], managerBps: number): ManagerClientCard[] {
+// Percentual de cada contrato: o do contrato transferido, ou o do cliente (e, sem ele, o padrão do gerente).
+const operationBps = (operation: OperationView, clientBps: number | null, managerBps: number, overrideBps: Map<string, number>) => overrideBps.get(operation.id) ?? effectiveBps(clientBps, managerBps);
+
+// Grupos para a conta da comissão: um por cliente e percentual (contratos transferidos entram com o percentual do contrato).
+function commissionGroups(clientRows: { id: string; bps: number | null }[], operations: OperationView[], managerBps: number, overrideBps: Map<string, number>) {
+  return clientRows.flatMap((client) => {
+    const byBps = new Map<number, OperationView[]>();
+    for (const operation of operations.filter((row) => row.clientId === client.id)) {
+      const bps = operationBps(operation, client.bps, managerBps, overrideBps);
+      byBps.set(bps, [...(byBps.get(bps) ?? []), operation]);
+    }
+    return byBps.size === 0 ? [{ bps: effectiveBps(client.bps, managerBps), operations: [] as OperationView[] }] : [...byBps].map(([bps, own]) => ({ bps, operations: own }));
+  });
+}
+
+function clientCards(clientRows: { id: string; name: string; bps: number | null }[], operations: OperationView[], managerBps: number, overrideBps: Map<string, number>): ManagerClientCard[] {
   return clientRows.map((client) => {
     const bps = effectiveBps(client.bps, managerBps);
     const own = operations.filter((operation) => operation.clientId === client.id && operation.status !== "CANCELED");
@@ -80,7 +103,8 @@ function clientCards(clientRows: { id: string; name: string; bps: number | null 
       openCount: open.length, overdueCount: open.filter((operation) => operation.state === "OVERDUE").length, paidCount: own.filter((operation) => operation.status === "PAID").length,
       balanceCents: open.reduce((total, operation) => total + operation.balanceCents, 0),
       principalOpenCents: open.reduce((total, operation) => total + operation.principalRemainingCents, 0),
-      interestReceivedCents, commissionBps: bps, commissionCents: commissionOf(interestReceivedCents, bps),
+      interestReceivedCents, commissionBps: own.length > 0 ? operationBps(own[0], client.bps, managerBps, overrideBps) : bps,
+      commissionCents: own.reduce((total, operation) => total + commissionOf(operation.interestPaidCents, operationBps(operation, client.bps, managerBps, overrideBps)), 0),
       nextDueDate: dues[0] ?? null,
       worstDaysLate: Math.max(0, ...open.filter((operation) => operation.state === "OVERDUE").map((operation) => -operation.daysUntilDue)),
       operations: own.map((operation) => ({
@@ -96,15 +120,15 @@ function clientCards(clientRows: { id: string; name: string; bps: number | null 
 // Painel do gerente logado: SÓ os clientes dele, sem CPF, telefone, endereço ou banco (só nome e situação das operações).
 export async function loadManagerPanel() {
   const data = await withManagerContext(async (tx, { tenantId, manager, session }) => {
-    const { clientRows, operations } = await loadManagerOperations(tx, tenantId, manager.id);
+    const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, manager.id);
     const payoutRows = await tx.select({ id: accountManagerPayouts.id, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes })
       .from(accountManagerPayouts).where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
     const cash = await loadManagerCash(tx, tenantId, manager.id);
-    return { manager, userName: session.user.name, clientRows, operations, payoutRows, cash };
+    return { manager, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, cash };
   });
   const paidOutCents = data.payoutRows.reduce((total, payout) => total + payout.amountCents, 0);
-  const summary = managerCommission(data.clientRows.map((client) => ({ bps: effectiveBps(client.bps, data.manager.commissionBps), operations: data.operations.filter((operation) => operation.clientId === client.id) })), paidOutCents);
-  const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps);
+  const summary = managerCommission(commissionGroups(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), paidOutCents);
+  const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps);
   const live = data.operations.filter((operation) => operation.status !== "CANCELED");
   return {
     managerName: data.manager.name, userName: data.userName, today: todayIso(), summary, cash: data.cash,
@@ -154,11 +178,11 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
   return {
     today: todayIso(),
     unassigned: data.unassigned,
-    managers: data.perManager.map(({ manager, clientRows, operations }) => {
+    managers: data.perManager.map(({ manager, clientRows, operations, overrideBps }) => {
       const payouts = data.payoutRows.filter((payout) => payout.managerId === manager.id);
       const paidOutCents = payouts.reduce((total, payout) => total + payout.amountCents, 0);
-      const summary = managerCommission(clientRows.map((client) => ({ bps: effectiveBps(client.bps, manager.commissionBps), operations: operations.filter((operation) => operation.clientId === client.id) })), paidOutCents);
-      const cards = clientCards(clientRows, operations, manager.commissionBps);
+      const summary = managerCommission(commissionGroups(clientRows, operations, manager.commissionBps, overrideBps), paidOutCents);
+      const cards = clientCards(clientRows, operations, manager.commissionBps, overrideBps);
       return {
         id: manager.id, name: manager.name, email: manager.email, active: manager.active, commissionBps: manager.commissionBps,
         hasLogin: Boolean(manager.userId), loginActive: manager.loginActive ?? false, mustChangePassword: manager.mustChangePassword ?? false, lastLoginAt: manager.lastLoginAt?.toISOString() ?? null,

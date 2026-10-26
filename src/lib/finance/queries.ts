@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalLinks, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { evaluateProposal, offerSummary } from "@/lib/credit/engine";
@@ -22,13 +22,17 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
     const scopedClients = scope ? (await tx.select({ id: clients.id }).from(clients).where(and(eq(clients.tenantId, tenantId), eq(clients.accountManagerId, scope.managerId)))).map((row) => row.id) : null;
     // Ciclo atual (carteira inteira) ou todos os ciclos dos clientes do gerente.
     const cycleOf = (column: typeof loanOperations.cycleNumber) => (scope ? undefined : eq(column, cycleNumber));
-    const clientIn = (column: typeof loanOperations.clientId) => (scopedClients ? inArray(column, scopedClients.length ? scopedClients : ["-"]) : undefined);
+    // Do gerente: contratos dos clientes dele que não foram transferidos + os transferidos para ele (loan_operation.account_manager_id).
+    const transferredClients = scope ? (await tx.select({ id: loanOperations.clientId }).from(loanOperations).where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.accountManagerId, scope.managerId)))).map((row) => row.id) : [];
+    const clientIn = (_column: typeof loanOperations.clientId) => (scope && scopedClients
+      ? or(eq(loanOperations.accountManagerId, scope.managerId), and(isNull(loanOperations.accountManagerId), inArray(loanOperations.clientId, scopedClients.length ? scopedClients : ["-"])))
+      : undefined);
     // Só o ciclo atual entra nos cálculos; os pagamentos seguem o ciclo da operação.
     const cycleNumber = wallet?.cycleNumber ?? 1;
     const movementRows = scope ? [] : await tx.select().from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber))).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
     // Aportes indicados como a entrada do dinheiro de um contrato antigo de investidor (migração 0023): não se estornam.
     const investorLinkedRows = scope ? [] : await tx.select({ id: investmentPriorContributions.capitalMovementId }).from(investmentPriorContributions).where(eq(investmentPriorContributions.tenantId, tenantId));
-    const clientRows = await tx.select().from(clients).where(and(eq(clients.tenantId, tenantId), scope ? eq(clients.accountManagerId, scope.managerId) : undefined)).orderBy(asc(clients.name));
+    const clientRows = await tx.select().from(clients).where(and(eq(clients.tenantId, tenantId), scope ? or(eq(clients.accountManagerId, scope.managerId), inArray(clients.id, transferredClients.length ? transferredClients : ["-"])) : undefined)).orderBy(asc(clients.name));
     const operationRows = await tx.select({ operation: loanOperations, clientName: clients.name })
       .from(loanOperations)
       .innerJoin(clients, eq(clients.id, loanOperations.clientId))
@@ -86,6 +90,8 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .innerJoin(clients, and(eq(clients.id, operationRequests.clientId), eq(clients.tenantId, operationRequests.tenantId)))
       .where(and(eq(operationRequests.tenantId, tenantId), scope ? eq(operationRequests.managerId, scope.managerId) : undefined))
       .orderBy(desc(operationRequests.createdAt)).limit(60);
+    const managerRows = scope ? [] : await tx.select({ id: accountManagers.id, name: accountManagers.name, commissionBps: accountManagers.commissionBps, active: accountManagers.active }).from(accountManagers)
+      .where(eq(accountManagers.tenantId, tenantId)).orderBy(asc(accountManagers.name));
     const [policyRow] = scope ? [] : await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
     const proposalRows = scope ? [] : await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), ne(creditProposals.status, "DRAFT"))).orderBy(desc(creditProposals.createdAt)).limit(300);
     const exposureByCpf = scope || proposalRows.length === 0 ? new Map<string, number>() : await openExposureByCpf(tx, tenantId);
@@ -94,7 +100,7 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
     const proposalReviewRows = scope || proposalRows.length === 0 ? [] : await tx.select().from(creditProposalReviews)
       .where(and(eq(creditProposalReviews.tenantId, tenantId), inArray(creditProposalReviews.proposalId, proposalRows.map((row) => row.id))));
     const [linkRow] = scope ? [] : await tx.select({ token: proposalLinks.token, enabled: proposalLinks.enabled }).from(proposalLinks).where(eq(proposalLinks.tenantId, tenantId));
-    return { wallet, cycleNumber, policyRow, exposureByCpf, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 export async function loadTenantPortfolio() {
@@ -176,6 +182,13 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,
+    // Gerentes de contas e quem responde por cada contrato: o gerente do contrato (transferido) ou, sem ele, o do cliente.
+    managers: data.managerRows.filter((manager) => manager.active).map((manager) => ({ id: manager.id, name: manager.name, commissionBps: manager.commissionBps })),
+    operationManagers: Object.fromEntries(data.operationRows.map(({ operation }) => {
+      const managerName = (managerId: string | null) => data.managerRows.find((manager) => manager.id === managerId)?.name ?? null;
+      const clientManagerId = data.clientRows.find((client) => client.id === operation.clientId)?.accountManagerId ?? null;
+      return [operation.id, { transferredTo: managerName(operation.accountManagerId), transferredId: operation.accountManagerId, bps: operation.accountManagerBps, clientManager: managerName(clientManagerId) }];
+    })),
     creditPolicy: {
       maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null,
       maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null,
