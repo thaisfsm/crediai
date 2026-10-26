@@ -330,6 +330,13 @@
       "when": 1793050181745,
       "tag": "0047_transferencia_de_contrato",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793053630031,
+      "tag": "0048_pagamento_principal_primeiro",
+      "breakpoints": true
     }
   ]
 }

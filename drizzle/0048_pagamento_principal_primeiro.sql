@@ -1,0 +1,2 @@
+ALTER TABLE "loan_operation" ADD COLUMN "payment_order" text DEFAULT 'INTEREST_FIRST' NOT NULL;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_payment_order_valid" CHECK ("loan_operation"."payment_order" in ('INTEREST_FIRST', 'PRINCIPAL_FIRST'));

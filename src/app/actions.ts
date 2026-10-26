@@ -187,6 +187,8 @@ async function insertOperation(tx: TenantTransaction, tenantId: string, clientId
   const operationId = id("op");
   await tx.insert(loanOperations).values({
     id: operationId, tenantId, clientId: client.id, principalCents, loanDate, dueDate, status: "OPEN", cycleNumber, ...terms.values,
+    // Contratos novos: o pagamento abate o principal primeiro (lucro só depois). Os antigos seguem juros primeiro.
+    paymentOrder: "PRINCIPAL_FIRST",
   });
   return { ok: true, message: `Operação de ${client.name} cadastrada.`, operationId };
 }
@@ -772,7 +774,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
     firstDueDate: operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents,
     renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),
-    settlementPaymentId: operation.settlementPaymentId,
+    settlementPaymentId: operation.settlementPaymentId, paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST",
     deferrals: deferrals.map((item) => ({ originalNumber: item.originalNumber, additionCents: item.additionCents, newDueDate: item.newDueDate, newAmountCents: item.newAmountCents })),
   };
 }

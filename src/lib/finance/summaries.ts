@@ -41,7 +41,7 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
     renegotiatedIntoId: operation.renegotiatedIntoId, renegotiatedOn: operation.renegotiatedOn, renegotiatedAt: operation.renegotiatedAt?.toISOString() ?? null,
     renegotiatedPrincipalCents: operation.renegotiatedPrincipalCents, renegotiatedInterestCents: operation.renegotiatedInterestCents,
     status: operation.status, settledAt: operation.settledAt, calculationRule: operation.calculationRule, createdAt: operation.createdAt.toISOString(), updatedAt: operation.updatedAt.toISOString(),
-    renewals, deferrals,
+    renewals, deferrals, paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" as const : "INTEREST_FIRST" as const,
     settlementPaymentId: operation.settlementPaymentId, settlementBalanceCents: operation.settlementBalanceCents, settlementDiscountCents: operation.settlementDiscountCents,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
     installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate,

@@ -32,6 +32,8 @@ async function action(cookie, name, fields) {
   form.append("0", '["$K1"]');
   const response = await fetch(`${BASE}/`, { method: "POST", headers: { cookie, "next-action": actionId(name), accept: "text/x-component", origin: BASE }, body: form });
   const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
+  // Estes cenários descrevem contratos antigos (juros primeiro); os contratos novos abatem o principal primeiro (tests/payment-order.test.mjs).
+  if (name === "createOperationAction") await admin(`update loan_operation set payment_order = 'INTEREST_FIRST' where payment_order = 'PRINCIPAL_FIRST'`);
   return result ? JSON.parse(result) : null;
 }
 const dataHash = () => one(`select md5(string_agg(x, '|' order by x)) from (select 'o'||row(o.*)::text x from loan_operation o union all select 'p'||row(p.*)::text from payment p
