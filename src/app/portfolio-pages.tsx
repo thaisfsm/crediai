@@ -17,7 +17,7 @@ import { calculateDaily, calculateFixedInterest, calculateInstallments, calculat
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
-import { reviewOf } from "@/lib/credit/reviews";
+import { capacityIndicator, reviewOf } from "@/lib/credit/reviews";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
@@ -1808,6 +1808,10 @@ function ProposalReviewBox({ proposal, busy, run }: { proposal: TenantPortfolio[
   return (
     <fieldset className="pipeline-review">
       <legend>{review.title}</legend>
+      {proposal.phase === "CAPACITY" && (() => {
+        const indicator = capacityIndicator(proposal.requestedCents, proposal.termMonths, proposal.monthlyIncomeCents);
+        return <small className="pipeline-indicator">Parcela estimada sem juros: {formatMoney(indicator.installmentCents)} por mês{indicator.incomeShare === null ? " (renda não informada)" : `, ${String(indicator.incomeShare).replace(".", ",")}% da renda informada`}.</small>;
+      })()}
       {review.checks.map((item) => (
         <label key={item.key} className="pipeline-check"><input type="checkbox" checked={checks[item.key] === true} onChange={(event) => setChecks({ ...checks, [item.key]: event.currentTarget.checked })} /> {item.label}</label>
       ))}
