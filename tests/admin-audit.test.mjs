@@ -24,7 +24,7 @@ test("AU3. IP do cliente: primeiro endereço do x-forwarded-for, senão x-real-i
 test("AU4. todas as ações administrativas pedidas têm evento de auditoria gravado no código", () => {
   const source = readFileSync("src/app/admin/actions.ts", "utf8") + readFileSync("src/app/admin/planos/actions.ts", "utf8") + readFileSync("scripts/create-super-admin.ts", "utf8")
     + readFileSync("src/app/investidores/actions.ts", "utf8") + readFileSync("src/app/financeiro/actions.ts", "utf8") + readFileSync("src/app/actions.ts", "utf8")
-    + readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/app/renegotiation-actions.ts", "utf8") + readFileSync("src/lib/managers/commands.ts", "utf8") + readFileSync("src/lib/managers/register-client.ts", "utf8") + readFileSync("src/lib/managers/operation-request.ts", "utf8");
+    + readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/app/renegotiation-actions.ts", "utf8") + readFileSync("src/lib/managers/commands.ts", "utf8") + readFileSync("src/lib/managers/register-client.ts", "utf8") + readFileSync("src/lib/managers/operation-request.ts", "utf8") + readFileSync("src/lib/credit/acceptance.ts", "utf8");
   // Gerentes de contas: toda regra de gravação (src/lib/managers/commands.ts) registra auditoria na mesma transação, e as ações do
   // dono (/gerentes) e do MASTER (/admin) só chamam essas regras (nenhuma grava por conta própria).
   const commands = readFileSync("src/lib/managers/commands.ts", "utf8");

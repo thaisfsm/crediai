@@ -612,6 +612,32 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   await page2.getByLabel("Senha").fill("senha-segura-123");
   await page2.getByRole("button", { name: /Entrar/ }).click();
   await page2.getByText(/Proposta enviada/).first().waitFor();
+  // Fase 7: com a oferta aprovada, o cliente vê as condições no portal e aceita; a resposta vale uma vez e é auditada.
+  const operationsBefore = await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`);
+  const portalProposal = await one(`select id from credit_proposal where source='APPLICANT'`);
+  await admin(`update credit_proposal set phase='ACCEPTANCE', offer_cents=200000, offer_term_months=6, offer_rate_bps=800, offered_at=now() where id='${portalProposal}'`);
+  await page2.reload();
+  const offerBox = page2.getByLabel("Oferta aprovada");
+  await offerBox.getByText("Parcela mensal").waitFor();
+  assert.match(await offerBox.innerText(), /R\$\s*2\.000,00/);
+  assert.match(await offerBox.innerText(), /6 meses/);
+  assert.match(await offerBox.innerText(), /R\$\s*493,34/, "parcela = (2.000 + 6 x 8% = 2.960) / 6, arredondada para cima");
+  if (SHOTS) await page2.screenshot({ path: `${SHOTS}/cliente-portal-oferta.png` });
+  await page2.getByRole("button", { name: /Aceitar oferta/ }).click();
+  await page2.getByText("Confirmar o aceite desta oferta?").waitFor();
+  assert.equal(await one(`select accepted_at is null from credit_proposal where id='${portalProposal}'`), true, "só confirma no segundo clique");
+  await page2.getByRole("button", { name: "Sim, aceitar" }).click();
+  await page2.getByText(/Oferta aceita em/).waitFor();
+  assert.equal(await one(`select accepted_via from credit_proposal where id='${portalProposal}'`), "APPLICANT");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_ACCEPTED'`), 1, "aceite auditado");
+  // Já aceita: o dono não volta nem reprova, e nada de capital ou contrato foi criado.
+  assert.match(String((await actionArgs(ownerCookie, "moveCreditProposalAction", [portalProposal, "back"])).result?.error), /já aceitou/);
+  assert.match(String((await actionArgs(ownerCookie, "rejectCreditProposalAction", [portalProposal, "motivo"])).result?.error), /já aceitou/);
+  assert.equal((await actionArgs(ownerCookie, "registerOfferAcceptanceAction", [portalProposal])).result?.ok, false, "proposta do portal só o cliente aceita");
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), operationsBefore, "aceitar não cria contrato");
+  await ownerPage.goto(`${BASE}/?tela=esteira-de-credito`);
+  await ownerPage.getByRole("region", { name: "Aceite do cliente" }).getByText(/Aceita pelo cliente em/).waitFor();
+  if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-fase7.png` });
   // Gerar novo link invalida o antigo e a sessão antiga.
   assert.equal((await link("rotate")).result?.ok, true);
   await page2.goto(`${BASE}/proposta/${token}`);
@@ -759,6 +785,32 @@ test("G18. fase 5 (motor de crédito): confere a proposta contra a política (co
   await admin(`delete from loan_operation where id='op_g18'`);
   await admin(`delete from client where id='cli_g18'`);
   await admin(`delete from credit_policy where tenant_id='ten_roberio'`);
+  await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
+});
+
+test("G19. fase 7 (aceite do cliente): o dono registra o aceite de proposta própria; recusa reprova; só vale uma vez; gerente não alcança", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const create = (name) => action(ownerCookie, "createCreditProposalAction", { applicantName: name, cpf: "529.982.247-25", requested: "3.000,00", termMonths: "6" }, "/");
+  assert.equal((await create("Eva Fictícia Teste")).result?.ok, true);
+  const proposalId = await one(`select id from credit_proposal where tenant_id='ten_roberio'`);
+  const accept = () => actionArgs(ownerCookie, "registerOfferAcceptanceAction", [proposalId]);
+  assert.equal((await accept()).result?.ok, false, "sem oferta e fora da fase de aceite não aceita");
+  await admin(`update credit_proposal set phase='ACCEPTANCE' where id='${proposalId}'`);
+  assert.equal((await accept()).result?.ok, false, "sem oferta salva não aceita");
+  await admin(`update credit_proposal set offer_cents=100000, offer_term_months=3, offer_rate_bps=3000, offered_at=now() where id='${proposalId}'`);
+  assert.equal((await accept()).result?.ok, true);
+  assert.equal(await one(`select accepted_via from credit_proposal where id='${proposalId}'`), "OWNER");
+  assert.equal((await accept()).result?.ok, false, "só uma vez");
+  assert.equal((await actionArgs(await apiLogin(EMAIL, NEW_PASSWORD), "registerOfferAcceptanceAction", [proposalId])).result?.ok === true, false, "a gerente não alcança");
+  // Regra do banco: aceite sem oferta é impossível.
+  await assert.rejects(admin(`update credit_proposal set accepted_at=now(), accepted_via='OWNER', offer_cents=null, offer_term_months=null, offer_rate_bps=null, offered_at=null where id='${proposalId}'`));
+  await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
+  // Recusa pelo cliente (aqui via portal simulado no banco não existe: o dono reprova com motivo, e proposta recusada não aceita mais).
+  assert.equal((await create("Fábio Fictício Teste")).result?.ok, true);
+  const second = await one(`select id from credit_proposal where tenant_id='ten_roberio'`);
+  await admin(`update credit_proposal set phase='ACCEPTANCE', offer_cents=100000, offer_term_months=3, offer_rate_bps=3000, offered_at=now() where id='${second}'`);
+  assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [second, "Cliente desistiu"])).result?.ok, true);
+  assert.equal((await actionArgs(ownerCookie, "registerOfferAcceptanceAction", [second])).result?.ok, false, "recusada não aceita");
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
 });
 

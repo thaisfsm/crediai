@@ -3,6 +3,7 @@ import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { currentApplicant, tenantOfLink, withLinkTenant } from "@/lib/credit/portal";
 import { creditProposalDocuments, creditProposals } from "@/lib/db/schema";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
+import { offerSummary } from "@/lib/credit/engine";
 import { centsToInput } from "@/lib/finance/format";
 import { PortalClient } from "./portal-client";
 
@@ -22,6 +23,9 @@ export default async function ProposalPortalPage({ params }: { params: Promise<{
     if (!row) return null;
     const docs = await tx.select({ kind: creditProposalDocuments.kind, fileName: creditProposalDocuments.fileName }).from(creditProposalDocuments).where(eq(creditProposalDocuments.proposalId, row.id));
     return {
+      offer: row.phase === "ACCEPTANCE" && row.offerCents !== null && row.offerTermMonths !== null && row.offerRateBps !== null
+        ? { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps), acceptedAt: row.acceptedAt?.toISOString() ?? null }
+        : null,
       status: row.status, phaseLabel: PROPOSAL_PHASES.find((phase) => phase.key === row.phase)?.label ?? row.phase, decisionNote: row.decisionNote,
       values: { name: row.applicantName, cpf: row.cpf, phone: row.phone ?? "", requested: centsToInput(row.requestedCents), income: row.monthlyIncomeCents ? centsToInput(row.monthlyIncomeCents) : "", termMonths: String(row.termMonths) },
       documents: docs,

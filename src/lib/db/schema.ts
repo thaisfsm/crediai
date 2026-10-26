@@ -235,6 +235,9 @@ export const creditProposals = pgTable("credit_proposal", {
   offerRateBps: numeric("offer_rate_bps", { precision: 9, scale: 1, mode: "number" }),
   offeredAt: timestamp("offered_at", { withTimezone: true }),
   offeredByUserId: text("offered_by_user_id"),
+  // Aceite do cliente (fase 7, migração 0045): data/hora e por onde veio (APPLICANT = portal do cliente, OWNER = registrado pelo dono). Só existe com oferta salva.
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedVia: text("accepted_via"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   phaseChangedAt: timestamp("phase_changed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -244,6 +247,7 @@ export const creditProposals = pgTable("credit_proposal", {
   check("credit_proposal_source_valid", sql`${table.source} in ('OWNER','APPLICANT')`),
   check("credit_proposal_values_valid", sql`${table.requestedCents} > 0 and ${table.termMonths} >= 1 and ${table.termMonths} <= 360`),
   check("credit_proposal_offer_valid", sql`(${table.offerCents} is null and ${table.offerTermMonths} is null and ${table.offerRateBps} is null and ${table.offeredAt} is null) or (${table.offerCents} > 0 and ${table.offerTermMonths} >= 1 and ${table.offerTermMonths} <= 360 and ${table.offerRateBps} >= 0 and ${table.offeredAt} is not null)`),
+  check("credit_proposal_acceptance_valid", sql`(${table.acceptedAt} is null and ${table.acceptedVia} is null) or (${table.acceptedAt} is not null and ${table.acceptedVia} in ('APPLICANT','OWNER') and ${table.offerCents} is not null)`),
   ...tenantPolicies("credit_proposal", table.tenantId),
 ]).enableRLS();
 

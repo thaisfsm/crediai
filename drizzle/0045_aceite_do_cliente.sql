@@ -1,0 +1,3 @@
+ALTER TABLE "credit_proposal" ADD COLUMN "accepted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "credit_proposal" ADD COLUMN "accepted_via" text;--> statement-breakpoint
+ALTER TABLE "credit_proposal" ADD CONSTRAINT "credit_proposal_acceptance_valid" CHECK (("credit_proposal"."accepted_at" is null and "credit_proposal"."accepted_via" is null) or ("credit_proposal"."accepted_at" is not null and "credit_proposal"."accepted_via" in ('APPLICANT','OWNER') and "credit_proposal"."offer_cents" is not null));
