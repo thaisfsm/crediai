@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -15,6 +15,7 @@ import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, ty
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
+import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
@@ -1790,6 +1791,89 @@ export function OperationRequestsPanel({ requests, owner, onChanged }: { request
       {decided.length > 0 && <><h3 className="request-subtitle">Decididos</h3><ul className="request-list">{decided.map(row)}</ul></>}
       <Feedback feedback={feedback} />
     </section>
+  );
+}
+
+// Esteira de crédito: as 7 fases em colunas; cada proposta avança ou volta uma fase por vez.
+export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
+  const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, onChanged);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const proposals = portfolio.proposals;
+  const open = proposals.filter((proposal) => proposal.status === "OPEN");
+  const rejected = proposals.filter((proposal) => proposal.status === "REJECTED");
+  const run = async (task: () => Promise<ActionResult>) => {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await task();
+      setMessage(result.ok ? { tone: "ok", text: result.message } : { tone: "error", text: result.error });
+      if (result.ok) { setRejecting(null); onChanged(); }
+    } catch {
+      setMessage({ tone: "error", text: "Não foi possível concluir. Tente novamente." });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="workspace-page">
+      <PageHeading eyebrow="CREDIAI · ESTEIRA DE CRÉDITO" title="Esteira de Crédito" description="Acompanhe cada proposta da fase 1 até o aceite do cliente." />
+      <section className="panel form-panel" aria-label="Nova proposta">
+        <div className="panel-header"><div><h2>Nova proposta</h2><p>Entra na fase "Proposta recebida". Em breve o cliente também poderá enviar a proposta pelo link.</p></div></div>
+        <form className="form-grid form-grid-inline" onSubmit={onSubmit}>
+          <label className="field"><span>Nome completo</span><input name="applicantName" required maxLength={120} /></label>
+          <label className="field"><span>CPF</span><input name="cpf" inputMode="numeric" required maxLength={14} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
+          <label className="field"><span>Valor solicitado (R$)</span><MoneyInput name="requested" placeholder="5.000,00" required /></label>
+          <label className="field"><span>Prazo (meses)</span><input name="termMonths" inputMode="numeric" required maxLength={3} /></label>
+          <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} /></label>
+          <label className="field"><span>Telefone</span><input name="phone" inputMode="tel" maxLength={16} onChange={(event) => { event.currentTarget.value = maskPhone(event.currentTarget.value); }} /></label>
+          <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar proposta"}</button></div>
+        </form>
+        <Feedback feedback={feedback} />
+      </section>
+      <Feedback feedback={message} />
+      <div className="pipeline-board" aria-label="Fases da esteira">
+        {PROPOSAL_PHASES.map((phase, index) => {
+          const items = open.filter((proposal) => proposal.phase === phase.key);
+          return (
+            <section className="pipeline-column" key={phase.key} aria-label={phase.label}>
+              <header><span className="pipeline-step">{index + 1}</span><div><h3>{phase.label}</h3><small>{phase.hint}</small></div><span className="nav-count">{items.length}</span></header>
+              {items.length === 0 ? <p className="empty-state">Nenhuma proposta.</p> : items.map((proposal) => (
+                <article className="pipeline-card" key={proposal.id}>
+                  <strong>{proposal.applicantName}</strong>
+                  <span>CPF {formatCpf(proposal.cpf)}</span>
+                  <span>{formatMoney(proposal.requestedCents)} em {proposal.termMonths} {proposal.termMonths === 1 ? "mês" : "meses"}</span>
+                  <small>Desde {formatDate(proposal.phaseChangedAt.slice(0, 10))}</small>
+                  {rejecting === proposal.id ? (
+                    <form className="pipeline-actions" onSubmit={(event) => { event.preventDefault(); const reason = String(new FormData(event.currentTarget).get("reason") ?? ""); void run(() => rejectCreditProposalAction(proposal.id, reason)); }}>
+                      <input name="reason" placeholder="Motivo da reprovação" maxLength={300} required />
+                      <button className="outline-button" disabled={busy}>Confirmar reprovação</button>
+                      <button type="button" className="outline-button" onClick={() => setRejecting(null)}>Cancelar</button>
+                    </form>
+                  ) : (
+                    <div className="pipeline-actions">
+                      {index > 0 && <button className="outline-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "back"))}>Voltar fase</button>}
+                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
+                      <button className="outline-button" disabled={busy} onClick={() => setRejecting(proposal.id)}>Reprovar</button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </section>
+          );
+        })}
+      </div>
+      {rejected.length > 0 && (
+        <section className="panel" aria-label="Propostas reprovadas">
+          <div className="panel-header"><div><h2>Reprovadas</h2><p>Ficam registradas com o motivo.</p></div></div>
+          <div className="request-list">{rejected.map((proposal) => (
+            <div className="request-row" key={proposal.id}><div className="request-main"><strong>{proposal.applicantName}</strong><span>{formatMoney(proposal.requestedCents)} · CPF {formatCpf(proposal.cpf)}</span><span className="request-note">Motivo: {proposal.decisionNote}</span></div><span className="request-badge request-badge-rejected">Reprovada</span></div>
+          ))}</div>
+        </section>
+      )}
+    </div>
   );
 }
 

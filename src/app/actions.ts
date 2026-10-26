@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
-import { creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
+import { creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -223,6 +224,70 @@ export async function approveOperationRequestAction(requestId: string): Promise<
     return { ok: true, message: "Pedido aprovado: a operação está ativa. Agora é só fazer o Pix." };
   });
   if (result.ok) { revalidatePath("/"); revalidatePath("/gerente"); }
+  return result;
+}
+
+// Esteira de crédito: o dono cadastra uma proposta (o cliente também poderá enviar pelo link) e a leva de fase em fase.
+async function auditProposal(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], session: Parameters<Parameters<typeof withTenantContext>[0]>[1]["session"], tenantId: string, action: "CREDIT_PROPOSAL_REGISTERED" | "CREDIT_PROPOSAL_MOVED" | "CREDIT_PROPOSAL_REJECTED", proposalId: string, description: string, after: Record<string, unknown>) {
+  const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+  await recordAdminAudit(tx, session, { action, entity: "wallet", entityId: proposalId, tenantId, tenantName: tenant?.name ?? null, description, before: null, after });
+}
+
+export async function createCreditProposalAction(data: FormData): Promise<ActionResult> {
+  const name = text(data, "applicantName", 120);
+  if (name.length < 3) return { ok: false, error: "Informe o nome completo do cliente." };
+  const cpf = normalizeCpf(text(data, "cpf", 20));
+  if (!cpf.ok) return cpf;
+  if (!cpf.value) return { ok: false, error: "Informe o CPF do cliente." };
+  const amount = parseMoneyToCents(text(data, "requested", 40));
+  if (amount === null || amount <= 0 || amount > MAX_CENTS) return { ok: false, error: "Informe o valor solicitado em reais, por exemplo 5.000,00." };
+  const termRaw = text(data, "termMonths", 10);
+  const term = /^\d+$/.test(termRaw) ? Number(termRaw) : NaN;
+  if (!Number.isInteger(term) || term < 1 || term > 360) return { ok: false, error: "Informe o prazo em meses, de 1 a 360." };
+  const email = text(data, "email", 160).toLowerCase();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Informe um e-mail válido." };
+  const phone = normalizePhone(text(data, "phone", 30));
+  if (!phone.ok) return phone;
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const proposalId = id("prp");
+    await tx.insert(creditProposals).values({ id: proposalId, tenantId, applicantName: name, cpf: cpf.value!, email: email || null, phone: phone.value, requestedCents: amount, termMonths: term, createdByUserId: session.user.id });
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposalId, `Proposta de crédito de ${name} cadastrada.`, { requestedCents: amount, termMonths: term, phase: "RECEIVED" });
+    return { ok: true, message: `Proposta de ${name} cadastrada na fase "Proposta recebida".` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// direction: "next" avança uma fase, "back" volta uma fase.
+export async function moveCreditProposalAction(proposalId: string, direction: string): Promise<ActionResult> {
+  if (direction !== "next" && direction !== "back") return { ok: false, error: "Movimento inválido." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    const index = PHASE_KEYS.indexOf(proposal.phase as ProposalPhase);
+    const target = PHASE_KEYS[index + (direction === "next" ? 1 : -1)];
+    if (!target) return { ok: false, error: direction === "next" ? "A proposta já está na última fase." : "A proposta já está na primeira fase." };
+    await tx.update(creditProposals).set({ phase: target, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_MOVED", proposal.id, `Proposta de ${proposal.applicantName} movida de ${proposal.phase} para ${target}.`, { from: proposal.phase, to: target });
+    return { ok: true, message: "Proposta movida." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+export async function rejectCreditProposalAction(proposalId: string, reason: string): Promise<ActionResult> {
+  const note = String(reason ?? "").trim().slice(0, 300);
+  if (!note) return { ok: false, error: "Informe o motivo da reprovação." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    await tx.update(creditProposals).set({ status: "REJECTED", decisionNote: note, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REJECTED", proposal.id, `Proposta de ${proposal.applicantName} reprovada: ${note}`, { phase: proposal.phase, note });
+    return { ok: true, message: "Proposta reprovada." };
+  });
+  if (result.ok) revalidatePath("/");
   return result;
 }
 

@@ -211,6 +211,30 @@ const tenantPolicies = (name: string, tenantId: SQLWrapper, { tenantDelete = fal
     : pgPolicy(`${name}_delete_admin_only`, { for: "delete", using: adminScope }),
 ];
 
+// Esteira de crédito (migração 0040): cada proposta caminha pelas 7 fases; fica na fase até o dono avançar.
+export const creditProposals = pgTable("credit_proposal", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  applicantName: text("applicant_name").notNull(),
+  cpf: text("cpf").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  requestedCents: bigint("requested_cents", { mode: "number" }).notNull(),
+  termMonths: integer("term_months").notNull(),
+  phase: text("phase").notNull().default("RECEIVED"),
+  status: text("status").notNull().default("OPEN"),
+  decisionNote: text("decision_note"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  phaseChangedAt: timestamp("phase_changed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("credit_proposal_tenant_phase_idx").on(table.tenantId, table.phase),
+  check("credit_proposal_phase_valid", sql`${table.phase} in ('RECEIVED','IDENTITY','DOCUMENTS','CAPACITY','ENGINE','APPROVAL','ACCEPTANCE')`),
+  check("credit_proposal_status_valid", sql`${table.status} in ('OPEN','REJECTED')`),
+  check("credit_proposal_values_valid", sql`${table.requestedCents} > 0 and ${table.termMonths} >= 1 and ${table.termMonths} <= 360`),
+  ...tenantPolicies("credit_proposal", table.tenantId),
+]).enableRLS();
+
 // Política de crédito do dono da carteira (migração 0039): limites que ele define. Campo vazio = sem limite definido.
 export const creditPolicies = pgTable("credit_policy", {
   id: text("id").primaryKey(),
@@ -1136,4 +1160,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposals, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
