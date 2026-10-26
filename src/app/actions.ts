@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
 import { newLinkToken } from "@/lib/credit/link-token";
-import { evaluateProposal } from "@/lib/credit/engine";
+import { evaluateProposal, type EnginePolicy } from "@/lib/credit/engine";
 import { openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
 import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
@@ -263,6 +263,19 @@ export async function createCreditProposalAction(data: FormData): Promise<Action
 }
 
 // direction: "next" avança uma fase, "back" volta uma fase.
+async function policyOf(tx: TenantTransaction, tenantId: string): Promise<EnginePolicy> {
+  const [policy] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+  return { maxExposurePerCpfCents: policy?.maxExposurePerCpfCents ?? null, maxTermMonths: policy?.maxTermMonths ?? null, maxContractCents: policy?.maxContractCents ?? null, minRateBps: policy?.minRateBps ?? null };
+}
+
+// Motor de crédito sobre a proposta; com oferta salva, vale a oferta (valor, prazo e taxa aprovados).
+async function engineVerdict(tx: TenantTransaction, tenantId: string, proposal: { cpf: string; requestedCents: number; termMonths: number; offerCents: number | null; offerTermMonths: number | null; offerRateBps: number | null }) {
+  const exposure = (await openExposureByCpf(tx, tenantId)).get(onlyDigits(proposal.cpf)) ?? 0;
+  const offered = proposal.offerCents !== null && proposal.offerTermMonths !== null;
+  return evaluateProposal(offered ? { requestedCents: proposal.offerCents!, termMonths: proposal.offerTermMonths!, rateBps: proposal.offerRateBps } : proposal, await policyOf(tx, tenantId), exposure);
+}
+const failedRules = (verdict: ReturnType<typeof evaluateProposal>) => verdict.rules.filter((rule) => rule.status === "FAIL").map((rule) => `${rule.label} (${rule.detail})`).join(" ");
+
 export async function moveCreditProposalAction(proposalId: string, direction: string): Promise<ActionResult> {
   if (direction !== "next" && direction !== "back") return { ok: false, error: "Movimento inválido." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
@@ -276,10 +289,13 @@ export async function moveCreditProposalAction(proposalId: string, direction: st
       if (!review?.completed) return { ok: false, error: `Conclua a conferência desta fase antes de avançar: ${required.title}.` };
     }
     if (direction === "next" && proposal.phase === "ENGINE") {
-      const [policy] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-      const exposure = (await openExposureByCpf(tx, tenantId)).get(onlyDigits(proposal.cpf)) ?? 0;
-      const verdict = evaluateProposal(proposal, { maxExposurePerCpfCents: policy?.maxExposurePerCpfCents ?? null, maxTermMonths: policy?.maxTermMonths ?? null, maxContractCents: policy?.maxContractCents ?? null, minRateBps: policy?.minRateBps ?? null }, exposure);
-      if (!verdict.passed) return { ok: false, error: `O motor de crédito recusou avançar: ${verdict.rules.filter((rule) => rule.status === "FAIL").map((rule) => `${rule.label} (${rule.detail})`).join(" ")}` };
+      const verdict = await engineVerdict(tx, tenantId, proposal);
+      if (!verdict.passed) return { ok: false, error: `O motor de crédito recusou avançar: ${failedRules(verdict)}` };
+    }
+    if (direction === "next" && proposal.phase === "APPROVAL") {
+      if (proposal.offerCents === null) return { ok: false, error: "Defina e salve a oferta aprovada (valor, prazo e taxa) antes de avançar." };
+      const verdict = await engineVerdict(tx, tenantId, proposal);
+      if (!verdict.passed) return { ok: false, error: `A oferta saiu da política de crédito: ${failedRules(verdict)}` };
     }
     const index = PHASE_KEYS.indexOf(proposal.phase as ProposalPhase);
     const target = PHASE_KEYS[index + (direction === "next" ? 1 : -1)];
@@ -287,6 +303,31 @@ export async function moveCreditProposalAction(proposalId: string, direction: st
     await tx.update(creditProposals).set({ phase: target, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_MOVED", proposal.id, `Proposta de ${proposal.applicantName} movida de ${proposal.phase} para ${target}.`, { from: proposal.phase, to: target });
     return { ok: true, message: "Proposta movida." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Oferta aprovada (fase 6): valor até o pedido, prazo e taxa ao mês. Só grava se o motor de crédito aprovar a oferta, incluindo a taxa mínima.
+export async function saveProposalOfferAction(proposalId: string, approved: string, termMonths: string, rate: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    if (proposal.phase !== "APPROVAL") return { ok: false, error: "A oferta só é definida na fase Aprovação e oferta." };
+    const offerCents = parseMoneyToCents(String(approved ?? "").slice(0, 40));
+    if (!offerCents || offerCents <= 0) return { ok: false, error: "Informe o valor aprovado." };
+    if (offerCents > proposal.requestedCents) return { ok: false, error: `O valor aprovado não pode passar do valor pedido (${formatMoney(proposal.requestedCents)}).` };
+    const term = Number(String(termMonths ?? "").trim());
+    if (!Number.isInteger(term) || term < 1 || term > 360) return { ok: false, error: "Informe o prazo em meses, de 1 a 360." };
+    const rateBps = parseLoanRateToBps(String(rate ?? "").slice(0, 20));
+    if (rateBps === null) return { ok: false, error: "Informe a taxa de juros ao mês, por exemplo 7,5." };
+    const verdict = await engineVerdict(tx, tenantId, { cpf: proposal.cpf, requestedCents: proposal.requestedCents, termMonths: proposal.termMonths, offerCents, offerTermMonths: term, offerRateBps: rateBps });
+    if (!verdict.passed) return { ok: false, error: `Oferta fora da política de crédito: ${failedRules(verdict)}` };
+    await tx.update(creditProposals).set({ offerCents, offerTermMonths: term, offerRateBps: rateBps, offeredAt: sql`now()`, offeredByUserId: session.user.id })
+      .where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REVIEWED", proposal.id, `Proposta de ${proposal.applicantName}: oferta aprovada de ${formatMoney(offerCents)} em ${term} meses a ${rateBps / 100}% ao mês.`, { offerCents, termMonths: term, rateBps });
+    return { ok: true, message: "Oferta aprovada e salva. Já pode avançar para o aceite do cliente." };
   });
   if (result.ok) revalidatePath("/");
   return result;

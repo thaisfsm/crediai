@@ -295,6 +295,13 @@
       "when": 1793032034167,
       "tag": "0042_conferencia_da_fase",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793040755353,
+      "tag": "0043_oferta_da_proposta",
+      "breakpoints": true
     }
   ]
 }

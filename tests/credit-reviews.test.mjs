@@ -27,3 +27,14 @@ test("CR3. motor: limite vazio passa; contrato, prazo e exposição por CPF barr
   assert.deepEqual(failed(evaluateProposal({ requestedCents: 100000, termMonths: 6 }, policy, 900001)), ["Exposição máxima por CPF"]);
   assert.equal(evaluateProposal({ requestedCents: 1, termMonths: 1 }, policy, 0).rules.at(-1).status, "LATER");
 });
+
+import { offerSummary } from "../src/lib/credit/engine.ts";
+
+test("CR4. oferta: taxa mínima vale quando a taxa é informada; resumo com juros simples", () => {
+  const policy = { maxExposurePerCpfCents: null, maxTermMonths: null, maxContractCents: null, minRateBps: 750 };
+  const rule = (rateBps) => evaluateProposal({ requestedCents: 1, termMonths: 1, rateBps }, policy, 0).rules.at(-1).status;
+  assert.equal(rule(null), "LATER");
+  assert.equal(rule(749.9), "FAIL");
+  assert.equal(rule(750), "PASS");
+  assert.deepEqual(offerSummary(200000, 6, 800), { interestCents: 96000, totalCents: 296000, installmentCents: 49334 });
+});
