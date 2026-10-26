@@ -1740,8 +1740,6 @@ const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode 
 export function OperationRequestsPanel({ requests, owner, onChanged }: { requests: TenantPortfolio["operationRequests"]; owner: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
-  const [origin, setOrigin] = useState("");
-  useEffect(() => setOrigin(window.location.origin), []);
   const [reason, setReason] = useState("");
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const pending = requests.filter((request) => request.status === "PENDING");
@@ -1854,6 +1852,9 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Endereço do site só no navegador: no servidor não existe window, e usar o global "origin" derrubava a tela com link ativo.
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
   const proposals = portfolio.proposals;
   const open = proposals.filter((proposal) => proposal.status === "OPEN");
   const rejected = proposals.filter((proposal) => proposal.status === "REJECTED");
