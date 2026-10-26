@@ -2,7 +2,7 @@ import "server-only";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalLinks, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
-import { evaluateProposal } from "@/lib/credit/engine";
+import { evaluateProposal, offerSummary } from "@/lib/credit/engine";
 import { openExposureByCpf } from "@/lib/credit/exposure";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
@@ -170,7 +170,8 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       termMonths: row.termMonths, phase: row.phase, status: row.status, decisionNote: row.decisionNote,
       createdAt: row.createdAt.toISOString(), phaseChangedAt: row.phaseChangedAt.toISOString(),
       reviews: data.proposalReviewRows.filter((review) => review.proposalId === row.id).map((review) => ({ phase: review.phase, checks: review.checks, note: review.note, completed: review.completed })),
-      engine: evaluateProposal(row, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0),
+      offer: row.offerCents === null || row.offerTermMonths === null || row.offerRateBps === null ? null : { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps) },
+      engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0),
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,

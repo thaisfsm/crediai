@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -1824,6 +1824,28 @@ function ProposalReviewBox({ proposal, busy, run }: { proposal: TenantPortfolio[
   );
 }
 
+// Oferta aprovada (fase 6): valor até o pedido, prazo e taxa. O motor reconfere antes de gravar; depois de salva, a proposta pode avançar para o aceite.
+function ProposalOfferBox({ proposal, busy, run }: { proposal: TenantPortfolio["proposals"][number]; busy: boolean; run: (task: () => Promise<ActionResult>) => Promise<void> }) {
+  const offer = proposal.offer;
+  const [approved, setApproved] = useState(((offer?.cents ?? proposal.requestedCents) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
+  const [term, setTerm] = useState(String(offer?.termMonths ?? proposal.termMonths));
+  const [rate, setRate] = useState(offer ? String(offer.rateBps / 100).replace(".", ",") : "");
+  return (
+    <fieldset className="pipeline-review">
+      <legend>Oferta aprovada</legend>
+      <div className="pipeline-offer-fields">
+        <label>Valor aprovado<input aria-label="Valor aprovado" inputMode="decimal" value={approved} onChange={(event) => setApproved(event.currentTarget.value)} /></label>
+        <label>Prazo (meses)<input aria-label="Prazo aprovado em meses" inputMode="numeric" value={term} onChange={(event) => setTerm(event.currentTarget.value)} /></label>
+        <label>Taxa ao mês (%)<input aria-label="Taxa de juros ao mês" inputMode="decimal" placeholder="7,5" value={rate} onChange={(event) => setRate(event.currentTarget.value)} /></label>
+      </div>
+      <div className="pipeline-actions">
+        <button className="outline-button" disabled={busy} onClick={() => void run(() => saveProposalOfferAction(proposal.id, approved, term, rate))}>Aprovar oferta</button>
+        <small>{offer ? `Oferta salva: ${formatMoney(offer.cents)} em ${offer.termMonths}x, parcela ${formatMoney(offer.installmentCents)}.` : "Salve a oferta para avançar."}</small>
+      </div>
+    </fieldset>
+  );
+}
+
 // Esteira de crédito: as 7 fases em colunas; cada proposta avança ou volta uma fase por vez.
 export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
   const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, onChanged);
@@ -1891,6 +1913,10 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   {proposal.documents.length > 0 && <div className="pipeline-docs">{proposal.documents.map((doc) => (
                     <a key={doc.id} href={`/esteira/documento/${doc.id}`} target="_blank" rel="noreferrer">{PROPOSAL_DOCUMENTS.find((item) => item.kind === doc.kind)?.label ?? doc.kind}</a>
                   ))}</div>}
+                  {proposal.offer && proposal.phase === "ACCEPTANCE" && (
+                    <small className="pipeline-indicator">Oferta: {formatMoney(proposal.offer.cents)} em {proposal.offer.termMonths}x a {String(proposal.offer.rateBps / 100).replace(".", ",")}% ao mês. Parcela {formatMoney(proposal.offer.installmentCents)}, total {formatMoney(proposal.offer.totalCents)}.</small>
+                  )}
+                  {proposal.phase === "APPROVAL" && <ProposalOfferBox key={`${proposal.id}-offer-${proposal.offer?.cents ?? 0}`} proposal={proposal} busy={busy} run={run} />}
                   {proposal.phase === "ENGINE" && (
                     <fieldset className="pipeline-review">
                       <legend>Motor de crédito</legend>
@@ -1910,7 +1936,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   ) : (
                     <div className="pipeline-actions">
                       {index > 0 && <button className="outline-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "back"))}>Voltar fase</button>}
-                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy || (proposal.phase === "ENGINE" && !proposal.engine.passed) || (reviewOf(proposal.phase) !== null && !proposal.reviews.some((item) => item.phase === proposal.phase && item.completed))} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
+                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy || (proposal.phase === "ENGINE" && !proposal.engine.passed) || (proposal.phase === "APPROVAL" && !proposal.offer) || (reviewOf(proposal.phase) !== null && !proposal.reviews.some((item) => item.phase === proposal.phase && item.completed))} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
                       <button className="outline-button" disabled={busy} onClick={() => setRejecting(proposal.id)}>Reprovar</button>
                     </div>
                   )}

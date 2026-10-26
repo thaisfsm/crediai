@@ -506,6 +506,11 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
     if (phase === "DOCUMENTS") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { documentChecked: true, holderChecked: true, noFraudSigns: true }, ""])).result?.ok, true);
     if (phase === "ENGINE") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { regularIncome: true, noOverdraft: true, noSuspiciousActivity: true, capacityConfirmed: true }, ""])).result?.ok, true);
     if (phase === "CAPACITY") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { bankStatementChecked: true, payslipChecked: true, incomeMatches: true }, ""])).result?.ok, true);
+    // Aprovação e oferta: sem oferta salva não passa para o aceite.
+    if (phase === "ACCEPTANCE") {
+      assert.equal((await move("next")).result?.ok, false, "sem oferta não avança");
+      assert.equal((await actionArgs(ownerCookie, "saveProposalOfferAction", [proposalId, "100,00", "3", "7,5"])).result?.ok, true);
+    }
     assert.equal((await move("next")).result?.ok, true);
     assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), phase);
   }
@@ -716,6 +721,28 @@ test("G18. fase 5 (motor de crédito): confere a proposta contra a política (co
   assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00" })).result?.ok, true);
   assert.equal((await move()).result?.ok, true);
   assert.equal(await phase(), "APPROVAL");
+  // Fase 6: oferta aprovada. Só na fase certa, até o valor pedido, e o motor reconfere (taxa mínima, exposição).
+  const offer = (approved, term, rate) => actionArgs(ownerCookie, "saveProposalOfferAction", [proposalId, approved, term, rate]);
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00", minRate: "7,5" })).result?.ok, true);
+  assert.equal((await move()).result?.ok, false, "sem oferta não avança para o aceite");
+  assert.match(String((await offer("3.500,00", "6", "8")).result?.error), /valor pedido/);
+  assert.match(String((await offer("2.000,00", "6", "5")).result?.error), /Taxa de juros mínima/);
+  assert.match(String((await offer("2.000,00", "13", "8")).result?.error), /Prazo máximo/);
+  assert.equal((await offer("2.000,00", "6", "abc")).result?.ok, false);
+  assert.equal(await one(`select count(*) from credit_proposal where id='${proposalId}' and offer_cents is not null`), 0, "oferta recusada não grava");
+  const okOffer = await offer("2.000,00", "6", "8");
+  assert.equal(okOffer.result?.ok, true, JSON.stringify(okOffer));
+  const saved = (await admin(`select offer_cents c, offer_term_months t, offer_rate_bps r from credit_proposal where id='${proposalId}'`))[0];
+  assert.deepEqual([Number(saved.c), saved.t, Number(saved.r)], [200000, 6, 800]);
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_REVIEWED' and description like '%oferta aprovada%'`) >= 1, true, "oferta auditada");
+  const managerOffer = await actionArgs(await apiLogin(EMAIL, NEW_PASSWORD), "saveProposalOfferAction", [proposalId, "1.000,00", "6", "8"]);
+  assert.equal(managerOffer.result?.ok === true, false, "a gerente não alcança");
+  // Uma taxa mínima maior depois da oferta também barra o avanço.
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00", minRate: "9" })).result?.ok, true);
+  assert.match(String((await move()).result?.error), /Taxa de juros mínima/);
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00", minRate: "7,5" })).result?.ok, true);
+  assert.equal((await move()).result?.ok, true);
+  assert.equal(await phase(), "ACCEPTANCE");
   await admin(`delete from loan_operation where id='op_g18'`);
   await admin(`delete from client where id='cli_g18'`);
   await admin(`delete from credit_policy where tenant_id='ten_roberio'`);
