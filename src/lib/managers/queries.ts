@@ -69,6 +69,8 @@ export type ManagerOperationRow = {
   id: string; code: string; loanDate: string; status: OperationView["status"]; state: OperationView["state"];
   principalCents: number; totalCents: number; paidCents: number; balanceCents: number; interestPaidCents: number;
   nextDueDate: string | null; daysUntilDue: number; installment: string | null; modality: string;
+  // Comissão deste contrato (percentual do contrato transferido ou do cliente) sobre os juros já recebidos dele.
+  commissionBps: number; commissionCents: number;
 };
 export type ManagerClientCard = {
   id: string; name: string; situation: ClientSituation; operations: ManagerOperationRow[];
@@ -112,6 +114,7 @@ function clientCards(clientRows: { id: string; name: string; bps: number | null 
         principalCents: operation.principalCents, totalCents: operation.totalCents, paidCents: operation.paidCents, balanceCents: operation.balanceCents, interestPaidCents: operation.interestPaidCents,
         nextDueDate: operation.status === "OPEN" ? operation.nextOpenDueDate ?? operation.nextDueDate : null, daysUntilDue: operation.daysUntilDue,
         installment: operation.status === "OPEN" && operation.nextInstallment ? `Parcela ${operation.nextInstallment.number}/${operation.installmentTotal}` : null, modality: operation.modality,
+        commissionBps: operationBps(operation, client.bps, managerBps, overrideBps), commissionCents: commissionOf(operation.interestPaidCents, operationBps(operation, client.bps, managerBps, overrideBps)),
       })),
     };
   });
@@ -187,7 +190,7 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
         id: manager.id, name: manager.name, email: manager.email, active: manager.active, commissionBps: manager.commissionBps,
         hasLogin: Boolean(manager.userId), loginActive: manager.loginActive ?? false, mustChangePassword: manager.mustChangePassword ?? false, lastLoginAt: manager.lastLoginAt?.toISOString() ?? null,
         summary, payouts, cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
-        clients: cards.map((card) => ({ id: card.id, name: card.name, situation: card.situation, commissionBps: card.commissionBps, customBps: clientRows.find((client) => client.id === card.id)?.bps ?? null, interestReceivedCents: card.interestReceivedCents, commissionCents: card.commissionCents })),
+        clients: cards.map((card) => ({ id: card.id, name: card.name, situation: card.situation, commissionBps: card.commissionBps, customBps: clientRows.find((client) => client.id === card.id)?.bps ?? null, interestReceivedCents: card.interestReceivedCents, commissionCents: card.commissionCents, contracts: card.operations })),
       };
     }),
   };
