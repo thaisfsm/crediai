@@ -1825,11 +1825,11 @@ function ProposalReviewBox({ proposal, busy, run }: { proposal: TenantPortfolio[
 }
 
 // Oferta aprovada (fase 6): valor até o pedido, prazo e taxa. O motor reconfere antes de gravar; depois de salva, a proposta pode avançar para o aceite.
-function ProposalOfferBox({ proposal, busy, run }: { proposal: TenantPortfolio["proposals"][number]; busy: boolean; run: (task: () => Promise<ActionResult>) => Promise<void> }) {
+function ProposalOfferBox({ proposal, defaultRateBps, busy, run }: { proposal: TenantPortfolio["proposals"][number]; defaultRateBps: number | null; busy: boolean; run: (task: () => Promise<ActionResult>) => Promise<void> }) {
   const offer = proposal.offer;
   const [approved, setApproved] = useState(((offer?.cents ?? proposal.requestedCents) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
   const [term, setTerm] = useState(String(offer?.termMonths ?? proposal.termMonths));
-  const [rate, setRate] = useState(offer ? String(offer.rateBps / 100).replace(".", ",") : "");
+  const [rate, setRate] = useState(offer ? String(offer.rateBps / 100).replace(".", ",") : defaultRateBps === null ? "" : String(defaultRateBps / 100).replace(".", ","));
   return (
     <fieldset className="pipeline-review">
       <legend>Oferta aprovada</legend>
@@ -1916,7 +1916,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   {proposal.offer && proposal.phase === "ACCEPTANCE" && (
                     <small className="pipeline-indicator">Oferta: {formatMoney(proposal.offer.cents)} em {proposal.offer.termMonths}x a {String(proposal.offer.rateBps / 100).replace(".", ",")}% ao mês. Parcela {formatMoney(proposal.offer.installmentCents)}, total {formatMoney(proposal.offer.totalCents)}.</small>
                   )}
-                  {proposal.phase === "APPROVAL" && <ProposalOfferBox key={`${proposal.id}-offer-${proposal.offer?.cents ?? 0}`} proposal={proposal} busy={busy} run={run} />}
+                  {proposal.phase === "APPROVAL" && <ProposalOfferBox key={`${proposal.id}-offer-${proposal.offer?.cents ?? 0}`} proposal={proposal} defaultRateBps={portfolio.creditPolicy.defaultRateBps} busy={busy} run={run} />}
                   {proposal.phase === "ENGINE" && (
                     <fieldset className="pipeline-review">
                       <legend>Motor de crédito</legend>
@@ -1973,6 +1973,7 @@ export function CreditPolicyPage({ portfolio, onChanged }: { portfolio: TenantPo
           <label className="field"><span>Prazo máximo (meses)</span><input name="maxTermMonths" inputMode="numeric" placeholder="Sem limite" defaultValue={policy.maxTermMonths ?? ""} maxLength={3} /><small>Do empréstimo até o último vencimento.</small></label>
           <label className="field"><span>Limite por contrato (R$)</span><MoneyInput name="maxContract" placeholder="Sem limite" defaultValue={money(policy.maxContractCents)} /><small>Valor máximo emprestado em cada operação.</small></label>
           <label className="field"><span>Taxa de juros mínima (% ao mês)</span><input name="minRate" inputMode="decimal" placeholder="Sem mínimo" defaultValue={policy.minRateBps === null ? "" : String(policy.minRateBps / 100).replace(".", ",")} maxLength={8} /><small>Taxa mensal abaixo da qual a operação não deve ser feita.</small></label>
+          <label className="field"><span>Taxa de juros padrão (% ao mês)</span><input name="defaultRate" inputMode="decimal" placeholder="Ex.: 30" defaultValue={policy.defaultRateBps === null ? "" : String(policy.defaultRateBps / 100).replace(".", ",")} maxLength={8} /><small>Sugerida automaticamente na oferta e no simulador.</small></label>
           <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar política"}</button></div>
         </form>
         <Feedback feedback={feedback} />

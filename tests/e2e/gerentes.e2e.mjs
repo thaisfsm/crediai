@@ -468,6 +468,14 @@ test("G14. política de crédito: o dono salva os limites, campo vazio = sem lim
   assert.equal(good.result?.ok, true, JSON.stringify(good));
   const row = await admin(`select max_exposure_per_cpf_cents e, max_term_months t, max_contract_cents c, min_rate_bps r from credit_policy where tenant_id='ten_roberio'`);
   assert.deepEqual([Number(row[0].e), row[0].t, Number(row[0].c), row[0].r], [5000000, 24, 2000000, 750]);
+  // Taxa de juros padrão (sugerida na oferta e no simulador): 30% = 3000 bps; não pode ficar abaixo da mínima.
+  assert.equal((await save({ minRate: "7,5", defaultRate: "30" })).result?.ok, true);
+  assert.equal(Number(await one(`select default_rate_bps from credit_policy where tenant_id='ten_roberio'`)), 3000);
+  assert.equal((await save({ minRate: "7,5", defaultRate: "5" })).result?.ok, false, "padrão abaixo da mínima");
+  assert.equal((await save({ defaultRate: "abc" })).result?.ok, false);
+  assert.equal(Number(await one(`select default_rate_bps from credit_policy where tenant_id='ten_roberio'`)), 3000, "recusa não altera");
+  assert.equal((await save({ maxExposurePerCpf: "50.000,00", maxTermMonths: "24", maxContract: "20.000,00", minRate: "7,5" })).result?.ok, true);
+  assert.equal(await one(`select default_rate_bps from credit_policy where tenant_id='ten_roberio'`), null, "vazio = sem taxa padrão");
   assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_POLICY_UPDATED'`) >= 1, true, "auditado");
   for (const bad of [{ maxTermMonths: "0" }, { maxTermMonths: "abc" }, { maxContract: "-5" }, { maxExposurePerCpf: "xx" }, { minRate: "abc" }]) {
     const res = await save(bad);
@@ -723,7 +731,12 @@ test("G18. fase 5 (motor de crédito): confere a proposta contra a política (co
   assert.equal(await phase(), "APPROVAL");
   // Fase 6: oferta aprovada. Só na fase certa, até o valor pedido, e o motor reconfere (taxa mínima, exposição).
   const offer = (approved, term, rate) => actionArgs(ownerCookie, "saveProposalOfferAction", [proposalId, approved, term, rate]);
-  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00", minRate: "7,5" })).result?.ok, true);
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00", minRate: "7,5", defaultRate: "30" })).result?.ok, true);
+  await ownerPage.reload();
+  const approval = ownerPage.getByRole("region", { name: "Aprovação e oferta" });
+  await approval.getByLabel("Taxa de juros ao mês").waitFor();
+  assert.equal(await approval.getByLabel("Taxa de juros ao mês").inputValue(), "30", "a taxa padrão já vem preenchida na oferta");
+  if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-fase6.png` });
   assert.equal((await move()).result?.ok, false, "sem oferta não avança para o aceite");
   assert.match(String((await offer("3.500,00", "6", "8")).result?.error), /valor pedido/);
   assert.match(String((await offer("2.000,00", "6", "5")).result?.error), /Taxa de juros mínima/);

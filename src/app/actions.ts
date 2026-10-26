@@ -410,16 +410,20 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
   const parsedRate = rateRaw === "" ? null : parseLoanRateToBps(rateRaw);
   const rate = parsedRate === null ? null : Math.round(parsedRate);
   if (rateRaw !== "" && (parsedRate === null || rate === null || rate > 100_000)) return { ok: false, error: "Informe a taxa de juros mínima ao mês em %, por exemplo 10." };
+  const defaultRaw = text(data, "defaultRate", 20);
+  const defaultRate = defaultRaw === "" ? null : parseLoanRateToBps(defaultRaw);
+  if (defaultRaw !== "" && (defaultRate === null || defaultRate > 100_000)) return { ok: false, error: "Informe a taxa de juros padrão ao mês em %, por exemplo 30." };
+  if (defaultRate !== null && rate !== null && defaultRate < rate) return { ok: false, error: "A taxa de juros padrão não pode ser menor que a taxa mínima." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     const [before] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate };
+    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate, defaultRateBps: defaultRate };
     await tx.insert(creditPolicies).values({ id: id("pol"), tenantId, ...values, updatedByUserId: session.user.id })
       .onConflictDoUpdate({ target: creditPolicies.tenantId, set: { ...values, updatedByUserId: session.user.id, updatedAt: sql`now()` } });
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
     await recordAdminAudit(tx, session, {
       action: "CREDIT_POLICY_UPDATED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null,
       description: "Política de crédito alterada.",
-      before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps } : null, after: values,
+      before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps } : null, after: values,
     });
     return { ok: true, message: "Política de crédito salva." };
   });
