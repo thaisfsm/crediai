@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -16,6 +16,7 @@ import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianSta
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
+import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
@@ -1737,6 +1738,8 @@ const SITUATION_TABS: { key: OperationSituation; label: string; icon: ReactNode 
 export function OperationRequestsPanel({ requests, owner, onChanged }: { requests: TenantPortfolio["operationRequests"]; owner: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => setOrigin(window.location.origin), []);
   const [reason, setReason] = useState("");
   const [feedback, setFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const pending = requests.filter((request) => request.status === "PENDING");
@@ -1820,8 +1823,19 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · ESTEIRA DE CRÉDITO" title="Esteira de Crédito" description="Acompanhe cada proposta da fase 1 até o aceite do cliente." />
+      <section className="panel form-panel" aria-label="Link de proposta">
+        <div className="panel-header"><div><h2>Link de proposta</h2><p>Envie este link ao cliente: ele cria uma conta, preenche a proposta e anexa os documentos obrigatórios. Só então a proposta entra na fase 1.</p></div></div>
+        {portfolio.proposalLink ? (
+          <div className="pipeline-actions">
+            <input readOnly aria-label="Endereço do link de proposta" value={`${origin}/proposta/${portfolio.proposalLink}`} onFocus={(event) => event.currentTarget.select()} />
+            <button className="outline-button" disabled={busy} onClick={() => { void navigator.clipboard?.writeText(`${origin}/proposta/${portfolio.proposalLink}`); setMessage({ tone: "ok", text: "Link copiado." }); }}>Copiar link</button>
+            <button className="outline-button" disabled={busy} onClick={() => void run(() => manageProposalLinkAction("rotate"))}>Gerar novo link</button>
+            <button className="outline-button" disabled={busy} onClick={() => void run(() => manageProposalLinkAction("disable"))}>Desativar</button>
+          </div>
+        ) : <div className="pipeline-actions"><button className="primary-button" disabled={busy} onClick={() => void run(() => manageProposalLinkAction("create"))}>Gerar link de proposta</button></div>}
+      </section>
       <section className="panel form-panel" aria-label="Nova proposta">
-        <div className="panel-header"><div><h2>Nova proposta</h2><p>Entra na fase "Proposta recebida". Em breve o cliente também poderá enviar a proposta pelo link.</p></div></div>
+        <div className="panel-header"><div><h2>Nova proposta</h2><p>Cadastro manual: entra direto na fase "Proposta recebida". O cliente também pode enviar pelo link acima.</p></div></div>
         <form className="form-grid form-grid-inline" onSubmit={onSubmit}>
           <label className="field"><span>Nome completo</span><input name="applicantName" required maxLength={120} /></label>
           <label className="field"><span>CPF</span><input name="cpf" inputMode="numeric" required maxLength={14} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
@@ -1845,7 +1859,11 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   <strong>{proposal.applicantName}</strong>
                   <span>CPF {formatCpf(proposal.cpf)}</span>
                   <span>{formatMoney(proposal.requestedCents)} em {proposal.termMonths} {proposal.termMonths === 1 ? "mês" : "meses"}</span>
-                  <small>Desde {formatDate(proposal.phaseChangedAt.slice(0, 10))}</small>
+                  <small>Desde {formatDate(proposal.phaseChangedAt.slice(0, 10))}{proposal.source === "APPLICANT" ? " · enviada pelo cliente" : ""}</small>
+                  {proposal.monthlyIncomeCents !== null && <span>Renda mensal {formatMoney(proposal.monthlyIncomeCents)}</span>}
+                  {proposal.documents.length > 0 && <div className="pipeline-docs">{proposal.documents.map((doc) => (
+                    <a key={doc.id} href={`/esteira/documento/${doc.id}`} target="_blank" rel="noreferrer">{PROPOSAL_DOCUMENTS.find((item) => item.kind === doc.kind)?.label ?? doc.kind}</a>
+                  ))}</div>}
                   {rejecting === proposal.id ? (
                     <form className="pipeline-actions" onSubmit={(event) => { event.preventDefault(); const reason = String(new FormData(event.currentTarget).get("reason") ?? ""); void run(() => rejectCreditProposalAction(proposal.id, reason)); }}>
                       <input name="reason" placeholder="Motivo da reprovação" maxLength={300} required />
