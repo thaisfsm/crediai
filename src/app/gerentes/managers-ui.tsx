@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, useContext, useState, type FormEvent } from "react";
+import { createContext, Fragment, useContext, useState, type FormEvent } from "react";
 import { formatMoney, todayIso } from "@/lib/finance/format";
 import type { ManagersPage } from "@/lib/managers/queries";
 import { MoneyInput } from "../money-input";
@@ -99,14 +99,51 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
   );
 }
 
+// Antes de pagar: lista os contratos de cada cliente com a comissão gerada e os pagamentos já feitos. A caixa de cada cliente tira ele
+// do cálculo (a sugestão do valor = comissão dos clientes marcados − o que já foi pago). O valor continua editável e nada é gravado até confirmar.
 function PayoutForm({ manager }: { manager: Manager }) {
   const { actions } = useScope();
   const router = useRouter();
   const form = useFormAction(actions.registerPayout, () => router.refresh());
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const toggle = (clientId: string) => setExcluded((current) => { const next = new Set(current); if (next.has(clientId)) next.delete(clientId); else next.add(clientId); return next; });
+  const included = manager.clients.filter((client) => !excluded.has(client.id));
+  const selectedCents = included.reduce((total, client) => total + client.commissionCents, 0);
+  const suggestedCents = Math.max(0, selectedCents - manager.summary.paidOutCents);
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
       <input type="hidden" name="managerId" value={manager.id} /><TenantField />
-      <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" placeholder={(manager.summary.balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required /></label>
+      <div className="field-wide payout-review">
+        <h3>Conferir antes de pagar</h3>
+        {manager.clients.length === 0 ? <p>Nenhum cliente indicado ainda.</p> : (
+          <table className="data-table fit-table">
+            <thead><tr><th>Incluir</th><th>Cliente / contrato</th><th>Situação</th><th>Comissão</th><th>Juros recebidos</th><th>Comissão gerada</th></tr></thead>
+            <tbody>{manager.clients.map((client) => (
+              <Fragment key={client.id}>
+                <tr>
+                  <td><input type="checkbox" aria-label={`Incluir ${client.name} no pagamento`} checked={!excluded.has(client.id)} onChange={() => toggle(client.id)} /></td>
+                  <td><strong>{client.name}</strong></td><td>{SITUATION[client.situation] ?? client.situation}</td><td>{percent(client.commissionBps)}</td><td>{formatMoney(client.interestReceivedCents)}</td><td><strong>{formatMoney(client.commissionCents)}</strong></td>
+                </tr>
+                {client.contracts.map((contract) => (
+                  <tr key={contract.id} className={excluded.has(client.id) ? "muted-row" : undefined}>
+                    <td /><td><small>#{contract.code} · {contract.loanDate.split("-").reverse().join("/")} · principal {formatMoney(contract.principalCents)}</small></td>
+                    <td><small>{contract.status === "OPEN" ? "Em aberto" : "Quitado"}</small></td><td><small>{percent(contract.commissionBps)}</small></td><td><small>{formatMoney(contract.interestPaidCents)}</small></td><td><small>{formatMoney(contract.commissionCents)}</small></td>
+                  </tr>
+                ))}
+              </Fragment>
+            ))}</tbody>
+          </table>
+        )}
+        <h3>Comissões já pagas</h3>
+        {manager.payouts.length === 0 ? <p>Nenhum pagamento de comissão registrado ainda.</p> : (
+          <table className="data-table fit-table">
+            <thead><tr><th>Data</th><th>Valor</th><th>Observação</th></tr></thead>
+            <tbody>{manager.payouts.map((payout) => <tr key={payout.id}><td>{payout.paidOn.split("-").reverse().join("/")}</td><td>{formatMoney(payout.amountCents)}</td><td>{payout.notes ?? "—"}</td></tr>)}</tbody>
+          </table>
+        )}
+        <p><small>Marcados: {included.length} de {manager.clients.length} · comissão gerada {formatMoney(selectedCents)} − já paga {formatMoney(manager.summary.paidOutCents)} = <strong>{formatMoney(suggestedCents)}</strong> a pagar. Desmarcar um cliente só tira ele da conta sugerida; nada é gravado até você confirmar.</small></p>
+      </div>
+      <label className="field"><span>Valor pago (R$)</span><MoneyInput key={suggestedCents} name="amount" defaultValue={suggestedCents > 0 ? (suggestedCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder={(manager.summary.balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required /></label>
       <label className="field"><span>Data</span><input name="paidOn" type="date" defaultValue={todayIso()} max={todayIso()} required /></label>
       <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={300} placeholder="Opcional" /></label>
       <div className="form-actions"><button className="primary-button" disabled={form.pending}><Icon name="check" size={15} /> {form.pending ? "Registrando…" : "Registrar pagamento da comissão"}</button></div>
