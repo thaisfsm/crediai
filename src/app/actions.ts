@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
 import { newLinkToken } from "@/lib/credit/link-token";
+import { evaluateProposal } from "@/lib/credit/engine";
+import { openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
 import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
@@ -272,6 +274,12 @@ export async function moveCreditProposalAction(proposalId: string, direction: st
       const [review] = await tx.select({ completed: creditProposalReviews.completed }).from(creditProposalReviews)
         .where(and(eq(creditProposalReviews.proposalId, proposal.id), eq(creditProposalReviews.phase, proposal.phase)));
       if (!review?.completed) return { ok: false, error: `Conclua a conferência desta fase antes de avançar: ${required.title}.` };
+    }
+    if (direction === "next" && proposal.phase === "ENGINE") {
+      const [policy] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+      const exposure = (await openExposureByCpf(tx, tenantId)).get(onlyDigits(proposal.cpf)) ?? 0;
+      const verdict = evaluateProposal(proposal, { maxExposurePerCpfCents: policy?.maxExposurePerCpfCents ?? null, maxTermMonths: policy?.maxTermMonths ?? null, maxContractCents: policy?.maxContractCents ?? null, minRateBps: policy?.minRateBps ?? null }, exposure);
+      if (!verdict.passed) return { ok: false, error: `O motor de crédito recusou avançar: ${verdict.rules.filter((rule) => rule.status === "FAIL").map((rule) => `${rule.label} (${rule.detail})`).join(" ")}` };
     }
     const index = PHASE_KEYS.indexOf(proposal.phase as ProposalPhase);
     const target = PHASE_KEYS[index + (direction === "next" ? 1 : -1)];

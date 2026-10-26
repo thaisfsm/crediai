@@ -677,6 +677,51 @@ test("G17. fase 2 (identidade e antifraude): só avança com a conferência comp
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
 });
 
+test("G18. fase 5 (motor de crédito): confere a proposta contra a política (contrato, prazo, exposição por CPF) e só avança dentro dela", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const created = await action(ownerCookie, "createCreditProposalAction", { applicantName: "Davi Fictício Teste", cpf: "111.444.777-35", requested: "3.000,00", termMonths: "6" }, "/");
+  assert.equal(created.result?.ok, true, JSON.stringify(created));
+  const proposalId = await one(`select id from credit_proposal where tenant_id='ten_roberio'`);
+  await admin(`update credit_proposal set phase='ENGINE' where id='${proposalId}'`);
+  const move = () => actionArgs(ownerCookie, "moveCreditProposalAction", [proposalId, "next"]);
+  const phase = () => one(`select phase from credit_proposal where id='${proposalId}'`);
+  // Sem política: nada a conferir, avança.
+  await admin(`delete from credit_policy where tenant_id='ten_roberio'`);
+  // Limite por contrato abaixo do pedido: recusa e explica.
+  assert.equal((await save({ maxContract: "2.000,00" })).result?.ok, true);
+  const contract = await move();
+  assert.equal(contract.result?.ok, false);
+  assert.match(String(contract.result?.error), /Limite por contrato/);
+  assert.equal(await phase(), "ENGINE");
+  // Prazo acima do limite.
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "4" })).result?.ok, true);
+  assert.match(String((await move()).result?.error), /Prazo máximo/);
+  // Exposição por CPF: um contrato em aberto do mesmo CPF (outro formato de máscara) entra na soma.
+  await admin(`insert into client (id, tenant_id, name, document) values ('cli_g18', 'ten_roberio', 'Davi Fictício Teste', '111.444.777-35')`);
+  await admin(`insert into loan_operation (id, tenant_id, client_id, principal_cents, interest_rate_bps, interest_cents, total_cents, loan_date, due_date, calculation_rule) values ('op_g18', 'ten_roberio', 'cli_g18', 400000, 1000, 40000, 440000, '2026-10-01', '2026-11-01', 'FIXED')`);
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "6.000,00" })).result?.ok, true);
+  const exposure = await move();
+  assert.equal(exposure.result?.ok, false);
+  assert.match(String(exposure.result?.error), /Exposição máxima por CPF/);
+  // A tela mostra as regras e trava o botão.
+  const ownerPage = await signIn("roberio@teste.local", PASSWORD, { width: 1700, height: 1000 });
+  await ownerPage.goto(`${BASE}/?tela=esteira-de-credito`);
+  const column = ownerPage.getByRole("region", { name: "Motor de crédito" });
+  await column.getByText("Davi Fictício Teste").waitFor();
+  await column.getByText("Exposição máxima por CPF:").waitFor();
+  assert.equal(await column.getByRole("button", { name: "Avançar fase" }).isDisabled(), true);
+  if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-fase5.png` });
+  // Dentro dos limites avança (o contrato em aberto é só de 4.000 + 3.000 = 7.000 → limite sobe para 8.000).
+  assert.equal((await save({ maxContract: "5.000,00", maxTermMonths: "12", maxExposurePerCpf: "8.000,00" })).result?.ok, true);
+  assert.equal((await move()).result?.ok, true);
+  assert.equal(await phase(), "APPROVAL");
+  await admin(`delete from loan_operation where id='op_g18'`);
+  await admin(`delete from client where id='cli_g18'`);
+  await admin(`delete from credit_policy where tenant_id='ten_roberio'`);
+  await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);

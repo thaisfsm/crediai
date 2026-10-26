@@ -1891,6 +1891,15 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   {proposal.documents.length > 0 && <div className="pipeline-docs">{proposal.documents.map((doc) => (
                     <a key={doc.id} href={`/esteira/documento/${doc.id}`} target="_blank" rel="noreferrer">{PROPOSAL_DOCUMENTS.find((item) => item.kind === doc.kind)?.label ?? doc.kind}</a>
                   ))}</div>}
+                  {proposal.phase === "ENGINE" && (
+                    <fieldset className="pipeline-review">
+                      <legend>Motor de crédito</legend>
+                      {proposal.engine.rules.map((rule) => (
+                        <small key={rule.key} className={`pipeline-rule pipeline-rule-${rule.status.toLowerCase()}`}><strong>{rule.status === "PASS" ? "✔" : rule.status === "FAIL" ? "✖" : "•"} {rule.label}:</strong> {rule.detail}</small>
+                      ))}
+                      <small>{proposal.engine.passed ? "Dentro da política. Pode avançar." : "Fora da política. Volte uma fase para corrigir ou reprove a proposta."}</small>
+                    </fieldset>
+                  )}
                   <ProposalReviewBox key={`${proposal.id}-${proposal.phase}`} proposal={proposal} busy={busy} run={run} />
                   {rejecting === proposal.id ? (
                     <form className="pipeline-actions" onSubmit={(event) => { event.preventDefault(); const reason = String(new FormData(event.currentTarget).get("reason") ?? ""); void run(() => rejectCreditProposalAction(proposal.id, reason)); }}>
@@ -1901,7 +1910,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   ) : (
                     <div className="pipeline-actions">
                       {index > 0 && <button className="outline-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "back"))}>Voltar fase</button>}
-                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy || (reviewOf(proposal.phase) !== null && !proposal.reviews.some((item) => item.phase === proposal.phase && item.completed))} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
+                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy || (proposal.phase === "ENGINE" && !proposal.engine.passed) || (reviewOf(proposal.phase) !== null && !proposal.reviews.some((item) => item.phase === proposal.phase && item.completed))} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
                       <button className="outline-button" disabled={busy} onClick={() => setRejecting(proposal.id)}>Reprovar</button>
                     </div>
                   )}

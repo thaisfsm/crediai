@@ -2,6 +2,8 @@ import "server-only";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalLinks, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { evaluateProposal } from "@/lib/credit/engine";
+import { openExposureByCpf } from "@/lib/credit/exposure";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
@@ -86,12 +88,13 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .orderBy(desc(operationRequests.createdAt)).limit(60);
     const [policyRow] = scope ? [] : await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
     const proposalRows = scope ? [] : await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), ne(creditProposals.status, "DRAFT"))).orderBy(desc(creditProposals.createdAt)).limit(300);
+    const exposureByCpf = scope || proposalRows.length === 0 ? new Map<string, number>() : await openExposureByCpf(tx, tenantId);
     const proposalDocumentRows = scope || proposalRows.length === 0 ? [] : await tx.select({ id: creditProposalDocuments.id, proposalId: creditProposalDocuments.proposalId, kind: creditProposalDocuments.kind, fileName: creditProposalDocuments.fileName })
       .from(creditProposalDocuments).where(and(eq(creditProposalDocuments.tenantId, tenantId), inArray(creditProposalDocuments.proposalId, proposalRows.map((row) => row.id))));
     const proposalReviewRows = scope || proposalRows.length === 0 ? [] : await tx.select().from(creditProposalReviews)
       .where(and(eq(creditProposalReviews.tenantId, tenantId), inArray(creditProposalReviews.proposalId, proposalRows.map((row) => row.id))));
     const [linkRow] = scope ? [] : await tx.select({ token: proposalLinks.token, enabled: proposalLinks.enabled }).from(proposalLinks).where(eq(proposalLinks.tenantId, tenantId));
-    return { wallet, cycleNumber, policyRow, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, policyRow, exposureByCpf, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 export async function loadTenantPortfolio() {
@@ -167,6 +170,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       termMonths: row.termMonths, phase: row.phase, status: row.status, decisionNote: row.decisionNote,
       createdAt: row.createdAt.toISOString(), phaseChangedAt: row.phaseChangedAt.toISOString(),
       reviews: data.proposalReviewRows.filter((review) => review.proposalId === row.id).map((review) => ({ phase: review.phase, checks: review.checks, note: review.note, completed: review.completed })),
+      engine: evaluateProposal(row, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0),
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,
