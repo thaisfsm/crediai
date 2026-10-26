@@ -1318,6 +1318,10 @@ button { color:inherit; }
 .pipeline-card { display: grid; gap: 4px; padding: 11px; border: 1px solid rgba(124,184,213,.16); border-radius: 12px; background: rgba(7,17,27,.7); font-size: 13px; }
 .pipeline-docs { display: grid; gap: 2px; font-size: 11px; }
 .pipeline-docs a { color: #42e0d0; }
+.pipeline-review { display: grid; gap: 6px; margin: 6px 0 0; padding: 8px 10px; border: 1px solid rgba(66,224,208,.22); border-radius: 10px; }
+.pipeline-review legend { padding: 0 4px; font-size: 11px; font-weight: 600; color: #42e0d0; }
+.pipeline-check { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; }
+.pipeline-review textarea { width: 100%; font-size: 12px; }
 .pipeline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .pipeline-actions input { flex: 1 1 100%; }
 .request-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }

@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -17,6 +17,7 @@ import { calculateDaily, calculateFixedInterest, calculateInstallments, calculat
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
+import { reviewOf } from "@/lib/credit/reviews";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 
@@ -1797,6 +1798,28 @@ export function OperationRequestsPanel({ requests, owner, onChanged }: { request
   );
 }
 
+// Conferência da fase em que a proposta está: itens marcados + observação. "Avançar fase" só libera com todos os itens marcados e salvos.
+function ProposalReviewBox({ proposal, busy, run }: { proposal: TenantPortfolio["proposals"][number]; busy: boolean; run: (task: () => Promise<ActionResult>) => Promise<void> }) {
+  const review = reviewOf(proposal.phase);
+  const saved = proposal.reviews.find((item) => item.phase === proposal.phase);
+  const [checks, setChecks] = useState<Record<string, boolean>>(saved?.checks ?? {});
+  const [note, setNote] = useState(saved?.note ?? "");
+  if (!review) return null;
+  return (
+    <fieldset className="pipeline-review">
+      <legend>{review.title}</legend>
+      {review.checks.map((item) => (
+        <label key={item.key} className="pipeline-check"><input type="checkbox" checked={checks[item.key] === true} onChange={(event) => setChecks({ ...checks, [item.key]: event.currentTarget.checked })} /> {item.label}</label>
+      ))}
+      <textarea aria-label="Observação da conferência" placeholder="Observação (opcional)" maxLength={500} rows={2} value={note} onChange={(event) => setNote(event.currentTarget.value)} />
+      <div className="pipeline-actions">
+        <button className="outline-button" disabled={busy} onClick={() => void run(() => saveProposalReviewAction(proposal.id, checks, note))}>Salvar conferência</button>
+        <small>{saved?.completed ? "Conferência concluída." : "Conclua a conferência para avançar."}</small>
+      </div>
+    </fieldset>
+  );
+}
+
 // Esteira de crédito: as 7 fases em colunas; cada proposta avança ou volta uma fase por vez.
 export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
   const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, onChanged);
@@ -1864,6 +1887,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   {proposal.documents.length > 0 && <div className="pipeline-docs">{proposal.documents.map((doc) => (
                     <a key={doc.id} href={`/esteira/documento/${doc.id}`} target="_blank" rel="noreferrer">{PROPOSAL_DOCUMENTS.find((item) => item.kind === doc.kind)?.label ?? doc.kind}</a>
                   ))}</div>}
+                  <ProposalReviewBox key={`${proposal.id}-${proposal.phase}`} proposal={proposal} busy={busy} run={run} />
                   {rejecting === proposal.id ? (
                     <form className="pipeline-actions" onSubmit={(event) => { event.preventDefault(); const reason = String(new FormData(event.currentTarget).get("reason") ?? ""); void run(() => rejectCreditProposalAction(proposal.id, reason)); }}>
                       <input name="reason" placeholder="Motivo da reprovação" maxLength={300} required />
@@ -1873,7 +1897,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   ) : (
                     <div className="pipeline-actions">
                       {index > 0 && <button className="outline-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "back"))}>Voltar fase</button>}
-                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
+                      {index < PROPOSAL_PHASES.length - 1 && <button className="primary-button" disabled={busy || (reviewOf(proposal.phase) !== null && !proposal.reviews.some((item) => item.phase === proposal.phase && item.completed))} onClick={() => void run(() => moveCreditProposalAction(proposal.id, "next"))}>Avançar fase</button>}
                       <button className="outline-button" disabled={busy} onClick={() => setRejecting(proposal.id)}>Reprovar</button>
                     </div>
                   )}

@@ -502,6 +502,8 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   const move = (direction) => actionArgs(ownerCookie, "moveCreditProposalAction", [proposalId, direction]);
   assert.equal((await move("back")).result?.ok, false, "não volta da primeira fase");
   for (const phase of ["IDENTITY", "DOCUMENTS", "CAPACITY", "ENGINE", "APPROVAL", "ACCEPTANCE"]) {
+    // A fase de identidade só libera o avanço com a conferência completa.
+    if (phase === "DOCUMENTS") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { documentChecked: true, holderChecked: true, noFraudSigns: true }, ""])).result?.ok, true);
     assert.equal((await move("next")).result?.ok, true);
     assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), phase);
   }
@@ -606,6 +608,52 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
   await admin(`delete from proposal_applicant where tenant_id='ten_roberio'`);
   await admin(`delete from proposal_link where tenant_id='ten_roberio'`);
+});
+
+test("G17. fase 2 (identidade e antifraude): só avança com a conferência completa; registra e audita; a gerente não alcança", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const created = await action(ownerCookie, "createCreditProposalAction", { applicantName: "Carla Fictícia Teste", cpf: "529.982.247-25", requested: "3.000,00", termMonths: "6" }, "/");
+  assert.equal(created.result?.ok, true, JSON.stringify(created));
+  const proposalId = await one(`select id from credit_proposal where tenant_id='ten_roberio'`);
+  const move = (direction) => actionArgs(ownerCookie, "moveCreditProposalAction", [proposalId, direction]);
+  const review = (checks, note = "") => actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, checks, note]);
+  assert.equal((await review({ documentChecked: true })).result?.ok, false, "fase 1 não tem conferência");
+  assert.equal((await move("next")).result?.ok, true);
+  assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "IDENTITY");
+  // Sem conferência, ou incompleta, não avança.
+  assert.equal((await move("next")).result?.ok, false);
+  const partial = await review({ documentChecked: true, holderChecked: true }, "extrato ilegível");
+  assert.equal(partial.result?.ok, true);
+  assert.equal(await one(`select completed from credit_proposal_review where proposal_id='${proposalId}'`), false);
+  const blocked = await move("next");
+  assert.equal(blocked.result?.ok, false);
+  assert.match(String(blocked.result?.error), /Conclua a conferência/);
+  assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "IDENTITY");
+  // Itens desconhecidos são ignorados; só os itens da fase contam.
+  const full = await review({ documentChecked: true, holderChecked: true, noFraudSigns: true, injected: true }, "tudo certo");
+  assert.equal(full.result?.ok, true);
+  assert.equal(await one(`select completed from credit_proposal_review where proposal_id='${proposalId}'`), true);
+  assert.equal(await one(`select count(*) from credit_proposal_review where proposal_id='${proposalId}'`), 1, "uma conferência por fase");
+  assert.equal(await one(`select (checks ? 'injected') from credit_proposal_review where proposal_id='${proposalId}'`), false);
+  // A tela mostra a conferência; o botão só habilita com a conferência salva.
+  const ownerPage = await signIn("roberio@teste.local", PASSWORD, { width: 1700, height: 1000 });
+  await ownerPage.goto(`${BASE}/?tela=esteira-de-credito`);
+  const column = ownerPage.getByRole("region", { name: "Identidade e antifraude" });
+  await column.getByText("Carla Fictícia Teste").waitFor();
+  assert.equal(await column.getByRole("checkbox").count(), 3);
+  assert.equal(await column.getByRole("button", { name: "Avançar fase" }).isDisabled(), false);
+  if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-fase2.png` });
+  // Desmarcar um item e salvar de novo volta a travar.
+  assert.equal((await review({ documentChecked: true, holderChecked: true, noFraudSigns: false })).result?.ok, true);
+  assert.equal((await move("next")).result?.ok, false);
+  assert.equal(await review({ documentChecked: true, holderChecked: true, noFraudSigns: true }).then((r) => r.result?.ok), true);
+  assert.equal((await move("next")).result?.ok, true);
+  assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "DOCUMENTS");
+  assert.equal((await review({ documentChecked: true })).result?.ok, false, "fase 3 ainda sem conferência definida");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_REVIEWED'`) >= 4, true, "conferências auditadas");
+  const managerCookie2 = await apiLogin(EMAIL, NEW_PASSWORD);
+  assert.equal((await actionArgs(managerCookie2, "saveProposalReviewAction", [proposalId, { documentChecked: true }, ""])).result?.ok === true, false);
+  await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
 });
 
 test("G4. celular: painel sem rolagem lateral", async () => {
