@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
-import { accountManagers, capitalMovements, clientDocuments, clients, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
@@ -84,7 +84,8 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .innerJoin(clients, and(eq(clients.id, operationRequests.clientId), eq(clients.tenantId, operationRequests.tenantId)))
       .where(and(eq(operationRequests.tenantId, tenantId), scope ? eq(operationRequests.managerId, scope.managerId) : undefined))
       .orderBy(desc(operationRequests.createdAt)).limit(60);
-    return { wallet, cycleNumber, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    const [policyRow] = scope ? [] : await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+    return { wallet, cycleNumber, policyRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 export async function loadTenantPortfolio() {
@@ -155,6 +156,10 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     ...portfolio,
     today: todayIso(),
     investorLinkedContributionIds: data.investorLinkedRows.map((row) => row.id),
+    creditPolicy: {
+      maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null,
+      maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null,
+    },
     operationRequests: data.requestRows.map((row): OperationRequestView => ({
       id: row.id, managerName: row.managerName, clientId: row.clientId, clientName: row.clientName, principalCents: row.principalCents, totalCents: row.totalCents, loanDate: row.loanDate,
       modality: row.form.modality === "INSTALLMENT" ? "Parcelado" : "Pagamento único", status: row.status as OperationRequestView["status"], decisionNote: row.decisionNote,

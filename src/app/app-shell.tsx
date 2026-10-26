@@ -7,7 +7,7 @@ import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
 // Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro, /contas-a-pagar).
-export type NavKey = "Visão geral" | "Comissão" | "Capital" | "Clientes" | "Operações" | "Aprovações" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
+export type NavKey = "Visão geral" | "Comissão" | "Capital" | "Clientes" | "Operações" | "Aprovações" | "Política de crédito" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
 export type NavLabel = NavKey | "Investidores" | "Financeiro" | "Contas a pagar" | "Gerentes";
 // Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
 const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro", "Contas a pagar": "/contas-a-pagar", Gerentes: "/gerentes" };
@@ -16,7 +16,7 @@ const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investi
 // JavaScript terminar de carregar (hidratação) abre a tela pelo servidor, em vez de se perder. Depois de carregado,
 // o clique troca a tela na hora, sem recarregar, e só atualiza o endereço.
 export const NAV_SLUGS: Record<NavKey, string> = {
-  "Visão geral": "visao-geral", Comissão: "comissao", Capital: "capital", Clientes: "clientes", Operações: "operacoes", Aprovações: "aprovacoes",
+  "Visão geral": "visao-geral", Comissão: "comissao", Capital: "capital", Clientes: "clientes", Operações: "operacoes", Aprovações: "aprovacoes", "Política de crédito": "politica-de-credito",
   Pagamentos: "pagamentos", Cobranças: "cobrancas", Renegociação: "renegociacao", Relatórios: "relatorios", Configurações: "configuracoes",
 };
 export function navKeyFromSlug(slug: string | undefined): NavKey {
@@ -35,7 +35,7 @@ const managerNavGroups: { title: string; items: { label: NavLabel; icon: IconNam
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
   { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Aprovações", icon: "check" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "file" }, { label: "Investidores", icon: "briefcase" }, { label: "Gerentes", icon: "users" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Renegociação", icon: "sparkles" }, { label: "Relatórios", icon: "chart" }] },
-  { title: "PREFERÊNCIAS", items: [{ label: "Configurações", icon: "settings" }] },
+  { title: "PREFERÊNCIAS", items: [{ label: "Política de crédito", icon: "shield" }, { label: "Configurações", icon: "settings" }] },
 ];
 
 export const initialsOfUser = (userName: string) => userName.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("");

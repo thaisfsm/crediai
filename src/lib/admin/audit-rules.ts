@@ -56,6 +56,7 @@ export const AUDIT_ACTIONS = {
   CLIENT_REGISTERED_BY_MANAGER: "Cliente cadastrado por gerente de contas",
   OPERATION_REQUESTED_BY_MANAGER: "Pedido de operação enviado por gerente de contas",
   OPERATION_REQUEST_APPROVED: "Pedido de operação de gerente aprovado",
+  CREDIT_POLICY_UPDATED: "Política de crédito alterada",
   OPERATION_PIX_CONFIRMED: "Pix de operação aprovada confirmado",
   OPERATION_REQUEST_REJECTED: "Pedido de operação de gerente reprovado",
 } as const;

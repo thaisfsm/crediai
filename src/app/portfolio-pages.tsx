@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
-import { confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { saveCreditPolicyAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -1793,6 +1793,29 @@ export function OperationRequestsPanel({ requests, owner, onChanged }: { request
   );
 }
 
+// Política de crédito: os limites que o dono define para a carteira. Vazio = sem limite.
+export function CreditPolicyPage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
+  const policy = portfolio.creditPolicy;
+  const { pending, feedback, onSubmit } = useFormAction(saveCreditPolicyAction, onChanged, false);
+  const money = (cents: number | null) => (cents === null ? "" : (cents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
+  return (
+    <div className="workspace-page">
+      <PageHeading eyebrow="CREDIAI · POLÍTICA DE CRÉDITO" title="Política de crédito" description="Defina os limites da sua carteira. Deixe o campo em branco para não ter limite naquele item." />
+      <section className="panel form-panel" aria-label="Limites da política de crédito">
+        <div className="panel-header"><div><h2>Limites</h2><p>Os valores ficam guardados e podem ser alterados quando quiser. Cada alteração fica no registro de auditoria.</p></div></div>
+        <form className="form-grid" onSubmit={onSubmit}>
+          <label className="field"><span>Exposição máxima por CPF (R$)</span><MoneyInput name="maxExposurePerCpf" placeholder="Sem limite" defaultValue={money(policy.maxExposurePerCpfCents)} /><small>Total que um mesmo cliente pode dever em aberto.</small></label>
+          <label className="field"><span>Prazo máximo (meses)</span><input name="maxTermMonths" inputMode="numeric" placeholder="Sem limite" defaultValue={policy.maxTermMonths ?? ""} maxLength={3} /><small>Do empréstimo até o último vencimento.</small></label>
+          <label className="field"><span>Limite por contrato (R$)</span><MoneyInput name="maxContract" placeholder="Sem limite" defaultValue={money(policy.maxContractCents)} /><small>Valor máximo emprestado em cada operação.</small></label>
+          <label className="field"><span>Taxa de juros mínima (% ao mês)</span><input name="minRate" inputMode="decimal" placeholder="Sem mínimo" defaultValue={policy.minRateBps === null ? "" : String(policy.minRateBps / 100).replace(".", ",")} maxLength={8} /><small>Taxa mensal abaixo da qual a operação não deve ser feita.</small></label>
+          <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar política"}</button></div>
+        </form>
+        <Feedback feedback={feedback} />
+      </section>
+    </div>
+  );
+}
+
 // Tela do dono: pedidos das gerentes para aprovar/reprovar, Pix a fazer e histórico. Cada aprovação vira compromisso do dia em Contas a pagar.
 export function ApprovalsPage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
   return (
@@ -1809,19 +1832,23 @@ export function ApprovalsOverview({ portfolio, onOpen }: { portfolio: TenantPort
   const pix = portfolio.operationRequests.filter((request) => request.status === "APPROVED" && !request.pixPaidOn);
   const sum = (rows: { principalCents: number }[]) => rows.reduce((total, row) => total + row.principalCents, 0);
   return (
-    <section className="panel approvals-overview" aria-label="Aprovações">
-      <div className="panel-header"><div><div className="panel-title-row"><h2>Aprovações</h2><span className="today-count">{pending.length}</span></div><p>Pedidos das gerentes de contas e Pix do dia</p></div><button className="outline-button" onClick={onOpen}>Abrir Aprovações <Icon name="arrow" size={14} /></button></div>
-      <dl className="detail-grid">
-        <div><dt>Aguardando aprovação</dt><dd><strong>{pending.length}</strong> · {formatMoney(sum(pending))}</dd></div>
-        <div><dt>Pix a fazer hoje</dt><dd><strong>{pix.length}</strong> · {formatMoney(sum(pix))}</dd></div>
-      </dl>
-      {pending.length === 0 && pix.length === 0 ? <p className="muted">Nenhum pedido aguardando e nenhum Pix pendente.</p> : (
-        <ul className="request-list">{[...pending, ...pix].slice(0, 4).map((request) => (
-          <li key={request.id} className={`request-row request-${request.status.toLowerCase()}`}>
-            <div className="request-main"><strong>{request.clientName}</strong><span>{formatMoney(request.principalCents)} · enviado por {request.managerName}</span></div>
+    <section className="panel payables-dashboard" aria-label="Aprovações">
+      <div className="panel-header">
+        <div><div className="panel-title-row"><h2>Aprovações</h2><span className="today-count">{pending.length}</span></div><p>Pedidos das gerentes de contas e Pix do dia</p></div>
+        <button type="button" className="outline-button" onClick={onOpen}>Abrir Aprovações <Icon name="arrow" size={14} /></button>
+      </div>
+      <div className="payables-kpis" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }} role="group" aria-label="Indicadores das aprovações">
+        <button type="button" className="payables-kpi payables-kpi-amber" onClick={onOpen} style={{ textAlign: "left", font: "inherit" }}><span>Aguardando aprovação</span><strong>{formatMoney(sum(pending))}</strong><small>{pending.length === 1 ? "1 pedido" : `${pending.length} pedidos`}</small></button>
+        <button type="button" className="payables-kpi payables-kpi-cyan" onClick={onOpen} style={{ textAlign: "left", font: "inherit" }}><span>Pix a fazer hoje</span><strong>{formatMoney(sum(pix))}</strong><small>{pix.length === 1 ? "1 operação aprovada" : `${pix.length} operações aprovadas`}</small></button>
+      </div>
+      {pending.length === 0 && pix.length === 0 ? <p className="empty-state">Nenhum pedido aguardando e nenhum Pix pendente.</p> : (
+        <div>{[...pending, ...pix].slice(0, 4).map((request) => (
+          <div key={request.id} className="payables-row">
+            <div className="charge-person"><strong>{request.clientName}</strong><small>Enviado por {request.managerName}</small></div>
             <span className={`request-badge request-badge-${request.status.toLowerCase()}`}>{request.status === "PENDING" ? "Aguardando aprovação" : "Pix a fazer"}</span>
-          </li>
-        ))}</ul>
+            <strong className="charge-amount">{formatMoney(request.principalCents)}</strong>
+          </div>
+        ))}</div>
       )}
     </section>
   );
