@@ -1,0 +1,5 @@
+ALTER TABLE "loan_operation" ADD COLUMN "account_manager_id" text;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD COLUMN "account_manager_bps" integer;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_account_manager_same_tenant_fk" FOREIGN KEY ("tenant_id","account_manager_id") REFERENCES "public"."account_manager"("tenant_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "loan_operation_account_manager_idx" ON "loan_operation" USING btree ("tenant_id","account_manager_id");--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_account_manager_bps_valid" CHECK ("loan_operation"."account_manager_bps" is null or ("loan_operation"."account_manager_id" is not null and "loan_operation"."account_manager_bps" >= 0 and "loan_operation"."account_manager_bps" <= 10000));

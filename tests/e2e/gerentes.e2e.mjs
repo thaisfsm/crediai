@@ -817,6 +817,40 @@ test("G19. fase 7 (aceite do cliente): o dono registra o aceite de proposta pró
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
 });
 
+test("G20. transferir um contrato para a gerente: vale só para o contrato, comissão própria, aparece no painel dela e volta ao cliente", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const gabrielle = await one(`select id from account_manager where tenant_id='ten_roberio' and name='Gabrielle Teste'`);
+  const paymentsBefore = await one(`select md5(string_agg(row(p.*)::text, '|' order by p.id)) from payment p where tenant_id='ten_roberio'`);
+  const updatedBefore = await one(`select updated_at::text from loan_operation where id='op_g_dora_open'`);
+  const operationBefore = await one(`select principal_cents::text || total_cents::text || status::text from loan_operation where id='op_g_dora_open'`);
+  // Dora não tem gerente; só o contrato dela vai para a Gabrielle, com 12% próprios.
+  const noPercent = await action(ownerCookie, "transferOperationAction", { operationId: "op_g_dora_open", managerId: gabrielle, commission: "" }, "/");
+  assert.equal(noPercent.result?.ok, false, "a comissão é obrigatória");
+  const foreign = await action(await apiLogin("fernando@teste.local"), "transferOperationAction", { operationId: "op_g_dora_open", managerId: gabrielle, commission: "12" }, "/");
+  assert.equal(foreign.result?.ok, false, "outro tenant não transfere contrato alheio");
+  const done = await action(ownerCookie, "transferOperationAction", { operationId: "op_g_dora_open", managerId: gabrielle, commission: "12" }, "/");
+  assert.equal(done.result?.ok, true);
+  assert.equal(await one(`select account_manager_id from loan_operation where id='op_g_dora_open'`), gabrielle);
+  assert.equal(await one(`select account_manager_bps from loan_operation where id='op_g_dora_open'`), 1200);
+  assert.equal(await one(`select account_manager_id from client where id='c_g_dora'`), null, "o cliente continua sem gerente: a transferência é só do contrato");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='MANAGER_OPERATION_TRANSFERRED' and tenant_id='ten_roberio'`), 1);
+  // O painel da Gabrielle passa a mostrar o contrato (e o cliente dele), sem outros contratos de Dora.
+  const gabrielleCookie = await apiLogin(EMAIL, NEW_PASSWORD);
+  const panel = await (await get(gabrielleCookie, "/gerente")).text();
+  assert.match(panel, /Dora Sem Gerente/);
+  // Contrato de outro cliente dela transferido para fora some do painel dela; aqui só confere a volta.
+  const returned = await action(ownerCookie, "transferOperationAction", { operationId: "op_g_dora_open", managerId: "", commission: "" }, "/");
+  assert.equal(returned.result?.ok, true);
+  assert.equal(await one(`select account_manager_id from loan_operation where id='op_g_dora_open'`), null);
+  assert.equal(await one(`select account_manager_bps from loan_operation where id='op_g_dora_open'`), null);
+  assert.doesNotMatch(await (await get(gabrielleCookie, "/gerente")).text(), /Dora Sem Gerente/);
+  assert.equal(await one(`select md5(string_agg(row(p.*)::text, '|' order by p.id)) from payment p where tenant_id='ten_roberio'`), paymentsBefore, "pagamentos intactos");
+  assert.equal(await one(`select principal_cents::text || total_cents::text || status::text from loan_operation where id='op_g_dora_open'`), operationBefore, "termos do contrato intactos");
+  await admin(`update loan_operation set updated_at='${updatedBefore}' where id='op_g_dora_open'`); // os testes seguintes comparam o hash da carteira
+  // Regra do banco: percentual do contrato só com gerente.
+  await assert.rejects(admin(`update loan_operation set account_manager_bps = 500 where id='op_g_dora_open'`), /loan_operation_account_manager_bps_valid/);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);

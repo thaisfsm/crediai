@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { accountManagerPayouts, accountManagers, accounts, clients, sessions, tenants, users } from "@/lib/db/schema";
+import { accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
 import { formatMoney, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 
 // Regras de gravação dos gerentes de contas, usadas pelo dono da carteira (/gerentes, withTenantContext) e pelo MASTER
@@ -124,6 +124,39 @@ export async function unlinkClient(tx: TenantTransaction, tenantId: string, acto
   return { ok: true, message: `${client.name} desvinculado.` };
 }
 
+// Transfere UM contrato para um gerente (vale só para a operação, prevalece sobre o gerente do cliente). Sem managerId, o contrato
+// volta a valer o gerente do cliente. Não mexe em pagamentos, capital nem nos termos do contrato.
+export async function transferOperation(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const operationId = text(data, "operationId", 80);
+  const managerId = text(data, "managerId", 80);
+  const [operation] = await tx.select({ id: loanOperations.id, status: loanOperations.status, clientId: loanOperations.clientId, managerId: loanOperations.accountManagerId, bps: loanOperations.accountManagerBps }).from(loanOperations)
+    .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId))).for("update");
+  if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
+  if (operation.status === "CANCELED" || operation.status === "RENEGOTIATED") return { ok: false, error: "Contrato cancelado ou renegociado não pode ser transferido." };
+  const [client] = await tx.select({ name: clients.name }).from(clients).where(and(eq(clients.id, operation.clientId), eq(clients.tenantId, tenantId)));
+  if (!managerId) {
+    if (!operation.managerId) return { ok: false, error: "Este contrato não foi transferido para nenhum gerente." };
+    await tx.update(loanOperations).set({ accountManagerId: null, accountManagerBps: null, updatedAt: sql`now()` }).where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    await recordAdminAudit(tx, actor, {
+      action: "MANAGER_OPERATION_TRANSFERRED", entity: "account_manager", entityId: operation.managerId, tenantId, tenantName: await tenantName(tx, tenantId),
+      description: `Contrato de ${client?.name ?? "cliente"} devolvido ao gerente do cliente.`, before: { operationId: operation.id, managerId: operation.managerId, commissionBps: operation.bps }, after: { operationId: operation.id, managerId: null },
+    });
+    return { ok: true, message: "Contrato devolvido ao gerente do cliente." };
+  }
+  const percent = readPercent(text(data, "commission", 10), { required: true });
+  if (!percent.ok) return percent;
+  const bps = percent.bps as number;
+  const manager = await ownManager(tx, tenantId, managerId);
+  if (!manager || !manager.active) return { ok: false, error: "Gerente não encontrado ou inativo." };
+  await tx.update(loanOperations).set({ accountManagerId: manager.id, accountManagerBps: bps, updatedAt: sql`now()` }).where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_OPERATION_TRANSFERRED", entity: "account_manager", entityId: manager.id, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Contrato de ${client?.name ?? "cliente"} transferido para ${manager.name} (comissão ${bpsLabel(bps)}).`,
+    before: { operationId: operation.id, managerId: operation.managerId, commissionBps: operation.bps }, after: { operationId: operation.id, managerId: manager.id, commissionBps: bps },
+  });
+  return { ok: true, message: `Contrato transferido para ${manager.name} com ${bpsLabel(bps)} de comissão.` };
+}
+
 // Comissão efetivamente paga ao gerente (só registra; reduz o saldo a receber dele).
 export async function registerPayout(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
   const managerId = text(data, "managerId", 80);
@@ -192,14 +225,17 @@ export async function deleteManager(tx: TenantTransaction, tenantId: string, act
   const [paid] = await tx.select({ id: accountManagerPayouts.id }).from(accountManagerPayouts)
     .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).limit(1);
   if (paid) return { ok: false, error: `${manager.name} já recebeu comissão registrada e não pode ser excluído (o histórico financeiro fica). Desative o gerente.` };
+  // Contratos transferidos para ele voltam a valer o gerente do cliente (a comissão já paga continua no histórico).
+  const returned = await tx.update(loanOperations).set({ accountManagerId: null, accountManagerBps: null, updatedAt: sql`now()` })
+    .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.accountManagerId, manager.id))).returning({ id: loanOperations.id });
   const unlinked = await tx.update(clients).set({ accountManagerId: null, accountManagerBps: null, updatedAt: sql`now()` })
     .where(and(eq(clients.tenantId, tenantId), eq(clients.accountManagerId, manager.id))).returning({ id: clients.id });
   await tx.delete(accountManagers).where(and(eq(accountManagers.id, manager.id), eq(accountManagers.tenantId, tenantId)));
   if (manager.userId) await tx.delete(users).where(and(eq(users.id, manager.userId), eq(users.tenantId, tenantId), eq(users.role, "ACCOUNT_MANAGER")));
   await recordAdminAudit(tx, actor, {
     action: "MANAGER_DELETED", entity: "account_manager", entityId: manager.id, tenantId, tenantName: await tenantName(tx, tenantId),
-    description: `Gerente ${manager.name} excluído (${unlinked.length} cliente(s) desvinculado(s)${manager.userId ? ", acesso de leitura removido" : ""}).`,
-    before: { name: manager.name, email: manager.email, commissionBps: manager.commissionBps, hadAccess: Boolean(manager.userId) }, after: { clientsUnlinked: unlinked.length },
+    description: `Gerente ${manager.name} excluído (${unlinked.length} cliente(s) desvinculado(s), ${returned.length} contrato(s) devolvido(s)${manager.userId ? ", acesso de leitura removido" : ""}).`,
+    before: { name: manager.name, email: manager.email, commissionBps: manager.commissionBps, hadAccess: Boolean(manager.userId) }, after: { clientsUnlinked: unlinked.length, operationsReturned: returned.length },
   });
   return { ok: true, message: `Gerente ${manager.name} excluído.` };
 }

@@ -543,10 +543,17 @@ export const loanOperations = pgTable("loan_operation", {
   installmentCount: integer("installment_count"),
   installmentCents: bigint("installment_cents", { mode: "number" }),
   firstDueDate: date("first_due_date", { mode: "string" }),
+  // Contrato transferido para um gerente de contas (opcional): vale só para esta operação e prevalece sobre o gerente do cliente. Vazio = vale o gerente do cliente. Migração 0047.
+  accountManagerId: text("account_manager_id"),
+  // Comissão deste contrato em pontos-base sobre os juros recebidos (só junto com o gerente do contrato).
+  accountManagerBps: integer("account_manager_bps"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("loan_operation_tenant_id_idx").on(table.tenantId),
+  index("loan_operation_account_manager_idx").on(table.tenantId, table.accountManagerId),
+  foreignKey({ name: "loan_operation_account_manager_same_tenant_fk", columns: [table.tenantId, table.accountManagerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("restrict"),
+  check("loan_operation_account_manager_bps_valid", sql`${table.accountManagerBps} is null or (${table.accountManagerId} is not null and ${table.accountManagerBps} >= 0 and ${table.accountManagerBps} <= 10000)`),
   index("loan_operation_tenant_cycle_idx").on(table.tenantId, table.cycleNumber),
   index("loan_operation_tenant_due_date_idx").on(table.tenantId, table.dueDate),
   unique("loan_operation_tenant_id_id_unique").on(table.tenantId, table.id),
