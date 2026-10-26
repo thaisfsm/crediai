@@ -281,6 +281,13 @@
       "when": 1793025369979,
       "tag": "0040_esteira_de_credito",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793028377701,
+      "tag": "0041_portal_de_proposta",
+      "breakpoints": true
     }
   ]
 }

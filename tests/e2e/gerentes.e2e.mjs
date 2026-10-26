@@ -522,6 +522,92 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
 });
 
+test("G16. portal do cliente: link da carteira, conta própria, dados + 4 documentos, só então a proposta entra na esteira", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const link = (mode) => actionArgs(ownerCookie, "manageProposalLinkAction", [mode]);
+  assert.equal((await link("disable")).result?.ok, false, "sem link ativo");
+  assert.equal((await link("create")).result?.ok, true);
+  const token = await one(`select token from proposal_link where tenant_id='ten_roberio' and enabled`);
+  const pdf = (name) => ({ name, mimeType: "application/pdf", buffer: Buffer.from(`%PDF-1.4\n% ${name}\n%%EOF`) });
+  const context = await browser.newContext({ viewport: { width: 900, height: 1100 } });
+  const page = await context.newPage();
+  await page.goto(`${BASE}/proposta/invalido-invalido-invalido`);
+  await page.getByRole("heading", { name: "Link indisponível" }).waitFor();
+  await page.goto(`${BASE}/proposta/${token}`);
+  await page.getByRole("heading", { name: "Crie sua conta" }).waitFor();
+  await page.getByLabel("Nome completo").fill("Joana Fictícia Teste");
+  await page.getByLabel("E-mail").fill("joana@ficticio.local");
+  await page.getByLabel(/Senha/).fill("curta");
+  await page.getByRole("button", { name: /Criar conta/ }).click();
+  await page.waitForTimeout(800);
+  assert.equal(await one(`select count(*) from proposal_applicant`), 0, "senha curta recusada");
+  await page.getByLabel(/Senha/).fill("senha-segura-123");
+  await page.getByRole("button", { name: /Criar conta/ }).click();
+  await page.getByRole("heading", { name: /Olá, Joana/ }).waitFor();
+  assert.equal(await one(`select count(*) from proposal_applicant where tenant_id='ten_roberio'`), 1);
+  assert.notEqual(await one(`select password_hash from proposal_applicant`), "senha-segura-123", "senha não fica em texto");
+  // Nada de proposta na esteira antes de completar: o rascunho nem aparece para o dono.
+  await page.getByLabel("CPF").fill("52998224725");
+  await page.getByLabel(/Telefone/).fill("11987654321");
+  await page.getByLabel(/Renda mensal/).fill("3.500,00");
+  await page.getByLabel(/Valor que você precisa/).fill("5.000,00");
+  await page.getByLabel(/Prazo desejado/).fill("12");
+  await page.getByRole("button", { name: /Salvar e continuar/ }).click();
+  await page.getByRole("heading", { name: /Passo 2 de 3/ }).waitFor();
+  assert.equal(await one(`select status from credit_proposal where source='APPLICANT'`), "DRAFT");
+  assert.equal(await page.getByRole("button", { name: /Envie os 4 documentos/ }).isDisabled(), true);
+  // Arquivo que não é PDF/imagem é recusado; PDFs válidos entram um a um.
+  await page.getByLabel("Comprovante de residência").setInputFiles({ name: "x.txt", mimeType: "text/plain", buffer: Buffer.from("texto") });
+  await page.getByText(/Envie um PDF ou uma imagem/).waitFor();
+  const labels = ["Documento de identidade (RG ou CNH)", "Comprovante de residência", "Extrato bancário (últimos 3 meses)", "Holerite (último)"];
+  for (const [index, label] of labels.entries()) {
+    await page.getByLabel(label).setInputFiles(pdf(`doc${index}.pdf`));
+    await poll(`select count(*) from credit_proposal_document`, index + 1);
+    if (index < 3) assert.equal(await page.getByRole("button", { name: /Envie os 4 documentos/ }).isDisabled(), true);
+  }
+  await page.getByRole("button", { name: "Enviar proposta" }).waitFor();
+  const board = await get(ownerCookie, "/");
+  assert.equal(String(await board.text()).includes("Joana Fictícia Teste"), false, "rascunho não aparece na esteira");
+  await page.getByRole("button", { name: "Enviar proposta" }).click();
+  await page.getByText(/Proposta enviada/).first().waitFor();
+  assert.equal(await one(`select status||'/'||phase from credit_proposal where source='APPLICANT'`), "OPEN/RECEIVED");
+  // O dono vê a proposta na fase 1, com os 4 documentos baixáveis.
+  const ownerPage = await signIn("roberio@teste.local", PASSWORD, { width: 1600, height: 1000 });
+  await ownerPage.goto(`${BASE}/?tela=esteira-de-credito`);
+  const received = ownerPage.getByRole("region", { name: "Proposta recebida" });
+  await received.getByText("Joana Fictícia Teste").waitFor();
+  assert.equal(await received.locator(".pipeline-docs a").count(), 4);
+  assert.match(await received.innerText(), /enviada pelo cliente/);
+  const docId = await one(`select id from credit_proposal_document limit 1`);
+  const download = await get(ownerCookie, `/esteira/documento/${docId}`);
+  assert.equal(download.status, 200);
+  assert.equal((await get("", `/esteira/documento/${docId}`)).status === 200, false, "sem login não baixa");
+  if (SHOTS) { await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-proposta-cliente.png` }); await page.screenshot({ path: `${SHOTS}/cliente-portal-proposta.png` }); }
+  // Entrar de novo com a mesma conta; senha errada é recusada; outro link/tenant não enxerga esta conta.
+  const context2 = await browser.newContext();
+  const page2 = await context2.newPage();
+  await page2.goto(`${BASE}/proposta/${token}`);
+  await page2.getByRole("button", { name: /Já tenho conta/ }).click();
+  await page2.getByLabel("E-mail").fill("joana@ficticio.local");
+  await page2.getByLabel("Senha").fill("errada-errada");
+  await page2.getByRole("button", { name: /Entrar/ }).click();
+  await page2.getByText("E-mail ou senha incorretos.").waitFor();
+  await page2.getByLabel("Senha").fill("senha-segura-123");
+  await page2.getByRole("button", { name: /Entrar/ }).click();
+  await page2.getByText(/Proposta enviada/).first().waitFor();
+  // Gerar novo link invalida o antigo e a sessão antiga.
+  assert.equal((await link("rotate")).result?.ok, true);
+  await page2.goto(`${BASE}/proposta/${token}`);
+  await page2.getByRole("heading", { name: "Link indisponível" }).waitFor();
+  assert.equal(await one(`select count(*) from proposal_applicant a join tenant t on t.id=a.tenant_id where a.tenant_id <> 'ten_roberio'`), 0, "nada em outro tenant");
+  // A gerente não alcança o gerenciamento do link.
+  assert.equal((await actionArgs(await apiLogin(EMAIL, NEW_PASSWORD), "manageProposalLinkAction", ["create"])).result?.ok === true, false);
+  await context.close(); await context2.close();
+  await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
+  await admin(`delete from proposal_applicant where tenant_id='ten_roberio'`);
+  await admin(`delete from proposal_link where tenant_id='ten_roberio'`);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);

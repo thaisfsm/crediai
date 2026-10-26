@@ -5,7 +5,8 @@ import { and, asc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
-import { creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { newLinkToken } from "@/lib/credit/link-token";
+import { proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -286,6 +287,27 @@ export async function rejectCreditProposalAction(proposalId: string, reason: str
     await tx.update(creditProposals).set({ status: "REJECTED", decisionNote: note, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REJECTED", proposal.id, `Proposta de ${proposal.applicantName} reprovada: ${note}`, { phase: proposal.phase, note });
     return { ok: true, message: "Proposta reprovada." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Link público de proposta: um por carteira. "rotate" gera um novo e invalida o anterior; "disable" desativa.
+export async function manageProposalLinkAction(mode: string): Promise<ActionResult> {
+  if (mode !== "create" && mode !== "rotate" && mode !== "disable") return { ok: false, error: "Ação inválida." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [current] = await tx.select().from(proposalLinks).where(eq(proposalLinks.tenantId, tenantId)).for("update");
+    if (mode === "disable") {
+      if (!current || !current.enabled) return { ok: false, error: "Não há link ativo." };
+      await tx.update(proposalLinks).set({ enabled: false }).where(eq(proposalLinks.id, current.id));
+    } else if (!current) {
+      await tx.insert(proposalLinks).values({ id: id("plk"), tenantId, token: newLinkToken(), enabled: true });
+    } else if (mode === "rotate" || !current.enabled) {
+      await tx.update(proposalLinks).set({ token: newLinkToken(), enabled: true }).where(eq(proposalLinks.id, current.id));
+    } else return { ok: true, message: "O link já está ativo." };
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, { action: "CREDIT_PROPOSAL_LINK_CHANGED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null, description: mode === "disable" ? "Link de proposta desativado." : "Link de proposta gerado.", before: null, after: { mode } });
+    return { ok: true, message: mode === "disable" ? "Link desativado." : "Link de proposta pronto." };
   });
   if (result.ok) revalidatePath("/");
   return result;

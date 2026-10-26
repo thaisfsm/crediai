@@ -225,14 +225,77 @@ export const creditProposals = pgTable("credit_proposal", {
   status: text("status").notNull().default("OPEN"),
   decisionNote: text("decision_note"),
   createdByUserId: text("created_by_user_id"),
+  // Proposta enviada pelo próprio cliente pelo link (migração 0041): fica em DRAFT até todos os campos e documentos obrigatórios estarem completos.
+  source: text("source").notNull().default("OWNER"),
+  applicantId: text("applicant_id"),
+  monthlyIncomeCents: bigint("monthly_income_cents", { mode: "number" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   phaseChangedAt: timestamp("phase_changed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("credit_proposal_tenant_phase_idx").on(table.tenantId, table.phase),
   check("credit_proposal_phase_valid", sql`${table.phase} in ('RECEIVED','IDENTITY','DOCUMENTS','CAPACITY','ENGINE','APPROVAL','ACCEPTANCE')`),
-  check("credit_proposal_status_valid", sql`${table.status} in ('OPEN','REJECTED')`),
+  check("credit_proposal_status_valid", sql`${table.status} in ('DRAFT','OPEN','REJECTED')`),
+  check("credit_proposal_source_valid", sql`${table.source} in ('OWNER','APPLICANT')`),
   check("credit_proposal_values_valid", sql`${table.requestedCents} > 0 and ${table.termMonths} >= 1 and ${table.termMonths} <= 360`),
   ...tenantPolicies("credit_proposal", table.tenantId),
+]).enableRLS();
+
+// Link público de proposta do dono (migração 0041): um por carteira; gerar de novo invalida o anterior.
+export const proposalLinks = pgTable("proposal_link", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  token: text("token").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("proposal_link_tenant_unique").on(table.tenantId),
+  uniqueIndex("proposal_link_token_unique").on(table.token),
+  ...tenantPolicies("proposal_link", table.tenantId),
+]).enableRLS();
+
+// Conta de quem envia proposta pelo link (separada dos usuários do sistema: não acessa nada da carteira).
+export const proposalApplicants = pgTable("proposal_applicant", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("proposal_applicant_tenant_email_unique").on(table.tenantId, table.email),
+  ...tenantPolicies("proposal_applicant", table.tenantId),
+]).enableRLS();
+
+export const proposalApplicantSessions = pgTable("proposal_applicant_session", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  applicantId: text("applicant_id").notNull().references(() => proposalApplicants.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("proposal_applicant_session_token_unique").on(table.tokenHash),
+  ...tenantPolicies("proposal_applicant_session", table.tenantId, { tenantDelete: true }),
+]).enableRLS();
+
+// Documentos da proposta (identidade, comprovante de residência, extrato, holerite): um por tipo, o envio novo substitui o anterior.
+export const creditProposalDocuments = pgTable("credit_proposal_document", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  proposalId: text("proposal_id").notNull().references(() => creditProposals.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  content: bytea("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("credit_proposal_document_kind_unique").on(table.proposalId, table.kind),
+  check("credit_proposal_document_kind_valid", sql`${table.kind} in ('ID_DOCUMENT','PROOF_OF_ADDRESS','BANK_STATEMENT','PAYSLIP')`),
+  check("credit_proposal_document_size_limit", sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 4194304`),
+  ...tenantPolicies("credit_proposal_document", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
 // Política de crédito do dono da carteira (migração 0039): limites que ele define. Campo vazio = sem limite definido.
@@ -1160,4 +1223,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposals, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposals, proposalApplicantSessions, proposalApplicants, proposalLinks, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };

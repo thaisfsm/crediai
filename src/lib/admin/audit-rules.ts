@@ -59,6 +59,7 @@ export const AUDIT_ACTIONS = {
   CREDIT_PROPOSAL_REGISTERED: "Proposta de crédito cadastrada",
   CREDIT_PROPOSAL_MOVED: "Proposta de crédito movida na esteira",
   CREDIT_PROPOSAL_REJECTED: "Proposta de crédito reprovada",
+  CREDIT_PROPOSAL_LINK_CHANGED: "Link de proposta alterado",
   CREDIT_POLICY_UPDATED: "Política de crédito alterada",
   OPERATION_PIX_CONFIRMED: "Pix de operação aprovada confirmado",
   OPERATION_REQUEST_REJECTED: "Pedido de operação de gerente reprovado",
