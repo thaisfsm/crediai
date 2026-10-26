@@ -48,3 +48,12 @@ test("CR5. parcela negociada: taxa equivalente (juros simples) e indicador de ca
   assert.deepEqual(capacityIndicator(600000, 12, 300000, 60000), { installmentCents: 60000, incomeShare: 20 });
   assert.deepEqual(capacityIndicator(600000, 12, 300000), { installmentCents: 50000, incomeShare: 16.7 });
 });
+
+import { readFileSync } from "node:fs";
+
+test("CR6. esteira: o endereço do link vem do estado do navegador, nunca do global origin (que não existe no servidor)", () => {
+  const source = readFileSync("src/app/portfolio-pages.tsx", "utf8");
+  const body = source.slice(source.indexOf("export function CreditPipelinePage")).split(/\nexport function /)[0];
+  assert.ok(body.includes("${origin}/proposta/"), "a página usa o endereço do link");
+  assert.ok(body.includes("const [origin, setOrigin] = useState("), "origin declarado na própria página");
+});
