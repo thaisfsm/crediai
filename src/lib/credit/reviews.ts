@@ -28,8 +28,8 @@ export const PHASE_REVIEWS = {
 } as const;
 
 // Parcela estimada sem juros (valor ÷ prazo) e quanto ela pesa na renda informada. É só um indicador: os limites ficam para o motor de crédito.
-export function capacityIndicator(requestedCents: number, termMonths: number, monthlyIncomeCents: number | null) {
-  const installmentCents = Math.ceil(requestedCents / termMonths);
+export function capacityIndicator(requestedCents: number, termMonths: number, monthlyIncomeCents: number | null, negotiatedInstallmentCents: number | null = null) {
+  const installmentCents = negotiatedInstallmentCents ?? Math.ceil(requestedCents / termMonths);
   const incomeShare = monthlyIncomeCents && monthlyIncomeCents > 0 ? Math.round((installmentCents / monthlyIncomeCents) * 1000) / 10 : null;
   return { installmentCents, incomeShare };
 }

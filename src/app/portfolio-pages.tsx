@@ -17,6 +17,7 @@ import { calculateDaily, calculateFixedInterest, calculateInstallments, calculat
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
+import { impliedRateBps } from "@/lib/credit/engine";
 import { capacityIndicator, reviewOf } from "@/lib/credit/reviews";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
@@ -1809,8 +1810,8 @@ function ProposalReviewBox({ proposal, busy, run }: { proposal: TenantPortfolio[
     <fieldset className="pipeline-review">
       <legend>{review.title}</legend>
       {proposal.phase === "CAPACITY" && (() => {
-        const indicator = capacityIndicator(proposal.requestedCents, proposal.termMonths, proposal.monthlyIncomeCents);
-        return <small className="pipeline-indicator">Parcela estimada sem juros: {formatMoney(indicator.installmentCents)} por mês{indicator.incomeShare === null ? " (renda não informada)" : `, ${String(indicator.incomeShare).replace(".", ",")}% da renda informada`}.</small>;
+        const indicator = capacityIndicator(proposal.requestedCents, proposal.termMonths, proposal.monthlyIncomeCents, proposal.installmentCents);
+        return <small className="pipeline-indicator">{proposal.installmentCents === null ? "Parcela estimada sem juros" : "Parcela negociada"}: {formatMoney(indicator.installmentCents)} por mês{indicator.incomeShare === null ? " (renda não informada)" : `, ${String(indicator.incomeShare).replace(".", ",")}% da renda informada`}.</small>;
       })()}
       {review.checks.map((item) => (
         <label key={item.key} className="pipeline-check"><input type="checkbox" checked={checks[item.key] === true} onChange={(event) => setChecks({ ...checks, [item.key]: event.currentTarget.checked })} /> {item.label}</label>
@@ -1833,6 +1834,7 @@ function ProposalOfferBox({ proposal, defaultRateBps, busy, run }: { proposal: T
   return (
     <fieldset className="pipeline-review">
       <legend>Oferta aprovada</legend>
+      {proposal.installmentCents !== null && <small className="pipeline-indicator">Parcela negociada com o cliente: {formatMoney(proposal.installmentCents)} por mês em {proposal.termMonths}x.</small>}
       <div className="pipeline-offer-fields">
         <label>Valor aprovado<input aria-label="Valor aprovado" inputMode="decimal" value={approved} onChange={(event) => setApproved(event.currentTarget.value)} /></label>
         <label>Prazo (meses)<input aria-label="Prazo aprovado em meses" inputMode="numeric" value={term} onChange={(event) => setTerm(event.currentTarget.value)} /></label>
@@ -1890,6 +1892,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
           <label className="field"><span>CPF</span><input name="cpf" inputMode="numeric" required maxLength={14} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
           <label className="field"><span>Valor solicitado (R$)</span><MoneyInput name="requested" placeholder="5.000,00" required /></label>
           <label className="field"><span>Prazo (meses)</span><input name="termMonths" inputMode="numeric" required maxLength={3} /></label>
+          <label className="field"><span>Valor da parcela (R$)</span><MoneyInput name="installment" placeholder="Opcional" /></label>
           <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} /></label>
           <label className="field"><span>Telefone</span><input name="phone" inputMode="tel" maxLength={16} onChange={(event) => { event.currentTarget.value = maskPhone(event.currentTarget.value); }} /></label>
           <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar proposta"}</button></div>
@@ -1909,6 +1912,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   <span>CPF {formatCpf(proposal.cpf)}</span>
                   <span>{formatMoney(proposal.requestedCents)} em {proposal.termMonths} {proposal.termMonths === 1 ? "mês" : "meses"}</span>
                   <small>Desde {formatDate(proposal.phaseChangedAt.slice(0, 10))}{proposal.source === "APPLICANT" ? " · enviada pelo cliente" : ""}</small>
+                  {proposal.installmentCents !== null && <span>Parcela negociada {formatMoney(proposal.installmentCents)} (≈ {formatRate(impliedRateBps(proposal.requestedCents, proposal.installmentCents, proposal.termMonths))} ao mês)</span>}
                   {proposal.monthlyIncomeCents !== null && <span>Renda mensal {formatMoney(proposal.monthlyIncomeCents)}</span>}
                   {proposal.documents.length > 0 && <div className="pipeline-docs">{proposal.documents.map((doc) => (
                     <a key={doc.id} href={`/esteira/documento/${doc.id}`} target="_blank" rel="noreferrer">{PROPOSAL_DOCUMENTS.find((item) => item.kind === doc.kind)?.label ?? doc.kind}</a>

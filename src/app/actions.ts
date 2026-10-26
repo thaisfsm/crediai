@@ -253,10 +253,14 @@ export async function createCreditProposalAction(data: FormData): Promise<Action
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "Informe um e-mail válido." };
   const phone = normalizePhone(text(data, "phone", 30));
   if (!phone.ok) return phone;
+  const installmentRaw = text(data, "installment", 40);
+  const installment = installmentRaw === "" ? null : parseMoneyToCents(installmentRaw);
+  if (installmentRaw !== "" && (installment === null || installment <= 0 || installment > MAX_CENTS)) return { ok: false, error: "Informe o valor da parcela em reais, por exemplo 520,00." };
+  if (installment !== null && installment * term < amount) return { ok: false, error: "A parcela vezes o prazo não pode dar menos que o valor solicitado." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     const proposalId = id("prp");
-    await tx.insert(creditProposals).values({ id: proposalId, tenantId, applicantName: name, cpf: cpf.value!, email: email || null, phone: phone.value, requestedCents: amount, termMonths: term, createdByUserId: session.user.id });
-    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposalId, `Proposta de crédito de ${name} cadastrada.`, { requestedCents: amount, termMonths: term, phase: "RECEIVED" });
+    await tx.insert(creditProposals).values({ id: proposalId, tenantId, applicantName: name, cpf: cpf.value!, email: email || null, phone: phone.value, requestedCents: amount, termMonths: term, negotiatedInstallmentCents: installment, createdByUserId: session.user.id });
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposalId, `Proposta de crédito de ${name} cadastrada.`, { requestedCents: amount, termMonths: term, installmentCents: installment, phase: "RECEIVED" });
     return { ok: true, message: `Proposta de ${name} cadastrada na fase "Proposta recebida".` };
   });
   if (result.ok) revalidatePath("/");
