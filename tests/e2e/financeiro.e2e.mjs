@@ -39,6 +39,8 @@ async function action(cookie, name, fields, path = "/financeiro") {
   form.append("0", '["$K1"]');
   const response = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual", headers: { cookie, "next-action": actionId(name), accept: "text/x-component", origin: BASE }, body: form });
   const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
+  // Estes cenários descrevem contratos antigos (juros primeiro); os contratos novos abatem o principal primeiro (tests/payment-order.test.mjs).
+  if (name === "createOperationAction") await admin(`update loan_operation set payment_order = 'INTEREST_FIRST' where payment_order = 'PRINCIPAL_FIRST'`);
   return { status: response.status, result: result ? JSON.parse(result) : null };
 }
 const page = async (cookie, path) => {

@@ -532,6 +532,9 @@ export const loanOperations = pgTable("loan_operation", {
   settlementBalanceCents: bigint("settlement_balance_cents", { mode: "number" }),
   settlementDiscountCents: bigint("settlement_discount_cents", { mode: "number" }),
   settlementByUserId: text("settlement_by_user_id"),
+  // Ordem em que o pagamento é aplicado nos juros recorrentes (mensal/quinzenal): INTEREST_FIRST (contratos antigos: juros primeiro) ou
+  // PRINCIPAL_FIRST (contratos novos: abate o principal primeiro e só depois conta como juros/lucro). Migração 0048.
+  paymentOrder: text("payment_order").notNull().default("INTEREST_FIRST"),
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
@@ -562,6 +565,7 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_settlement_consistent", sql`(${table.settlementPaymentId} is null) = (${table.settlementBalanceCents} is null) and (${table.settlementPaymentId} is null) = (${table.settlementDiscountCents} is null) and (${table.settlementPaymentId} is null or (${table.status}::text = 'PAID' and ${table.settlementDiscountCents} >= 0 and ${table.settlementBalanceCents} > 0))`),
   check("loan_operation_renegotiated_not_self", sql`${table.renegotiatedIntoId} is null or ${table.renegotiatedIntoId} <> ${table.id}`),
   check("loan_operation_renegotiated_consistent", sql`(${table.status}::text = 'RENEGOTIATED') = (${table.renegotiatedIntoId} is not null and ${table.renegotiatedOn} is not null and ${table.renegotiatedAt} is not null and ${table.renegotiatedPrincipalCents} >= 0 and ${table.renegotiatedInterestCents} >= 0)`),
+  check("loan_operation_payment_order_valid", sql`${table.paymentOrder} in ('INTEREST_FIRST', 'PRINCIPAL_FIRST')`),
   check("loan_operation_principal_positive", sql`${table.principalCents} > 0`),
   check("loan_operation_rate_non_negative", sql`${table.interestRateBps} >= 0`),
   check("loan_operation_amounts_consistent", sql`${table.interestCents} >= 0 and ${table.totalCents} = ${table.principalCents} + ${table.interestCents}`),

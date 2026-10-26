@@ -231,6 +231,9 @@ export type LedgerTerms = {
   // Liquidação antecipada: o pagamento final negociado. Ele quita o principal em aberto primeiro; o que sobrar é juros e os
   // juros/parcelas que faltavam são perdoados (não são lucro nem dívida). Os demais pagamentos seguem a regra normal.
   settlementPaymentId?: string | null;
+  // Juros recorrentes: INTEREST_FIRST (padrão, contratos antigos) cobre os juros do período e depois o principal; PRINCIPAL_FIRST
+  // (contratos novos) abate o principal primeiro e só o que sobra conta como juros recebidos (lucro).
+  paymentOrder?: "INTEREST_FIRST" | "PRINCIPAL_FIRST";
   // Parcelado: parcelas jogadas para o final. interestCents continua sendo o do contrato original; o acréscimo entra só no extrato.
   deferrals?: LedgerDeferral[];
 };
@@ -439,15 +442,18 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     renewOnDue(payment.paidAt);
     const interestLeft = Math.max(current().interestCents - periodInterestPaid, 0);
     const balanceBeforeCents = principalOpen + interestLeft;
-    const interestPart = Math.min(payment.amountCents, interestLeft);
-    const principalPart = Math.min(payment.amountCents - interestPart, principalOpen);
+    // Principal primeiro: o pagamento abate o principal em aberto e só o resto cobre os juros do período (lucro).
+    const principalFirst = terms.paymentOrder === "PRINCIPAL_FIRST";
+    const principalPart = principalFirst ? Math.min(payment.amountCents, principalOpen) : 0;
+    const interestPart = Math.min(payment.amountCents - principalPart, interestLeft);
+    const principalPartFinal = principalFirst ? principalPart : Math.min(payment.amountCents - interestPart, principalOpen);
     periodInterestPaid += interestPart;
     interestPaidCents += interestPart;
-    principalOpen -= principalPart;
-    principalPaidCents += principalPart;
+    principalOpen -= principalPartFinal;
+    principalPaidCents += principalPartFinal;
     const settles = principalOpen === 0 && periodInterestPaid >= current().interestCents;
-    const item: LedgerItem<T> = { ...payment, interestCents: interestPart, principalCents: principalPart, kind: settles ? "SETTLEMENT" : principalPart > 0 ? "PARTIAL" : "INTEREST", balanceBeforeCents, renewedPeriod: null };
-    completedBy = !settles && principalPart === 0 && interestPart > 0 && periodInterestPaid >= current().interestCents ? item : null;
+    const item: LedgerItem<T> = { ...payment, interestCents: interestPart, principalCents: principalPartFinal, kind: settles ? "SETTLEMENT" : principalPartFinal > 0 ? "PARTIAL" : "INTEREST", balanceBeforeCents, renewedPeriod: null };
+    completedBy = !settles && principalPartFinal === 0 && interestPart > 0 && periodInterestPaid >= current().interestCents ? item : null;
     const row = rows.get(payment.id);
     if (row && principalOpen > 0 && periodInterestPaid >= current().interestCents) {
       completedBy = item;
@@ -476,7 +482,7 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
 // exatamente o que falta dos juros do período atual e ainda há principal em aberto. Quita os juros do período, mantém o
 // principal, abre o período seguinte (vencimento por nextDueDate, ou a data informada) com juros sobre o principal.
 export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLedger, "interestRemainingCents" | "principalRemainingCents" | "nextDueDate">, amountCents: number) {
-  if (isAmortized(terms) || ledger.principalRemainingCents <= 0 || ledger.interestRemainingCents <= 0 || amountCents !== ledger.interestRemainingCents) return null;
+  if (isAmortized(terms) || terms.paymentOrder === "PRINCIPAL_FIRST" || ledger.principalRemainingCents <= 0 || ledger.interestRemainingCents <= 0 || amountCents !== ledger.interestRemainingCents) return null;
   const anchorDay = Number(terms.firstDueDate.slice(8, 10));
   return {
     previousDueDate: ledger.nextDueDate,
