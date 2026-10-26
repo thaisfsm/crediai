@@ -302,6 +302,13 @@
       "when": 1793040755353,
       "tag": "0043_oferta_da_proposta",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793045131969,
+      "tag": "0044_taxa_padrao",
+      "breakpoints": true
     }
   ]
 }
