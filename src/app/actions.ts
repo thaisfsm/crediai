@@ -6,7 +6,8 @@ import { revalidatePath } from "next/cache";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
 import { newLinkToken } from "@/lib/credit/link-token";
-import { proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { reviewOf } from "@/lib/credit/reviews";
+import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -229,7 +230,7 @@ export async function approveOperationRequestAction(requestId: string): Promise<
 }
 
 // Esteira de crédito: o dono cadastra uma proposta (o cliente também poderá enviar pelo link) e a leva de fase em fase.
-async function auditProposal(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], session: Parameters<Parameters<typeof withTenantContext>[0]>[1]["session"], tenantId: string, action: "CREDIT_PROPOSAL_REGISTERED" | "CREDIT_PROPOSAL_MOVED" | "CREDIT_PROPOSAL_REJECTED", proposalId: string, description: string, after: Record<string, unknown>) {
+async function auditProposal(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], session: Parameters<Parameters<typeof withTenantContext>[0]>[1]["session"], tenantId: string, action: "CREDIT_PROPOSAL_REGISTERED" | "CREDIT_PROPOSAL_MOVED" | "CREDIT_PROPOSAL_REJECTED" | "CREDIT_PROPOSAL_REVIEWED", proposalId: string, description: string, after: Record<string, unknown>) {
   const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
   await recordAdminAudit(tx, session, { action, entity: "wallet", entityId: proposalId, tenantId, tenantName: tenant?.name ?? null, description, before: null, after });
 }
@@ -266,12 +267,39 @@ export async function moveCreditProposalAction(proposalId: string, direction: st
     const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
     if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
     if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    const required = direction === "next" ? reviewOf(proposal.phase) : null;
+    if (required) {
+      const [review] = await tx.select({ completed: creditProposalReviews.completed }).from(creditProposalReviews)
+        .where(and(eq(creditProposalReviews.proposalId, proposal.id), eq(creditProposalReviews.phase, proposal.phase)));
+      if (!review?.completed) return { ok: false, error: `Conclua a conferência desta fase antes de avançar: ${required.title}.` };
+    }
     const index = PHASE_KEYS.indexOf(proposal.phase as ProposalPhase);
     const target = PHASE_KEYS[index + (direction === "next" ? 1 : -1)];
     if (!target) return { ok: false, error: direction === "next" ? "A proposta já está na última fase." : "A proposta já está na primeira fase." };
     await tx.update(creditProposals).set({ phase: target, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_MOVED", proposal.id, `Proposta de ${proposal.applicantName} movida de ${proposal.phase} para ${target}.`, { from: proposal.phase, to: target });
     return { ok: true, message: "Proposta movida." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Conferência da fase atual da proposta: itens marcados e observação. Só a fase em que a proposta está pode ser conferida.
+export async function saveProposalReviewAction(proposalId: string, checks: Record<string, boolean>, note: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    const review = reviewOf(proposal.phase);
+    if (!review) return { ok: false, error: "Esta fase não tem conferência." };
+    const marked = Object.fromEntries(review.checks.map((item) => [item.key, checks?.[item.key] === true]));
+    const completed = Object.values(marked).every(Boolean);
+    const observation = String(note ?? "").trim().slice(0, 500) || null;
+    const values = { checks: marked, note: observation, completed, reviewedByUserId: session.user.id, reviewedAt: sql`now()` };
+    await tx.insert(creditProposalReviews).values({ id: id("prv"), tenantId, proposalId: proposal.id, phase: proposal.phase, ...values })
+      .onConflictDoUpdate({ target: [creditProposalReviews.proposalId, creditProposalReviews.phase], set: values });
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REVIEWED", proposal.id, `Proposta de ${proposal.applicantName}: conferência da fase ${proposal.phase} ${completed ? "concluída" : "salva incompleta"}.`, { phase: proposal.phase, checks: marked, note: observation, completed });
+    return { ok: true, message: completed ? "Conferência concluída. Já pode avançar a fase." : "Conferência salva. Faltam itens para avançar." };
   });
   if (result.ok) revalidatePath("/");
   return result;

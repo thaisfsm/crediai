@@ -240,6 +240,23 @@ export const creditProposals = pgTable("credit_proposal", {
   ...tenantPolicies("credit_proposal", table.tenantId),
 ]).enableRLS();
 
+// Conferência do dono em uma fase da esteira (migração 0042): itens marcados + observação; "completed" = todos os itens marcados.
+export const creditProposalReviews = pgTable("credit_proposal_review", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  proposalId: text("proposal_id").notNull().references(() => creditProposals.id, { onDelete: "cascade" }),
+  phase: text("phase").notNull(),
+  checks: jsonb("checks").$type<Record<string, boolean>>().notNull(),
+  note: text("note"),
+  completed: boolean("completed").notNull().default(false),
+  reviewedByUserId: text("reviewed_by_user_id"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("credit_proposal_review_phase_unique").on(table.proposalId, table.phase),
+  check("credit_proposal_review_phase_valid", sql`${table.phase} in ('IDENTITY','DOCUMENTS','CAPACITY','ENGINE','APPROVAL','ACCEPTANCE')`),
+  ...tenantPolicies("credit_proposal_review", table.tenantId, { tenantDelete: true }),
+]).enableRLS();
+
 // Link público de proposta do dono (migração 0041): um por carteira; gerar de novo invalida o anterior.
 export const proposalLinks = pgTable("proposal_link", {
   id: text("id").primaryKey(),
@@ -1223,4 +1240,4 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposals, proposalApplicantSessions, proposalApplicants, proposalLinks, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalApplicantSessions, proposalApplicants, proposalLinks, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
