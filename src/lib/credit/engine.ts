@@ -37,3 +37,8 @@ export function evaluateProposal(proposal: { requestedCents: number; termMonths:
   ];
   return { rules, passed: rules.every((rule) => rule.status !== "FAIL") };
 }
+
+// Taxa mensal equivalente (juros simples) de uma parcela negociada: (parcela × prazo − valor) ÷ valor ÷ prazo, em pontos-base com uma casa decimal.
+export function impliedRateBps(requestedCents: number, installmentCents: number, termMonths: number) {
+  return Math.round(((installmentCents * termMonths - requestedCents) / requestedCents / termMonths) * 100_000) / 10;
+}

@@ -1,0 +1,2 @@
+ALTER TABLE "credit_proposal" ADD COLUMN "negotiated_installment_cents" bigint;--> statement-breakpoint
+ALTER TABLE "credit_proposal" ADD CONSTRAINT "credit_proposal_installment_valid" CHECK ("credit_proposal"."negotiated_installment_cents" is null or "credit_proposal"."negotiated_installment_cents" > 0);

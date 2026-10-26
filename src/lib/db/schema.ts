@@ -229,6 +229,8 @@ export const creditProposals = pgTable("credit_proposal", {
   source: text("source").notNull().default("OWNER"),
   applicantId: text("applicant_id"),
   monthlyIncomeCents: bigint("monthly_income_cents", { mode: "number" }),
+  // Parcela mensal negociada pelo dono antes de enviar o link (opcional, migração 0046).
+  negotiatedInstallmentCents: bigint("negotiated_installment_cents", { mode: "number" }),
   // Oferta aprovada pelo dono na fase 6 (migração 0043): valor, prazo e taxa ao mês (pontos-base com uma casa decimal, 1% = 100). Tudo ou nada.
   offerCents: bigint("offer_cents", { mode: "number" }),
   offerTermMonths: integer("offer_term_months"),
@@ -246,6 +248,7 @@ export const creditProposals = pgTable("credit_proposal", {
   check("credit_proposal_status_valid", sql`${table.status} in ('DRAFT','OPEN','REJECTED')`),
   check("credit_proposal_source_valid", sql`${table.source} in ('OWNER','APPLICANT')`),
   check("credit_proposal_values_valid", sql`${table.requestedCents} > 0 and ${table.termMonths} >= 1 and ${table.termMonths} <= 360`),
+  check("credit_proposal_installment_valid", sql`${table.negotiatedInstallmentCents} is null or ${table.negotiatedInstallmentCents} > 0`),
   check("credit_proposal_offer_valid", sql`(${table.offerCents} is null and ${table.offerTermMonths} is null and ${table.offerRateBps} is null and ${table.offeredAt} is null) or (${table.offerCents} > 0 and ${table.offerTermMonths} >= 1 and ${table.offerTermMonths} <= 360 and ${table.offerRateBps} >= 0 and ${table.offeredAt} is not null)`),
   check("credit_proposal_acceptance_valid", sql`(${table.acceptedAt} is null and ${table.acceptedVia} is null) or (${table.acceptedAt} is not null and ${table.acceptedVia} in ('APPLICANT','OWNER') and ${table.offerCents} is not null)`),
   ...tenantPolicies("credit_proposal", table.tenantId),

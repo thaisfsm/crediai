@@ -499,13 +499,15 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   const ownerCookie = await apiLogin("roberio@teste.local");
   const create = (fields) => action(ownerCookie, "createCreditProposalAction", fields, "/");
   const base = { applicantName: "Maria Fictícia da Silva", cpf: "529.982.247-25", requested: "5.000,00", termMonths: "12", email: "maria@ficticio.local", phone: "(11) 98765-4321" };
-  for (const bad of [{ applicantName: "Al" }, { cpf: "111.111.111-11" }, { requested: "0" }, { termMonths: "0" }, { termMonths: "400" }, { email: "sem-arroba" }, { phone: "123" }]) {
+  for (const bad of [{ applicantName: "Al" }, { cpf: "111.111.111-11" }, { requested: "0" }, { termMonths: "0" }, { termMonths: "400" }, { email: "sem-arroba" }, { phone: "123" }, { installment: "abc" }, { installment: "0,00" }, { installment: "100,00" }]) {
     assert.equal((await create({ ...base, ...bad })).result?.ok, false, JSON.stringify(bad));
   }
   assert.equal(await one(`select count(*) from credit_proposal`), 0);
-  const ok = await create(base);
+  // Parcela negociada (opcional): R$ 520 x 12 = R$ 6.240 para R$ 5.000 pedidos.
+  const ok = await create({ ...base, installment: "520,00" });
   assert.equal(ok.result?.ok, true, JSON.stringify(ok));
   const proposalId = await one(`select id from credit_proposal where tenant_id='ten_roberio'`);
+  assert.equal(Number(await one(`select negotiated_installment_cents from credit_proposal where id='${proposalId}'`)), 52000);
   assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "RECEIVED");
   const move = (direction) => actionArgs(ownerCookie, "moveCreditProposalAction", [proposalId, direction]);
   assert.equal((await move("back")).result?.ok, false, "não volta da primeira fase");
@@ -529,6 +531,7 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   const ownerPage = await signIn("roberio@teste.local", PASSWORD, { width: 1600, height: 900 });
   await ownerPage.goto(`${BASE}/?tela=esteira-de-credito`);
   await ownerPage.getByRole("region", { name: "Aprovação e oferta" }).getByText("Maria Fictícia da Silva").waitFor();
+  assert.match(await ownerPage.getByRole("region", { name: "Aprovação e oferta" }).innerText(), /Parcela negociada R\$\s*520,00/);
   assert.equal(await ownerPage.locator(".pipeline-column").count(), 7, "7 fases");
   if (SHOTS) await ownerPage.screenshot({ path: `${SHOTS}/dono-esteira-de-credito.png` });
   assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [proposalId, "  "])).result?.ok, false, "motivo obrigatório");

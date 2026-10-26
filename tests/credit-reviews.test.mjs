@@ -38,3 +38,13 @@ test("CR4. oferta: taxa mínima vale quando a taxa é informada; resumo com juro
   assert.equal(rule(750), "PASS");
   assert.deepEqual(offerSummary(200000, 6, 800), { interestCents: 96000, totalCents: 296000, installmentCents: 49334 });
 });
+
+import { impliedRateBps } from "../src/lib/credit/engine.ts";
+
+test("CR5. parcela negociada: taxa equivalente (juros simples) e indicador de capacidade usam a parcela do dono", () => {
+  // R$ 1.000 em 5x de R$ 260 = R$ 300 de juros = 6% ao mês.
+  assert.equal(impliedRateBps(100000, 26000, 5), 600);
+  assert.equal(impliedRateBps(100000, 20000, 5), 0);
+  assert.deepEqual(capacityIndicator(600000, 12, 300000, 60000), { installmentCents: 60000, incomeShare: 20 });
+  assert.deepEqual(capacityIndicator(600000, 12, 300000), { installmentCents: 50000, incomeShare: 16.7 });
+});
