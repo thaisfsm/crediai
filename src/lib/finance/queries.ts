@@ -1,7 +1,7 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
-import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
+import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposals, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
@@ -85,7 +85,8 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .where(and(eq(operationRequests.tenantId, tenantId), scope ? eq(operationRequests.managerId, scope.managerId) : undefined))
       .orderBy(desc(operationRequests.createdAt)).limit(60);
     const [policyRow] = scope ? [] : await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-    return { wallet, cycleNumber, policyRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    const proposalRows = scope ? [] : await tx.select().from(creditProposals).where(eq(creditProposals.tenantId, tenantId)).orderBy(desc(creditProposals.createdAt)).limit(300);
+    return { wallet, cycleNumber, policyRow, proposalRows, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 export async function loadTenantPortfolio() {
@@ -156,6 +157,11 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     ...portfolio,
     today: todayIso(),
     investorLinkedContributionIds: data.investorLinkedRows.map((row) => row.id),
+    proposals: data.proposalRows.map((row) => ({
+      id: row.id, applicantName: row.applicantName, cpf: row.cpf, email: row.email, phone: row.phone, requestedCents: row.requestedCents,
+      termMonths: row.termMonths, phase: row.phase, status: row.status, decisionNote: row.decisionNote,
+      createdAt: row.createdAt.toISOString(), phaseChangedAt: row.phaseChangedAt.toISOString(),
+    })),
     creditPolicy: {
       maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null,
       maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null,
