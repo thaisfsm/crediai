@@ -504,6 +504,7 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   for (const phase of ["IDENTITY", "DOCUMENTS", "CAPACITY", "ENGINE", "APPROVAL", "ACCEPTANCE"]) {
     // A fase de identidade só libera o avanço com a conferência completa.
     if (phase === "DOCUMENTS") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { documentChecked: true, holderChecked: true, noFraudSigns: true }, ""])).result?.ok, true);
+    if (phase === "ENGINE") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { regularIncome: true, noOverdraft: true, noSuspiciousActivity: true, capacityConfirmed: true }, ""])).result?.ok, true);
     if (phase === "CAPACITY") assert.equal((await actionArgs(ownerCookie, "saveProposalReviewAction", [proposalId, { bankStatementChecked: true, payslipChecked: true, incomeMatches: true }, ""])).result?.ok, true);
     assert.equal((await move("next")).result?.ok, true);
     assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), phase);
@@ -660,8 +661,17 @@ test("G17. fase 2 (identidade e antifraude): só avança com a conferência comp
   assert.equal(await one(`select completed from credit_proposal_review where proposal_id='${proposalId}' and phase='IDENTITY'`), true, "a da fase 2 continua guardada");
   assert.equal((await move("next")).result?.ok, true);
   assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "CAPACITY");
-  assert.equal((await review({ bankStatementChecked: true })).result?.ok, false, "fase 4 ainda sem conferência definida");
-  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_REVIEWED'`) >= 6, true, "conferências auditadas");
+  // Fase 4 (capacidade de pagamento): quatro itens sobre a movimentação bancária.
+  assert.equal((await move("next")).result?.ok, false, "sem análise da movimentação não avança");
+  assert.equal((await review({ regularIncome: true, noOverdraft: true, noSuspiciousActivity: true })).result?.ok, true);
+  assert.equal(await one(`select completed from credit_proposal_review where proposal_id='${proposalId}' and phase='CAPACITY'`), false, "faltou um item");
+  assert.equal((await move("next")).result?.ok, false);
+  assert.equal((await review({ regularIncome: true, noOverdraft: true, noSuspiciousActivity: true, capacityConfirmed: true }, "movimentação ok")).result?.ok, true);
+  assert.equal(await one(`select count(*) from credit_proposal_review where proposal_id='${proposalId}'`), 3);
+  assert.equal((await move("next")).result?.ok, true);
+  assert.equal(await one(`select phase from credit_proposal where id='${proposalId}'`), "ENGINE");
+  assert.equal((await review({ regularIncome: true })).result?.ok, false, "fase 5 ainda sem conferência definida");
+  assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_REVIEWED'`) >= 8, true, "conferências auditadas");
   const managerCookie2 = await apiLogin(EMAIL, NEW_PASSWORD);
   assert.equal((await actionArgs(managerCookie2, "saveProposalReviewAction", [proposalId, { documentChecked: true }, ""])).result?.ok === true, false);
   await admin(`delete from credit_proposal where tenant_id='ten_roberio'`);
