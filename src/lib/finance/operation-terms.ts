@@ -1,5 +1,5 @@
 import { formatMoney, isIsoDate, parseLoanRateToBps, parseMoneyToCents } from "./format";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, installmentDueDate, type Frequency, type InstallmentFrequency } from "./rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, dueDates, installmentDueDate, type Frequency, type InstallmentFrequency } from "./rules";
 
 const text = (data: FormData, key: string, max: number) => String(data.get(key) ?? "").trim().slice(0, max);
 const MAX_CENTS = 100_000_000_000; // R$ 1 bilhão: limite técnico contra valores digitados por engano.
@@ -26,9 +26,24 @@ export function operationTermsFromForm(data: FormData) {
     if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
     const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount, frequency: installmentFrequency });
     if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
+    // Vencimentos combinados com o cliente: um por parcela, em ordem crescente, sem ser antes do empréstimo. Só ficam gravados
+    // quando diferem da regra mensal/quinzenal; o primeiro vencimento passa a ser o da primeira parcela.
+    const standardDates = dueDates(installmentFrequency, firstDueDate, installmentCount);
+    let customDates: string[] | null = null;
+    const customRaw = text(data, "customDueDates", 8000);
+    if (customRaw !== "") {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(customRaw); } catch { parsed = null; }
+      if (!Array.isArray(parsed) || parsed.length !== installmentCount || !parsed.every((item) => typeof item === "string" && isIsoDate(item))) return { ok: false as const, error: "Os vencimentos ajustados precisam ter uma data válida para cada parcela." };
+      const dates = parsed as string[];
+      if (dates[0] < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
+      if (dates.some((date, index) => index > 0 && date <= dates[index - 1])) return { ok: false as const, error: "Cada vencimento precisa ser depois do anterior." };
+      if (dates.some((date, index) => date !== standardDates[index])) customDates = dates;
+    }
+    const effectiveFirstDue = customDates ? customDates[0] : firstDueDate;
     return {
-      ok: true as const, principalCents, loanDate, dueDate: installmentDueDate(firstDueDate, installmentCount, installmentFrequency),
-      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents, firstDueDate, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
+      ok: true as const, principalCents, loanDate, dueDate: customDates ? customDates[customDates.length - 1] : installmentDueDate(firstDueDate, installmentCount, installmentFrequency),
+      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents, firstDueDate: effectiveFirstDue, installmentDueDates: customDates, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
     };
   }
   const frequencyInput = text(data, "frequency", 20);

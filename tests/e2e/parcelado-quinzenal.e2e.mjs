@@ -120,7 +120,7 @@ test("PQ4. tela: prévia dos vencimentos 06/11, 21/11 e 06/12 antes de cadastrar
     await form.getByLabel("Primeiro vencimento").press("Tab");
     const preview = form.getByLabel("Prévia dos vencimentos");
     await preview.waitFor();
-    assert.deepEqual(await preview.locator("li strong").allInnerTexts(), ["06/11/2026", "21/11/2026", "06/12/2026"]);
+    assert.deepEqual(await preview.locator("li input").evaluateAll((inputs) => inputs.map((input) => input.value)), ["2026-11-06", "2026-11-21", "2026-12-06"]);
     await form.getByText("16,67% por quinzena · 33,33% ao mês").waitFor();
     if (SHOTS) await form.screenshot({ path: `${SHOTS}/parcelado-quinzenal-previa-${label}.png` });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal (${label})`);

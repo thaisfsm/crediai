@@ -236,6 +236,8 @@ export type LedgerTerms = {
   paymentOrder?: "INTEREST_FIRST" | "PRINCIPAL_FIRST";
   // Parcelado: parcelas jogadas para o final. interestCents continua sendo o do contrato original; o acréscimo entra só no extrato.
   deferrals?: LedgerDeferral[];
+  // Parcelado: vencimentos combinados (um por parcela) quando diferem da regra mensal/quinzenal; sem eles, pela regra.
+  customDueDates?: string[] | null;
 };
 export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string };
 export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null };
@@ -258,12 +260,13 @@ export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "princi
 }
 
 // Parcelas do contrato amortizado: todas iguais; no diário a última leva o ajuste para fechar o total.
-export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals">, paidCents: number): ScheduleItem[] {
+export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals" | "customDueDates">, paidCents: number): ScheduleItem[] {
   const count = terms.installmentCount ?? 0, base = terms.installmentCents ?? 0;
   const totalCents = terms.principalCents + terms.interestCents;
   // Parcelado: mensal ou quinzenal (operações antigas são todas mensais); diário: um vencimento por dia.
   const frequency: Frequency = terms.modality === "INSTALLMENT" ? (terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") : terms.frequency;
-  const dates = dueDates(frequency, terms.firstDueDate, count);
+  const custom = terms.modality === "INSTALLMENT" && terms.customDueDates?.length === count ? terms.customDueDates : null;
+  const dates = custom ?? dueDates(frequency, terms.firstDueDate, count);
   const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: index === count - 1 ? totalCents - base * (count - 1) : base }));
   // Parcelas renegociadas para o final, na ordem em que foram feitas (cada nova data vem depois da anterior).
   const deferrals = [...(terms.deferrals ?? [])].filter((item) => original.some((entry) => entry.originalNumber === item.originalNumber))

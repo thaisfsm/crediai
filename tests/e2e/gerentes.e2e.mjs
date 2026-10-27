@@ -1073,4 +1073,21 @@ test("G21. máximo de principal a emprestar: com data de reavaliação, trava no
   await page.goto(`${BASE}/?tela=politica-de-credito`);
   await page.getByLabel("Máximo de principal a emprestar (R$)").waitFor();
   await page.getByLabel("Reavaliar o máximo em").waitFor();
+  // Nova operação parcelada quinzenal: a prévia mostra as datas da regra e cada uma pode ser ajustada (20/11 combinado com o cliente).
+  await page.goto(`${BASE}/?tela=operacoes`);
+  const form = page.getByRole("region", { name: "Nova operação" });
+  await form.getByRole("radio", { name: "Parcelado" }).click();
+  await form.getByRole("radiogroup", { name: "Periodicidade das parcelas" }).getByRole("radio", { name: "Quinzenal" }).click();
+  await form.getByLabel("Valor emprestado (R$)").fill("600,00");
+  await form.getByLabel("Valor de cada parcela (R$)").fill("450,00");
+  await form.getByLabel("Quantidade de parcelas (quinzenas)").fill("2");
+  await form.getByLabel("Primeiro vencimento").fill("06/11/2026");
+  await form.getByLabel("Primeiro vencimento").press("Tab");
+  const second = form.getByLabel("Vencimento da parcela 2");
+  await second.waitFor();
+  assert.equal(await second.inputValue(), "2026-11-21");
+  await second.fill("2026-11-20");
+  assert.match(await form.getByLabel("Prévia da operação").innerText(), /20\/11\/2026/);
+  await form.getByRole("button", { name: "Voltar às datas da regra" }).click();
+  assert.equal(await form.getByLabel("Vencimento da parcela 2").inputValue(), "2026-11-21");
 });
