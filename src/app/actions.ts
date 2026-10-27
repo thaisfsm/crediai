@@ -175,6 +175,14 @@ async function insertOperation(tx: TenantTransaction, tenantId: string, clientId
   // Trava a carteira do tenant para que duas operações simultâneas não usem o mesmo capital.
   const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets)
     .where(eq(wallets.tenantId, tenantId)).for("update");
+  // Máximo de principal a emprestar (Política de crédito): o principal ainda emprestado + o desta operação não pode passar dele.
+  const [policy] = await tx.select({ max: creditPolicies.maxPrincipalLentCents, reviewOn: creditPolicies.maxPrincipalReviewOn }).from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+  if (policy?.max != null) {
+    const lentCents = (await tenantCapital(tx, tenantId)).summary.lentCents;
+    if (lentCents + principalCents > policy.max) {
+      return { ok: false, error: `Máximo de principal a emprestar atingido: emprestado ${formatMoney(lentCents)} + esta operação ${formatMoney(principalCents)} passa do máximo de ${formatMoney(policy.max)}. Ainda cabem ${formatMoney(Math.max(policy.max - lentCents, 0))}.${policy.reviewOn ? ` Reavaliar o máximo em ${formatDate(policy.reviewOn)}.` : ""} Para aumentar, altere em Política de crédito.` };
+    }
+  }
   const cycleNumber = wallet?.cycleNumber ?? 1;
   const availableCents = await availableCapitalCents(tx, tenantId, { initialCapitalCents: wallet?.initialCapitalCents ?? 0, cycleNumber });
   if (principalCents > availableCents) {
@@ -411,7 +419,7 @@ export async function manageProposalLinkAction(mode: string): Promise<ActionResu
   return result;
 }
 
-// Política de crédito: os limites que o dono define. Campo vazio = sem limite. Por enquanto os valores só ficam guardados (não bloqueiam operações).
+// Política de crédito: os limites que o dono define. Campo vazio = sem limite. O máximo de principal a emprestar já bloqueia nova operação (insertOperation); os demais ainda só ficam guardados.
 export async function saveCreditPolicyAction(data: FormData): Promise<ActionResult> {
   const money = (key: string, label: string) => {
     const raw = text(data, key, 40);
@@ -435,16 +443,20 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
   const defaultRate = defaultRaw === "" ? null : parseLoanRateToBps(defaultRaw);
   if (defaultRaw !== "" && (defaultRate === null || defaultRate > 100_000)) return { ok: false, error: "Informe a taxa de juros padrão ao mês em %, por exemplo 30." };
   if (defaultRate !== null && rate !== null && defaultRate < rate) return { ok: false, error: "A taxa de juros padrão não pode ser menor que a taxa mínima." };
+  const maxLent = money("maxPrincipalLent", "o máximo de principal a emprestar");
+  if (!maxLent.ok) return maxLent;
+  const reviewRaw = text(data, "maxPrincipalReviewOn", 10);
+  if (reviewRaw !== "" && !isIsoDate(reviewRaw)) return { ok: false, error: "Informe a data de reavaliação do máximo de principal." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     const [before] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate, defaultRateBps: defaultRate };
+    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate, defaultRateBps: defaultRate, maxPrincipalLentCents: maxLent.value, maxPrincipalReviewOn: reviewRaw === "" ? null : reviewRaw };
     await tx.insert(creditPolicies).values({ id: id("pol"), tenantId, ...values, updatedByUserId: session.user.id })
       .onConflictDoUpdate({ target: creditPolicies.tenantId, set: { ...values, updatedByUserId: session.user.id, updatedAt: sql`now()` } });
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
     await recordAdminAudit(tx, session, {
       action: "CREDIT_POLICY_UPDATED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null,
       description: "Política de crédito alterada.",
-      before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps } : null, after: values,
+      before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps, maxPrincipalLentCents: before.maxPrincipalLentCents, maxPrincipalReviewOn: before.maxPrincipalReviewOn } : null, after: values,
     });
     return { ok: true, message: "Política de crédito salva." };
   });

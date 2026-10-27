@@ -337,6 +337,13 @@
       "when": 1793053630031,
       "tag": "0048_pagamento_principal_primeiro",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1793117329435,
+      "tag": "0049_maximo_principal_emprestar",
+      "breakpoints": true
     }
   ]
 }

@@ -1053,3 +1053,24 @@ test("G10. excluir gerente: sem comissão paga apaga (e desvincula clientes e re
   assert.equal(foreign.result?.ok, false);
   assert.equal(await one(`select count(*) from account_manager where id='${gabrielle}'`), 1);
 });
+
+test("G21. máximo de principal a emprestar: com data de reavaliação, trava nova operação acima do máximo e vazio libera", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const create = () => action(ownerCookie, "createOperationAction", { clientId: "c_g_dora", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: TODAY, dueDate: day(30) }, "/");
+  for (const bad of [{ maxPrincipalLent: "0" }, { maxPrincipalLent: "abc" }, { maxPrincipalLent: "1.000,00", maxPrincipalReviewOn: "31/12/2026" }]) assert.equal((await save(bad)).result?.ok, false, JSON.stringify(bad));
+  const before = await tenantHash("ten_roberio");
+  assert.equal((await save({ maxPrincipalLent: "1,00", maxPrincipalReviewOn: day(90) })).result?.ok, true);
+  const row = await admin(`select max_principal_lent_cents m, max_principal_review_on::text d from credit_policy where tenant_id='ten_roberio'`);
+  assert.deepEqual([Number(row[0].m), row[0].d], [100, day(90)]);
+  const blocked = await create();
+  assert.equal(blocked.result?.ok, false);
+  assert.match(blocked.result?.error ?? "", /Máximo de principal a emprestar atingido/);
+  assert.equal(await tenantHash("ten_roberio"), before, "nada foi criado");
+  assert.equal((await save({})).result?.ok, true);
+  assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and max_principal_lent_cents is null and max_principal_review_on is null`), 1, "vazio = sem máximo");
+  const page = await signIn("roberio@teste.local");
+  await page.goto(`${BASE}/?tela=politica-de-credito`);
+  await page.getByLabel("Máximo de principal a emprestar (R$)").waitFor();
+  await page.getByLabel("Reavaliar o máximo em").waitFor();
+});

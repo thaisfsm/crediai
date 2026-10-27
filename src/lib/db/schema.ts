@@ -340,11 +340,15 @@ export const creditPolicies = pgTable("credit_policy", {
   minRateBps: integer("min_rate_bps"),
   // Taxa de juros padrão ao mês (pontos-base com uma casa decimal, 30% = 3000): sugerida na oferta e no simulador. Migração 0044.
   defaultRateBps: numeric("default_rate_bps", { precision: 9, scale: 1, mode: "number" }),
+  // Máximo de principal emprestado ao mesmo tempo (carteira toda) e a data para reavaliar esse máximo. Migração 0049.
+  maxPrincipalLentCents: bigint("max_principal_lent_cents", { mode: "number" }),
+  maxPrincipalReviewOn: date("max_principal_review_on", { mode: "string" }),
   updatedByUserId: text("updated_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("credit_policy_tenant_id_unique").on(table.tenantId),
+  check("credit_policy_max_principal_lent_valid", sql`${table.maxPrincipalLentCents} is null or ${table.maxPrincipalLentCents} > 0`),
   check("credit_policy_values_valid", sql`(${table.maxExposurePerCpfCents} is null or ${table.maxExposurePerCpfCents} > 0) and (${table.maxContractCents} is null or ${table.maxContractCents} > 0) and (${table.maxTermMonths} is null or (${table.maxTermMonths} >= 1 and ${table.maxTermMonths} <= 360)) and (${table.minRateBps} is null or (${table.minRateBps} >= 0 and ${table.minRateBps} <= 100000)) and (${table.defaultRateBps} is null or (${table.defaultRateBps} >= 0 and ${table.defaultRateBps} <= 100000))`),
   ...tenantPolicies("credit_policy", table.tenantId),
 ]).enableRLS();
