@@ -18,7 +18,7 @@ import { calculateDaily, calculateFixedInterest, calculateInstallments, calculat
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
-import { impliedRateBps } from "@/lib/credit/engine";
+import { impliedRateBps, offerSummary } from "@/lib/credit/engine";
 import { capacityIndicator, reviewOf } from "@/lib/credit/reviews";
 import { DateField } from "./date-field";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
@@ -1883,7 +1883,23 @@ function ProposalOfferBox({ proposal, defaultRateBps, busy, run }: { proposal: T
 
 // Esteira de crédito: as 7 fases em colunas; cada proposta avança ou volta uma fase por vez.
 export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: TenantPortfolio; onChanged: () => void }) {
-  const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, onChanged);
+  const defaultRateText = portfolio.creditPolicy.defaultRateBps === null ? "" : String(portfolio.creditPolicy.defaultRateBps / 100).replace(".", ",");
+  const [newRequested, setNewRequested] = useState("");
+  const [newTerm, setNewTerm] = useState("");
+  const [newRate, setNewRate] = useState(defaultRateText);
+  const [newInstallment, setNewInstallment] = useState("");
+  // Taxa, valor solicitado e prazo calculam a parcela; ao negociar a parcela direto, a taxa passa a ser a equivalente.
+  const recalcInstallment = (requestedText: string, termText: string, rateText: string) => {
+    const requested = parseMoneyToCents(requestedText);
+    const term = /^\d{1,3}$/.test(termText.trim()) ? Number(termText) : null;
+    const rateBps = parseLoanRateToBps(rateText);
+    if (requested === null || requested <= 0 || term === null || term < 1 || rateBps === null) return;
+    setNewInstallment(centsToInput(offerSummary(requested, term, rateBps).installmentCents));
+  };
+  const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, (text) => {
+    setNewRequested(""); setNewTerm(""); setNewRate(defaultRateText); setNewInstallment("");
+    onChanged();
+  });
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1926,9 +1942,14 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
         <form className="form-grid form-grid-inline" onSubmit={onSubmit}>
           <label className="field"><span>Nome completo</span><input name="applicantName" required maxLength={120} /></label>
           <label className="field"><span>CPF</span><input name="cpf" inputMode="numeric" required maxLength={14} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
-          <label className="field"><span>Valor solicitado (R$)</span><MoneyInput name="requested" placeholder="5.000,00" required /></label>
-          <label className="field"><span>Prazo (meses)</span><input name="termMonths" inputMode="numeric" required maxLength={3} /></label>
-          <label className="field"><span>Valor da parcela (R$)</span><MoneyInput name="installment" placeholder="Opcional" /></label>
+          <label className="field"><span>Valor solicitado (R$)</span><MoneyInput name="requested" placeholder="5.000,00" required value={newRequested} onChange={(event) => { setNewRequested(event.target.value); recalcInstallment(event.target.value, newTerm, newRate); }} /></label>
+          <label className="field"><span>Prazo (meses)</span><input name="termMonths" inputMode="numeric" required maxLength={3} value={newTerm} onChange={(event) => { setNewTerm(event.target.value); recalcInstallment(newRequested, event.target.value, newRate); }} /></label>
+          <label className="field"><span>Taxa de juros (% ao mês)</span><input name="rate" inputMode="decimal" placeholder="30" value={newRate} onChange={(event) => { setNewRate(event.target.value); recalcInstallment(newRequested, newTerm, event.target.value); }} /></label>
+          <label className="field"><span>Valor da parcela (R$)</span><MoneyInput name="installment" placeholder="Calculado pela taxa" value={newInstallment} onChange={(event) => {
+            setNewInstallment(event.target.value);
+            const requested = parseMoneyToCents(newRequested), installment = parseMoneyToCents(event.target.value), term = /^\d{1,3}$/.test(newTerm.trim()) ? Number(newTerm) : null;
+            if (requested && requested > 0 && installment && installment > 0 && term && term >= 1) setNewRate(String(impliedRateBps(requested, installment, term) / 100).replace(".", ","));
+          }} /></label>
           <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} /></label>
           <label className="field"><span>Telefone</span><input name="phone" inputMode="tel" maxLength={16} onChange={(event) => { event.currentTarget.value = maskPhone(event.currentTarget.value); }} /></label>
           <div className="form-actions"><button className="primary-button" disabled={pending}><Icon name="plus" size={16} /> {pending ? "Salvando…" : "Cadastrar proposta"}</button></div>
