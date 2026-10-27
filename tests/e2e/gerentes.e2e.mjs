@@ -550,6 +550,12 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   const principals = (await ownerPage.getByRole("region", { name: "Composição do principal emprestado" }).locator("tbody tr td:nth-child(3)").allInnerTexts()).map((text) => Number(text.replace(/[^\d,]/g, "").replace(",", ".")));
   assert.ok(principals.length >= 2, "pelo menos duas operações para conferir a ordem");
   assert.deepEqual(principals, [...principals].sort((a, b) => b - a), "do maior para o menor principal");
+  await ownerPage.goto(BASE);
+  await ownerPage.getByLabel(/^Juros previstos, ver operações/).click();
+  await ownerPage.getByRole("region", { name: "Composição dos juros previstos" }).waitFor();
+  const interests = (await ownerPage.getByRole("region", { name: "Composição dos juros previstos" }).locator("tbody tr td:nth-child(5)").allInnerTexts()).map((text) => Number(text.replace(/[^\d,]/g, "").replace(",", ".")));
+  assert.ok(interests.length >= 2, "pelo menos duas operações com juros a receber");
+  assert.deepEqual(interests, [...interests].sort((a, b) => b - a), "do maior para o menor juros a receber");
   assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [proposalId, "  "])).result?.ok, false, "motivo obrigatório");
   assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [proposalId, "Renda insuficiente"])).result?.ok, true);
   assert.equal(await one(`select status from credit_proposal where id='${proposalId}'`), "REJECTED");

@@ -1737,8 +1737,8 @@ export type OperationsFocus = "lent" | "interest" | null;
 function FocusPanel({ focus, portfolio, onClear }: { focus: Exclude<OperationsFocus, null>; portfolio: TenantPortfolio; onClear: () => void }) {
   const lent = focus === "lent";
   const rows = portfolio.operations.filter((operation) => operation.status === "OPEN" && (lent ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0));
-  // Do maior para o menor principal (empate: maior principal a receber).
-  if (lent) rows.sort((a, b) => b.principalCents - a.principalCents || b.principalRemainingCents - a.principalRemainingCents);
+  // Maior para o menor: principal (empate: maior principal a receber) ou juros a receber.
+  rows.sort(lent ? (a, b) => b.principalCents - a.principalCents || b.principalRemainingCents - a.principalRemainingCents : (a, b) => b.interestRemainingCents - a.interestRemainingCents);
   const total = lent ? portfolio.summary.lentCents : portfolio.summary.expectedInterestCents;
   return (
     <section className="panel table-panel focus-panel" aria-label={lent ? "Composição do principal emprestado" : "Composição dos juros previstos"}>
@@ -2095,9 +2095,10 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   // Ordem definida no servidor pela próxima obrigação em aberto (compareByNextOpenDue); o filtro mantém a ordem.
   const byId = new Map(portfolio.operations.map((operation) => [operation.id, operation]));
   const ordered = portfolio.operationOrder.flatMap((id) => byId.get(id) ?? []);
-  // Vindo do cartão "Principal emprestado": maior principal primeiro (empate: maior principal a receber; o resto mantém a ordem do servidor).
+  // Vindo dos cartões "Principal emprestado" (maior principal) e "Juros previstos" (maior juros a receber) primeiro (empate: maior principal a receber; o resto mantém a ordem do servidor).
   const focused = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
   if (focus === "lent") focused.sort((a, b) => b.principalCents - a.principalCents || b.principalRemainingCents - a.principalRemainingCents);
+  else if (focus === "interest") focused.sort((a, b) => b.interestRemainingCents - a.interestRemainingCents);
   // Filtro por cliente (nome sem acento, CPF, telefone, e-mail) ou código da operação; só esconde linhas, nada é recalculado.
   const [clientFilter, setClientFilter] = useState("");
   // Situação: ativas por padrão (quitadas poluem a busca do dia a dia); Todos inclui quitadas, renegociadas e canceladas.
