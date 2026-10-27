@@ -1545,7 +1545,7 @@ function DeleteOperationButton({ operation, onChanged }: { operation: OperationV
           {hasPayments ? (
             <p><strong>Esta operação tem histórico financeiro:</strong> {formatMoney(operation.paidCents)} em {operation.payments.length} pagamento{operation.payments.length === 1 ? "" : "s"} registrado{operation.payments.length === 1 ? "" : "s"}. Para não apagar dinheiro que entrou de verdade, ela não pode ser excluída.</p>
           ) : (
-            <><p>Sem pagamentos registrados. A operação deixa de aparecer em Operações, Cobranças e no Dashboard e sai de Capital emprestado, Total a receber e Juros previstos.</p>
+            <><p>Sem pagamentos registrados. A operação deixa de aparecer em Operações, Cobranças e no Dashboard e sai de Principal emprestado, Total a receber e Juros previstos.</p>
               <p>Os <strong>{formatMoney(operation.principalCents)}</strong> voltam para o capital disponível. O histórico do capital registra a exclusão. O cliente continua cadastrado.</p></>
           )}
         </ConfirmDialog>
@@ -1739,13 +1739,13 @@ function FocusPanel({ focus, portfolio, onClear }: { focus: Exclude<OperationsFo
   const rows = portfolio.operations.filter((operation) => operation.status === "OPEN" && (lent ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0));
   const total = lent ? portfolio.summary.lentCents : portfolio.summary.expectedInterestCents;
   return (
-    <section className="panel table-panel focus-panel" aria-label={lent ? "Composição do capital emprestado" : "Composição dos juros previstos"}>
+    <section className="panel table-panel focus-panel" aria-label={lent ? "Composição do principal emprestado" : "Composição dos juros previstos"}>
       <div className="panel-header">
-        <div><div className="panel-title-row"><h2>{lent ? "Capital emprestado" : "Juros previstos"}: {formatMoney(total)}</h2></div>
+        <div><div className="panel-title-row"><h2>{lent ? "Principal emprestado" : "Juros previstos"}: {formatMoney(total)}</h2></div>
           <p><strong>Este valor vem destas operações.</strong> {lent ? "Principal que ainda não voltou para a carteira, nas operações em aberto abaixo." : "Juros que ainda faltam receber nas operações em aberto abaixo. Juros já recebidos não entram aqui."}</p></div>
         <button className="outline-button" onClick={onClear}>Ver todas as operações</button>
       </div>
-      {rows.length === 0 ? <EmptyPanel icon="wallet" text={lent ? "Nenhum capital emprestado no momento." : "Nenhum juro previsto no momento."} /> : (
+      {rows.length === 0 ? <EmptyPanel icon="wallet" text={lent ? "Nenhum principal emprestado no momento." : "Nenhum juro previsto no momento."} /> : (
         <div className="table-scroll"><table className="data-table">
           <thead><tr><th>Cliente</th><th>Operação</th>{lent ? <><th>Principal</th><th>Principal recebido</th><th>Principal a receber</th></> : <><th>Juros da operação</th><th>Juros recebidos</th><th>Juros a receber</th></>}<th>Vencimento</th><th>Situação</th></tr></thead>
           <tbody>{rows.map((operation) => (

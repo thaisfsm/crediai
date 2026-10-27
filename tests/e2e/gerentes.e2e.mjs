@@ -166,7 +166,7 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   assert.match((await manager.locator(".metric-featured").innerText()).replace(/\s+/g, " "), /Caixa disponível/);
   let text = await flat();
   assert.match(text, /Prevista R\$ 17,50/);
-  assert.match(text, /Capital emprestado/);
+  assert.match(text, /Principal emprestado/);
   assert.ok(!/Capital disponível|Contas a pagar|Investidores|Financeiro|Configurações|Nova operação/.test(text), "nada do caixa nem de cadastros do dono");
   // Menu: só as telas dela.
   const menu = (await manager.locator(".side-nav").innerText()).replace(/\s+/g, " ");

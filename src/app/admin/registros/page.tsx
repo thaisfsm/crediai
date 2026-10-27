@@ -66,7 +66,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             <Stat label="Usuários" value={totals.users} hint={`${totals.superAdmins} MASTER`} />
             <Stat label="Clientes" value={totals.clients} />
             <Stat label="Operações" value={totals.operations} hint={`${totals.openOperations} em aberto`} />
-            {/* Soma bruta do principal de todas as operações (inclui as quitadas). Não é o "Capital emprestado" do dashboard e da Central, que é o principal ainda em aberto. */}
+            {/* Soma bruta do principal de todas as operações (inclui as quitadas). Não é o "Principal emprestado" do dashboard e da Central, que é o principal ainda em aberto. */}
             <Stat label="Principal contratado (todas as operações)" value={formatMoney(totals.lentCents)} hint="inclui operações quitadas" />
             <Stat label="Pagamentos recebidos" value={formatMoney(totals.receivedCents)} hint={`${totals.payments} pagamentos`} />
             <Stat label="Carteiras" value={totals.wallets} />
