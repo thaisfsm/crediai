@@ -2344,6 +2344,27 @@ export function PaymentsPage({ portfolio }: { portfolio: TenantPortfolio }) {
   );
 }
 
+// "Recebido hoje" do Dashboard: os mesmos pagamentos que formam o número do cartão (paidAt = hoje), por operação.
+export function PaymentsTodayPage({ portfolio, onAll }: { portfolio: TenantPortfolio; onAll: () => void }) {
+  const rows = portfolio.operations.flatMap((operation) => operation.payments.filter((payment) => payment.paidAt === portfolio.today).map((payment) => ({ operation, payment })))
+    .sort((a, b) => b.payment.amountCents - a.payment.amountCents || a.operation.clientName.localeCompare(b.operation.clientName, "pt-BR"));
+  const total = rows.reduce((sum, row) => sum + row.payment.amountCents, 0);
+  return (
+    <div className="workspace-page">
+      <PageHeading eyebrow="CREDIAI · PAGAMENTOS" title="Recebido hoje" description={`${formatDate(portfolio.today)} · ${plural(rows.length, "pagamento", "pagamentos")} · ${formatMoney(total)}.`} />
+      <section className="panel table-panel" aria-label="Pagamentos recebidos hoje">
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Recebido hoje: {formatMoney(total)}</h2></div><p>Este valor vem destes pagamentos, do maior para o menor.</p></div><button className="outline-button" onClick={onAll}>Ver todos os pagamentos</button></div>
+        {rows.length === 0 ? <EmptyPanel icon="receipt" text="Nenhum pagamento recebido hoje." /> : (
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Cliente</th><th>Operação</th><th>Valor</th><th>Principal</th><th>Juros</th><th>Observação</th></tr></thead>
+            <tbody>{rows.map(({ operation, payment }) => <tr key={payment.id}><td data-label="Cliente"><strong>{operation.clientName}</strong></td><td data-label="Operação">#{operation.code}</td><td data-label="Valor"><strong>{formatMoney(payment.amountCents)}</strong></td><td data-label="Principal">{formatMoney(payment.principalCents)}</td><td data-label="Juros">{formatMoney(payment.interestCents)}</td><td data-label="Observação">{payment.notes || "—"}</td></tr>)}</tbody>
+          </table></div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export type ChargesView = ChargeFilter | "Em aberto";
 
 export function ChargesPage({ portfolio, onChanged, initialFilter = "Em aberto", readOnly = false }: { portfolio: TenantPortfolio; onChanged: () => void; initialFilter?: ChargesView; readOnly?: boolean }) {

@@ -556,6 +556,14 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   const interests = (await ownerPage.getByRole("region", { name: "Composição dos juros previstos" }).locator("tbody tr td:nth-child(5)").allInnerTexts()).map((text) => Number(text.replace(/[^\d,]/g, "").replace(",", ".")));
   assert.ok(interests.length >= 2, "pelo menos duas operações com juros a receber");
   assert.deepEqual(interests, [...interests].sort((a, b) => b - a), "do maior para o menor juros a receber");
+  // "Recebido hoje" abre a lista dos pagamentos do dia, com o mesmo total do cartão.
+  await ownerPage.goto(BASE);
+  const receivedCard = ownerPage.getByRole("region", { name: "Contas a receber" }).locator(".payables-kpi", { hasText: "Recebido hoje" });
+  const receivedValue = (await receivedCard.locator("strong").innerText()).trim();
+  await receivedCard.click();
+  const todayPanel = ownerPage.getByRole("region", { name: "Pagamentos recebidos hoje" });
+  await todayPanel.waitFor();
+  assert.equal((await todayPanel.getByRole("heading", { level: 2 }).innerText()).replace(/\s/g, " "), `Recebido hoje: ${receivedValue}`.replace(/\s/g, " "));
   assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [proposalId, "  "])).result?.ok, false, "motivo obrigatório");
   assert.equal((await actionArgs(ownerCookie, "rejectCreditProposalAction", [proposalId, "Renda insuficiente"])).result?.ok, true);
   assert.equal(await one(`select status from credit_proposal where id='${proposalId}'`), "REJECTED");
