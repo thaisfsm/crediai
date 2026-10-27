@@ -29,7 +29,7 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
         <Kpi label="Receita mensal contratada" value={formatMoney(kpis.monthlyRevenueCents)} hint={`Soma dos valores contratados${kpis.courtesy ? ` · ${kpis.courtesy} em cortesia` : ""} · em teste: ${formatMoney(kpis.trialRevenueCents)} pelo preço padrão`} tone="green" />
         <Kpi label="Clientes finais" value={kpis.finalClients} hint={`${kpis.activeFinalClients} ativos nas carteiras`} />
         <Kpi label="Operações abertas" value={kpis.openOperations} hint={kpis.overdueOperations ? `${kpis.overdueOperations} em atraso` : "Nenhuma em atraso"} tone={kpis.overdueOperations ? "red" : undefined} />
-        <Kpi label="Capital emprestado" value={formatMoney(kpis.lentCents)} hint="Principal ainda não devolvido" />
+        <Kpi label="Principal emprestado" value={formatMoney(kpis.lentCents)} hint="Principal ainda não devolvido" />
         <Kpi label="Total a receber" value={formatMoney(kpis.receivableCents)} hint="Saldo das operações abertas" />
         <Kpi label="Juros previstos" value={formatMoney(kpis.expectedInterestCents)} hint="Ainda não recebidos" tone="amber" />
         <Kpi label="Recebido" value={formatMoney(kpis.receivedCents)} hint={`${formatMoney(kpis.receivedInterestCents)} de juros`} tone="green" />
@@ -70,7 +70,7 @@ export default async function AdminCentralPage({ searchParams }: { searchParams:
             <option value="">Todos</option>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan.name, plan.priceInCents, true)}</option>)}
           </select></label>
           <label><span>Ordenar por</span><select name="ordem" defaultValue={filters.ordem}>
-            <option value="nome">Nome</option><option value="emprestado">Capital emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option><option value="vencimento">Próximo vencimento</option>
+            <option value="nome">Nome</option><option value="emprestado">Principal emprestado</option><option value="clientes">Quantidade de clientes</option><option value="atividade">Atividade recente</option><option value="vencimento">Próximo vencimento</option>
           </select></label>
           <button className="central-secondary">Aplicar</button>
         </form>

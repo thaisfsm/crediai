@@ -84,7 +84,7 @@ export default async function SaasClientPage({ params }: { params: Promise<{ id:
         <header className="central-panel-head"><div><h2>Carteira</h2><p>Ciclo {client.cycleNumber} da carteira deste cliente SaaS, com o mesmo cálculo que ele vê no dashboard.{client.needsInitialCapital ? " O capital inicial ainda não foi informado." : ""}</p></div></header>
         <div className="central-kpis central-kpis-3">
           <Kpi label="Capital disponível" value={formatMoney(money.availableCents)} hint={`Capital investido ${formatMoney(detail.investedCents)}`} tone="cyan" />
-          <Kpi label="Capital emprestado" value={formatMoney(money.lentCents)} hint="Principal ainda não devolvido" />
+          <Kpi label="Principal emprestado" value={formatMoney(money.lentCents)} hint="Principal ainda não devolvido" />
           <Kpi label="Total a receber" value={formatMoney(money.receivableCents)} hint="Principal + juros em aberto" />
           <Kpi label="Juros previstos" value={formatMoney(money.expectedInterestCents)} hint="Ainda não recebidos" tone="amber" />
           <Kpi label="Juros recebidos" value={formatMoney(money.receivedInterestCents)} tone="green" />
