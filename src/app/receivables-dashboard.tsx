@@ -10,11 +10,11 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 type Tone = "amber" | "red" | "cyan" | "green";
 
 // Card no padrão do painel Contas a pagar. Os que levam à tela Cobranças abrem já no filtro certo.
-function ReceivableKpi({ label, value, caption, tone, alert, filter, onOpen }: { label: string; value: string; caption: string; tone: Tone | "blue"; alert?: boolean; filter?: ChargesView; onOpen: (filter: ChargesView) => void }) {
+function ReceivableKpi({ label, value, caption, tone, alert, filter, href = "/?tela=cobrancas", onOpen }: { label: string; value: string; caption: string; tone: Tone | "blue"; alert?: boolean; filter?: ChargesView | "Pagamentos de hoje"; href?: string; onOpen: (filter: ChargesView | "Pagamentos de hoje") => void }) {
   const className = `payables-kpi payables-kpi-${tone}${alert ? " payables-kpi-alert" : ""}`;
   if (!filter) return <div className={className}><span>{label}</span><strong>{value}</strong><small>{caption}</small></div>;
   return (
-    <Link prefetch={false} href="/?tela=cobrancas" className={className} onClick={(event) => { event.preventDefault(); onOpen(filter); }}>
+    <Link prefetch={false} href={href} className={className} onClick={(event) => { event.preventDefault(); onOpen(filter); }}>
       <span>{label}</span><strong>{value}</strong><small>{caption}</small>
     </Link>
   );
@@ -33,7 +33,8 @@ function Row({ row, late }: { row: ReceivableRow; late: boolean }) {
 // Contas a receber no Dashboard: calculado no servidor, das mesmas operações em aberto da tela Cobranças
 // (receivablesOverview). Atrasado, a receber hoje, próximos 7 dias e recebido hoje ficam separados; o total é o saldo
 // em aberto da carteira (principal + juros que ainda faltam), o mesmo do card "Total a receber".
-export function ReceivablesDashboard({ overview, onOpen }: { overview: ReceivablesOverview; onOpen: (filter: ChargesView) => void }) {
+export function ReceivablesDashboard({ overview, onOpen, onOpenPayments }: { overview: ReceivablesOverview; onOpen: (filter: ChargesView) => void; onOpenPayments?: () => void }) {
+  const open = (filter: ChargesView | "Pagamentos de hoje") => (filter === "Pagamentos de hoje" ? onOpenPayments?.() : onOpen(filter));
   return (
     <section className="panel payables-dashboard" aria-label="Contas a receber">
       <div className="panel-header">
@@ -41,14 +42,14 @@ export function ReceivablesDashboard({ overview, onOpen }: { overview: Receivabl
         <Link prefetch={false} className="outline-button" href="/?tela=cobrancas" onClick={(event) => { event.preventDefault(); onOpen("Em aberto"); }}>Abrir Cobranças <Icon name="arrow" size={14} /></Link>
       </div>
       <div className="payables-kpis" role="group" aria-label="Indicadores das contas a receber">
-        <ReceivableKpi tone="red" alert={overview.overdueCount > 0} label="Em atraso" value={formatMoney(overview.overdueCents)} filter="Em atraso" onOpen={onOpen}
+        <ReceivableKpi tone="red" alert={overview.overdueCount > 0} label="Em atraso" value={formatMoney(overview.overdueCents)} filter="Em atraso" onOpen={open}
           caption={overview.overdueCount ? `${plural(overview.overdueCount, "operação", "operações")} em atraso` : "Nada em atraso"} />
-        <ReceivableKpi tone="amber" label="A receber hoje" value={formatMoney(overview.dueTodayCents)} filter="Hoje" onOpen={onOpen}
+        <ReceivableKpi tone="amber" label="A receber hoje" value={formatMoney(overview.dueTodayCents)} filter="Hoje" onOpen={open}
           caption={overview.dueTodayCount ? plural(overview.dueTodayCount, "operação vence hoje", "operações vencem hoje") : "Nada vence hoje"} />
-        <ReceivableKpi tone="cyan" label="Próximos 7 dias" value={formatMoney(overview.upcomingCents)} filter="Próximas" onOpen={onOpen}
+        <ReceivableKpi tone="cyan" label="Próximos 7 dias" value={formatMoney(overview.upcomingCents)} filter="Próximas" onOpen={open}
           caption={`${plural(overview.upcomingCount, "operação", "operações")} até ${formatDate(overview.upcomingUntil)}`} />
-        <ReceivableKpi tone="green" label="Recebido hoje" value={formatMoney(overview.receivedTodayCents)} onOpen={onOpen} caption={plural(overview.receivedTodayCount, "pagamento", "pagamentos")} />
-        <ReceivableKpi tone="blue" label="Total a receber" value={formatMoney(overview.totalCents)} filter="Em aberto" onOpen={onOpen}
+        <ReceivableKpi tone="green" label="Recebido hoje" value={formatMoney(overview.receivedTodayCents)} filter={onOpenPayments ? "Pagamentos de hoje" : undefined} href="/?tela=pagamentos" onOpen={open} caption={plural(overview.receivedTodayCount, "pagamento", "pagamentos")} />
+        <ReceivableKpi tone="blue" label="Total a receber" value={formatMoney(overview.totalCents)} filter="Em aberto" onOpen={open}
           caption={`${plural(overview.openCount, "operação ativa", "operações ativas")} · principal + juros`} />
       </div>
       {overview.overdueCount > 0 && (

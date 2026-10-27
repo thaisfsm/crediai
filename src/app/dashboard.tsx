@@ -20,7 +20,7 @@ import type { ManagerPanel } from "@/lib/managers/queries";
 import { MANAGER_REQUIRED_FIELDS } from "@/lib/managers/required-fields";
 import { registerClientAction, submitOperationRequestAction } from "./gerente/actions";
 import { ManagerCommissionPage } from "./gerente/commission-page";
-import { ApprovalsOverview, ApprovalsPage, CapitalPage, CreditPolicyPage, CreditPipelinePage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
+import { ApprovalsOverview, ApprovalsPage, CapitalPage, CreditPolicyPage, CreditPipelinePage, ChargesPage, ClientsPage, OperationsPage, PaymentsPage, PaymentsTodayPage, ReportsPage, SettingsPage, WalletSetup, type ChargesView, type OperationsFocus } from "./portfolio-pages";
 
 const chargeFilters: ChargeFilter[] = ["Hoje", "Amanhã", "Próximas", "Em atraso", "Histórico"];
 const chargeHeadings: Record<ChargeFilter, { heading: string; description: string; totalLabel: string; empty: string }> = {
@@ -177,7 +177,9 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
   const [chargesView, setChargesView] = useState<ChargesView>("Em aberto");
   // Cada clique no menu abre a tela do início (por exemplo, Clientes volta para a lista, saindo da página de um cliente).
   const [visit, setVisit] = useState(0);
-  const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView; clientId?: string } = {}) => {
+  const [paymentsToday, setPaymentsToday] = useState(false);
+  const navigate = (label: NavKey, options: { focus?: OperationsFocus; charges?: ChargesView; clientId?: string; paymentsToday?: boolean } = {}) => {
+    setPaymentsToday(options.paymentsToday ?? false);
     setOpenClientId(options.clientId ?? null);
     setVisit((count) => count + 1);
     setOperationsFocus(options.focus ?? null);
@@ -274,7 +276,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               )}
               {!readOnly && <ApprovalsOverview portfolio={portfolio} onOpen={() => navigate("Aprovações")} />}
               {payables && <PayablesDashboard overview={payables} availableCents={summary.availableCents} />}
-              <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} />
+              <ReceivablesDashboard overview={receivablesOverview(portfolio.operations, portfolio.today, summary.receivableCents)} onOpen={(filter) => navigate("Cobranças", { charges: filter })} onOpenPayments={() => navigate("Pagamentos", { paymentsToday: true })} />
 
               {!readOnly && <section className="intelligence-panel" aria-label="Resumo inteligente da carteira">
                 <div className="intelligence-orb"><Icon name="sparkles" size={21} /></div>
@@ -346,7 +348,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
           ) : active === "Política de crédito" ? (
             <CreditPolicyPage portfolio={portfolio} onChanged={refresh} />
           ) : active === "Pagamentos" ? (
-            <PaymentsPage portfolio={portfolio} />
+            paymentsToday ? <PaymentsTodayPage portfolio={portfolio} onAll={() => navigate("Pagamentos")} /> : <PaymentsPage portfolio={portfolio} />
           ) : active === "Cobranças" ? (
             <ChargesPage key={chargesView} portfolio={portfolio} onChanged={refresh} initialFilter={chargesView} readOnly={readOnly} />
           ) : active === "Renegociação" ? (
