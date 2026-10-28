@@ -1141,3 +1141,25 @@ test("G24. reavaliação do máximo: avisa no sino quando a data chega e, repeti
   assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and max_principal_review_on is null`), 1);
   assert.equal((await save({})).result?.ok, true);
 });
+
+test("G25. limite para cliente novo: trava o primeiro empréstimo acima do limite; quem já tem operação segue as outras regras", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const create = (clientId, principal) => action(ownerCookie, "createOperationAction", { clientId, modality: "SINGLE", frequency: "MONTHLY", principal, rate: "10", loanDate: TODAY, dueDate: day(30) }, "/");
+  await admin(`insert into client (id, tenant_id, name, document, phone) values ('c_g_nova','ten_roberio','Nova Fictícia','98765432100','11999990009')`);
+  try {
+    assert.equal((await save({ maxNewClient: "abc" })).result?.ok, false);
+    assert.equal((await save({ maxNewClient: "2.000,00" })).result?.ok, true);
+    assert.equal(await one(`select max_new_client_cents from credit_policy where tenant_id='ten_roberio'`), 200000);
+    const blocked = await create("c_g_nova", "3.000,00");
+    assert.equal(blocked.result?.ok, false);
+    assert.match(blocked.result?.error ?? "", /Cliente novo: o primeiro empréstimo é limitado a/);
+    const known = await create("c_g_dora", "3.000,00");
+    assert.doesNotMatch(known.result?.error ?? "", /Cliente novo/, "quem já tem operação não cai no limite de cliente novo");
+    assert.equal((await save({})).result?.ok, true);
+    assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and max_new_client_cents is null`), 1, "vazio = sem limite");
+    assert.doesNotMatch((await create("c_g_nova", "3.000,00")).result?.error ?? "", /Cliente novo/);
+  } finally {
+    await admin(`delete from client where id='c_g_nova'`);
+  }
+});

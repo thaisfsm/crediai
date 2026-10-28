@@ -1,4 +1,4 @@
-export type EnginePolicy = { maxExposurePerCpfCents: number | null; maxTermMonths: number | null; maxContractCents: number | null; minRateBps: number | null };
+export type EnginePolicy = { maxExposurePerCpfCents: number | null; maxTermMonths: number | null; maxContractCents: number | null; minRateBps: number | null; maxNewClientCents?: number | null };
 export type EngineRule = { key: string; label: string; status: "PASS" | "FAIL" | "LATER"; detail: string };
 export type EngineResult = { rules: EngineRule[]; passed: boolean };
 
@@ -21,7 +21,7 @@ export function offerSummary(offerCents: number, termMonths: number, rateBps: nu
 
 // Motor de crédito: confere a proposta contra os limites da Política de crédito. Limite vazio = sem limite (a regra passa).
 // Exposição = principal das operações em aberto do mesmo CPF + o valor pedido. A taxa mínima só vale na oferta (fase 6), quando a taxa é definida.
-export function evaluateProposal(proposal: { requestedCents: number; termMonths: number; rateBps?: number | null }, policy: EnginePolicy, openExposureCents: number): EngineResult {
+export function evaluateProposal(proposal: { requestedCents: number; termMonths: number; rateBps?: number | null }, policy: EnginePolicy, openExposureCents: number, isNewClient = false): EngineResult {
   const limit = (value: number | null, passes: boolean, label: string, ok: string, bad: string): EngineRule =>
     value === null ? { key: label, label, status: "PASS", detail: "Sem limite definido." } : { key: label, label, status: passes ? "PASS" : "FAIL", detail: passes ? ok : bad };
   const totalExposure = openExposureCents + proposal.requestedCents;
@@ -35,6 +35,12 @@ export function evaluateProposal(proposal: { requestedCents: number; termMonths:
       `Em aberto ${money(openExposureCents)} + pedido ${money(proposal.requestedCents)} = ${money(totalExposure)}, acima de ${money(policy.maxExposurePerCpfCents ?? 0)}.`),
     minRateRule(policy.minRateBps, proposal.rateBps ?? null),
   ];
+  // Cliente novo (sem nenhuma operação anterior): o primeiro empréstimo respeita o limite próprio da política.
+  if (isNewClient && policy.maxNewClientCents != null) {
+    const passes = proposal.requestedCents <= policy.maxNewClientCents;
+    rules.push({ key: "Limite para cliente novo", label: "Limite para cliente novo", status: passes ? "PASS" : "FAIL",
+      detail: `${money(proposal.requestedCents)} ${passes ? "dentro" : "acima"} do limite de ${money(policy.maxNewClientCents)} para o primeiro empréstimo.` });
+  }
   return { rules, passed: rules.every((rule) => rule.status !== "FAIL") };
 }
 
