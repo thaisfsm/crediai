@@ -12,6 +12,7 @@ import { searchPortfolio, type SearchResult } from "@/lib/finance/search";
 import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { RenegotiationPage } from "./renegotiation-page";
+import { DelinquencyPage } from "./delinquency-page";
 import { PayablesDashboard } from "./payables-dashboard";
 import { ReceivablesDashboard } from "./receivables-dashboard";
 import { receivablesOverview } from "@/lib/finance/receivables";
@@ -357,6 +358,8 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
             <RenegotiationPage portfolio={portfolio} />
           ) : active === "Relatórios" ? (
             <ReportsPage portfolio={portfolio} onChanged={refresh} />
+          ) : active === "Gestão de inadimplência" ? (
+            <DelinquencyPage portfolio={portfolio} onOpenClient={(clientId) => navigate("Clientes", { clientId })} />
           ) : (
             // Todas as áreas do menu já têm tela própria; Configurações é a última.
             <SettingsPage portfolio={portfolio} onChanged={refresh} />

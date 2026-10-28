@@ -7,7 +7,7 @@ import { authClient } from "@/lib/auth-client";
 import { Icon, type IconName } from "./ui-icon";
 
 // Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro, /contas-a-pagar).
-export type NavKey = "Visão geral" | "Comissão" | "Capital" | "Clientes" | "Operações" | "Aprovações" | "Esteira de Crédito" | "Política de crédito" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações";
+export type NavKey = "Visão geral" | "Comissão" | "Capital" | "Clientes" | "Operações" | "Aprovações" | "Esteira de Crédito" | "Política de crédito" | "Pagamentos" | "Cobranças" | "Renegociação" | "Relatórios" | "Configurações" | "Gestão de inadimplência";
 export type NavLabel = NavKey | "Investidores" | "Financeiro" | "Contas a pagar" | "Gerentes";
 // Itens do menu que são páginas próprias (com endereço e dados do servidor), não telas do dashboard.
 const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investidores", Financeiro: "/financeiro", "Contas a pagar": "/contas-a-pagar", Gerentes: "/gerentes" };
@@ -18,6 +18,7 @@ const PAGE_ROUTES: Partial<Record<NavLabel, string>> = { Investidores: "/investi
 export const NAV_SLUGS: Record<NavKey, string> = {
   "Visão geral": "visao-geral", Comissão: "comissao", Capital: "capital", Clientes: "clientes", Operações: "operacoes", Aprovações: "aprovacoes", "Política de crédito": "politica-de-credito", "Esteira de Crédito": "esteira-de-credito",
   Pagamentos: "pagamentos", Cobranças: "cobrancas", Renegociação: "renegociacao", Relatórios: "relatorios", Configurações: "configuracoes",
+  "Gestão de inadimplência": "gestao-de-inadimplencia",
 };
 export function navKeyFromSlug(slug: string | undefined): NavKey {
   return (Object.keys(NAV_SLUGS) as NavKey[]).find((key) => NAV_SLUGS[key] === slug) ?? "Visão geral";
@@ -34,6 +35,7 @@ const managerNavGroups: { title: string; items: { label: NavLabel; icon: IconNam
 
 const navGroups: { title: string; items: { label: NavLabel; icon: IconName }[] }[] = [
   { title: "VISÃO DA CARTEIRA", items: [{ label: "Visão geral", icon: "grid" }, { label: "Capital", icon: "dollar" }, { label: "Clientes", icon: "users" }, { label: "Operações", icon: "wallet" }, { label: "Aprovações", icon: "check" }, { label: "Esteira de Crédito", icon: "sparkles" }, { label: "Financeiro", icon: "trend" }, { label: "Contas a pagar", icon: "file" }, { label: "Investidores", icon: "briefcase" }, { label: "Gerentes", icon: "users" }] },
+  { title: "DASHBOARD", items: [{ label: "Gestão de inadimplência", icon: "alert" }] },
   { title: "ACOMPANHAMENTO", items: [{ label: "Pagamentos", icon: "receipt" }, { label: "Cobranças", icon: "calendar" }, { label: "Renegociação", icon: "sparkles" }, { label: "Relatórios", icon: "chart" }] },
   { title: "PREFERÊNCIAS", items: [{ label: "Política de crédito", icon: "shield" }, { label: "Configurações", icon: "settings" }] },
 ];

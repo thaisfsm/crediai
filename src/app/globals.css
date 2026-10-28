@@ -1345,3 +1345,14 @@ button { color:inherit; }
 .request-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .request-actions input { min-width: 200px; }
 .request-subtitle { margin: 16px 0 8px; font-size: 14px; }
+
+/* Dashboard → Gestão de inadimplência: faixas de atraso clicáveis; 91+ dias em PDD (prejuízo). */
+.delinquency-bands { margin: 14px 0; }
+.delinquency-title { margin: 0 0 10px; font-size: 14px; }
+.delinquency-band { width: 100%; font: inherit; text-align: left; }
+.delinquency-band .metric-icon { color: var(--warning); }
+.delinquency-note { display: block; margin-top: 6px; color: var(--muted-strong); font-size: 10px; }
+.delinquency-band-pdd { border-color: rgba(255,119,125,.35); }
+.delinquency-band-pdd .metric-icon, .delinquency-band-pdd .delinquency-note { color: var(--danger); }
+.delinquency-band-active { border-color: rgba(79,230,222,.65); box-shadow: 0 0 0 1px rgba(79,230,222,.4), 0 8px 26px rgba(0,0,0,.2); }
+.delinquency-pdd-tag { padding: 2px 7px; border: 1px solid rgba(255,119,125,.45); border-radius: 999px; color: var(--danger); font-size: 10px; font-weight: 650; }
