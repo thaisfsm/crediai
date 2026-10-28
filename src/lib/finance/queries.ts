@@ -8,7 +8,7 @@ import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
 import { buildPortfolio, summarizeOperations, type ClientRecord, type DeferralRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
-import { toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
+import { loadTenantPortfolios, toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
 // para que o isolamento não dependa só do papel de banco usado em produção.
@@ -104,15 +104,26 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
     return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, knownCpfs, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
+// Quanto ainda cabe de principal a desembolsar: o mesmo cálculo da trava da Nova operação (máximo da política menos o principal emprestado da carteira toda).
+function principalRoom(maxCents: number | null, lentCents: number) {
+  return { maxCents, lentCents, availableCents: maxCents === null ? null : Math.max(maxCents - lentCents, 0) };
+}
+
 export async function loadTenantPortfolio() {
   const data = await withTenantContext((tx, { tenantId }) => readPortfolioData(tx, tenantId, null));
-  return assemblePortfolio(data, false);
+  const portfolio = assemblePortfolio(data, false);
+  return { ...portfolio, principalRoom: principalRoom(data.policyRow?.maxPrincipalLentCents ?? null, portfolio.summary.lentCents) };
 }
 
 // Carteira só dos clientes de um gerente de contas (mesmas telas e contas do dono, sem capital, sem cadastro bancário, notas nem documentos).
 export async function loadManagerPortfolio() {
-  const { data, managerName } = await withManagerContext(async (tx, { tenantId, manager }) => ({ data: await readPortfolioData(tx, tenantId, { managerId: manager.id }), managerName: manager.name }));
-  return { portfolio: assemblePortfolio(data, true), managerName };
+  const { data, managerName, room } = await withManagerContext(async (tx, { tenantId, manager }) => {
+    // Só o número "máximo disponível para desembolsar" da carteira toda é compartilhado com o gerente; nenhum outro dado da carteira.
+    const [policy] = await tx.select({ max: creditPolicies.maxPrincipalLentCents }).from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+    const lentCents = (await loadTenantPortfolios(tx, [tenantId])).get(tenantId)?.summary.lentCents ?? 0;
+    return { data: await readPortfolioData(tx, tenantId, { managerId: manager.id }), managerName: manager.name, room: principalRoom(policy?.max ?? null, lentCents) };
+  });
+  return { portfolio: { ...assemblePortfolio(data, true), principalRoom: room }, managerName };
 }
 
 type PortfolioData = Awaited<ReturnType<typeof readPortfolioData>>;
