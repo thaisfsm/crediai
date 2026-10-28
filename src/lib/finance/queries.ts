@@ -193,7 +193,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null,
       maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null,
       defaultRateBps: data.policyRow?.defaultRateBps ?? null,
-      maxPrincipalLentCents: data.policyRow?.maxPrincipalLentCents ?? null, maxPrincipalReviewOn: data.policyRow?.maxPrincipalReviewOn ?? null,
+      maxPrincipalLentCents: data.policyRow?.maxPrincipalLentCents ?? null, maxPrincipalReviewOn: data.policyRow?.maxPrincipalReviewOn ?? null, maxPrincipalReviewMonthly: data.policyRow?.maxPrincipalReviewMonthly ?? false,
     },
     operationRequests: data.requestRows.map((row): OperationRequestView => ({
       id: row.id, managerName: row.managerName, clientId: row.clientId, clientName: row.clientName, principalCents: row.principalCents, totalCents: row.totalCents, loanDate: row.loanDate,

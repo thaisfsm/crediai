@@ -163,7 +163,9 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
   const { counts } = summary;
   const visibleCharges = charges[chargeFilter];
   const chargeCopy = chargeHeadings[chargeFilter];
+  const reviewDue = !readOnly && portfolio.creditPolicy.maxPrincipalReviewOn !== null && portfolio.creditPolicy.maxPrincipalReviewOn <= portfolio.today;
   const pendingCharges = counts.dueToday + counts.overdue;
+  const bellCount = pendingCharges + (reviewDue ? 1 : 0);
   const series = chart[period];
   const periodStart = series.values[0] ?? 0;
   const periodEnd = series.values.at(-1) ?? 0;
@@ -221,8 +223,8 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               </div>}
             </div>
             <div className="top-action-wrap">
-              <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{pendingCharges > 0 && <span className="notification-dot" />}</button>
-              {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{pendingCharges > 0 ? `${pendingCharges} pendente${pendingCharges > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p><button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
+              <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{bellCount > 0 && <span className="notification-dot" />}</button>
+              {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{bellCount > 0 ? `${bellCount} pendente${bellCount > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p>{reviewDue && <p><i className="notification-mark amber-mark" /><strong>Reavaliar o máximo de principal:</strong> a data chegou. <button type="button" className="auth-link-button" onClick={() => { setNotificationsOpen(false); navigate("Política de crédito"); }}>Abrir política de crédito</button></p>}<button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
             </div>
             <span className="topbar-divider" />
             {/* Único lugar com o usuário e o "Sair". */}

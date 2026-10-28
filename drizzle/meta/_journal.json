@@ -351,6 +351,13 @@
       "when": 1793141090497,
       "tag": "0050_vencimentos_combinados",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793205269139,
+      "tag": "0051_repetir_reavaliacao_maximo",
+      "breakpoints": true
     }
   ]
 }

@@ -1120,3 +1120,24 @@ test("G23. nova proposta: parcela informada primeiro, depois valor e prazo, calc
   await form.getByLabel("Prazo (meses)").fill("4");
   assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^550,00$/);
 });
+
+test("G24. reavaliação do máximo: avisa no sino quando a data chega e, repetindo todo mês, avança um mês", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const done = () => action(ownerCookie, "completeMaxPrincipalReviewAction", {}, "/");
+  assert.equal((await save({ maxPrincipalLent: "50.000,00", maxPrincipalReviewOn: day(-3), maxPrincipalReviewMonthly: "on" })).result?.ok, true);
+  assert.equal(await one(`select max_principal_review_monthly::int from credit_policy where tenant_id='ten_roberio'`), 1);
+  const page = await signIn("roberio@teste.local");
+  await page.goto(BASE);
+  await page.getByLabel("Notificações").click();
+  await page.getByText("Reavaliar o máximo de principal").waitFor();
+  assert.equal((await done()).result?.ok, true);
+  const next = await one(`select to_char(max_principal_review_on,'YYYY-MM-DD') from credit_policy where tenant_id='ten_roberio'`);
+  assert.ok(next > TODAY, `próxima data no futuro: ${next}`);
+  // Sem repetição: marcar como reavaliada limpa a data.
+  assert.equal((await save({ maxPrincipalLent: "50.000,00", maxPrincipalReviewOn: day(-1) })).result?.ok, true);
+  assert.equal(await one(`select max_principal_review_monthly::int from credit_policy where tenant_id='ten_roberio'`), 0);
+  assert.equal((await done()).result?.ok, true);
+  assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and max_principal_review_on is null`), 1);
+  assert.equal((await save({})).result?.ok, true);
+});

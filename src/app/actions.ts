@@ -15,6 +15,7 @@ import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { ACCENTED, CLIENT_SEARCH_LIMIT, PLAIN, clientSearchTerms, type ClientSearchResult } from "@/lib/finance/client-search";
+import { addMonthsIso } from "@/lib/investors/rules";
 import { formatCpf, isValidCpf, formatDate, formatMoney, isIsoDate, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps, todayIso } from "@/lib/finance/format";
 import { loadManagerCash } from "@/lib/managers/queries";
 import { operationTermsFromForm } from "@/lib/finance/operation-terms";
@@ -449,7 +450,7 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
   if (reviewRaw !== "" && !isIsoDate(reviewRaw)) return { ok: false, error: "Informe a data de reavaliação do máximo de principal." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     const [before] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate, defaultRateBps: defaultRate, maxPrincipalLentCents: maxLent.value, maxPrincipalReviewOn: reviewRaw === "" ? null : reviewRaw };
+    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minRateBps: rate, defaultRateBps: defaultRate, maxPrincipalLentCents: maxLent.value, maxPrincipalReviewOn: reviewRaw === "" ? null : reviewRaw, maxPrincipalReviewMonthly: reviewRaw !== "" && text(data, "maxPrincipalReviewMonthly", 4) === "on" };
     await tx.insert(creditPolicies).values({ id: id("pol"), tenantId, ...values, updatedByUserId: session.user.id })
       .onConflictDoUpdate({ target: creditPolicies.tenantId, set: { ...values, updatedByUserId: session.user.id, updatedAt: sql`now()` } });
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
@@ -459,6 +460,31 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
       before: before ? { maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps, maxPrincipalLentCents: before.maxPrincipalLentCents, maxPrincipalReviewOn: before.maxPrincipalReviewOn } : null, after: values,
     });
     return { ok: true, message: "Política de crédito salva." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Reavaliação do máximo de principal feita: com a repetição mensal ligada a próxima data avança de mês em mês (sempre para o futuro); sem ela, a data é limpa.
+export async function completeMaxPrincipalReviewAction(): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [policy] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId)).for("update");
+    if (!policy?.maxPrincipalReviewOn) return { ok: false, error: "Não há data de reavaliação cadastrada." };
+    const today = todayIso();
+    let next: string | null = null;
+    if (policy.maxPrincipalReviewMonthly) {
+      let step = 1;
+      next = addMonthsIso(policy.maxPrincipalReviewOn, step);
+      while (next <= today) next = addMonthsIso(policy.maxPrincipalReviewOn, ++step);
+    }
+    await tx.update(creditPolicies).set({ maxPrincipalReviewOn: next, updatedByUserId: session.user.id, updatedAt: sql`now()` }).where(eq(creditPolicies.tenantId, tenantId));
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
+    await recordAdminAudit(tx, session, {
+      action: "CREDIT_POLICY_UPDATED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null,
+      description: next ? `Reavaliação do máximo de principal feita; próxima em ${formatDate(next)}.` : "Reavaliação do máximo de principal feita.",
+      before: { maxPrincipalReviewOn: policy.maxPrincipalReviewOn }, after: { maxPrincipalReviewOn: next },
+    });
+    return { ok: true, message: next ? `Reavaliação registrada. Próxima em ${formatDate(next)}.` : "Reavaliação registrada." };
   });
   if (result.ok) revalidatePath("/");
   return result;
