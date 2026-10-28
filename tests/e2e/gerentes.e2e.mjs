@@ -547,9 +547,9 @@ test("G15. esteira de crédito: cadastra proposta, avança e volta de fase, repr
   await ownerPage.goto(BASE);
   await ownerPage.getByLabel("Principal emprestado, ver operações que compõem o valor").click();
   await ownerPage.getByRole("region", { name: "Composição do principal emprestado" }).waitFor();
-  const principals = (await ownerPage.getByRole("region", { name: "Composição do principal emprestado" }).locator("tbody tr td:nth-child(3)").allInnerTexts()).map((text) => Number(text.replace(/[^\d,]/g, "").replace(",", ".")));
+  const principals = (await ownerPage.getByRole("region", { name: "Composição do principal emprestado" }).locator("tbody tr td:nth-child(5)").allInnerTexts()).map((text) => Number(text.replace(/[^\d,]/g, "").replace(",", ".")));
   assert.ok(principals.length >= 2, "pelo menos duas operações para conferir a ordem");
-  assert.deepEqual(principals, [...principals].sort((a, b) => b - a), "do maior para o menor principal");
+  assert.deepEqual(principals, [...principals].sort((a, b) => b - a), "do maior para o menor principal a receber");
   await ownerPage.goto(BASE);
   await ownerPage.getByLabel(/^Juros previstos, ver operações/).click();
   await ownerPage.getByRole("region", { name: "Composição dos juros previstos" }).waitFor();
