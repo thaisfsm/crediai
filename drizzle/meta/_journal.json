@@ -358,6 +358,13 @@
       "when": 1793205269139,
       "tag": "0051_repetir_reavaliacao_maximo",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1793210624775,
+      "tag": "0052_limite_cliente_novo",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "credit_policy" ADD COLUMN "max_new_client_cents" bigint;--> statement-breakpoint
+ALTER TABLE "credit_policy" ADD CONSTRAINT "credit_policy_max_new_client_valid" CHECK ("credit_policy"."max_new_client_cents" is null or "credit_policy"."max_new_client_cents" > 0);
