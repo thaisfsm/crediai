@@ -270,6 +270,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                 <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></Link>
               </section>
               )}
+              <PrincipalRoomStrip room={portfolio.principalRoom} onOpenPolicy={readOnly ? undefined : () => navigate("Política de crédito")} />
 
               {manager && portfolio.clients.length === 0 && (
               <section className="manager-banner" aria-label="Aviso">
@@ -367,5 +368,22 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
         </div>
       </main>
     </div>
+  );
+}
+
+// Máximo de principal ainda disponível para desembolsar (máximo da política menos o principal emprestado); o gerente vê só este número.
+function PrincipalRoomStrip({ room, onOpenPolicy }: { room: { maxCents: number | null; lentCents: number; availableCents: number | null }; onOpenPolicy?: () => void }) {
+  const limited = room.maxCents !== null && room.availableCents !== null;
+  return (
+    <section className="panel" aria-label="Máximo disponível para desembolsar" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", margin: "13px 0" }}>
+      <div>
+        <div className="eyebrow">Máximo disponível para desembolsar</div>
+        <strong style={{ fontSize: 22 }}>{limited ? <Money cents={room.availableCents ?? 0} /> : "Sem máximo definido"}</strong>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>
+        {limited ? <>Máximo <Money cents={room.maxCents ?? 0} /> − principal emprestado <Money cents={room.lentCents} />{room.lentCents > (room.maxCents ?? 0) ? " (acima do máximo: nenhuma operação nova cabe)" : ""}</> : onOpenPolicy ? "Defina o máximo de principal a emprestar na Política de crédito." : ""}
+      </p>
+      {onOpenPolicy && <button type="button" className="secondary-button" onClick={onOpenPolicy}>Política de crédito</button>}
+    </section>
   );
 }

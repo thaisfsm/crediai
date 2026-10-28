@@ -881,6 +881,31 @@ test("G20. transferir um contrato para a gerente: vale só para o contrato, comi
   await assert.rejects(admin(`update loan_operation set account_manager_bps = 500 where id='op_g_dora_open'`), /loan_operation_account_manager_bps_valid/);
 });
 
+test("G27. máximo disponível para desembolsar: o dono e a gerente veem o mesmo número; sem máximo mostra aviso claro", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const ownerPage = await signIn("roberio@teste.local");
+  const strip = (page) => page.getByRole("region", { name: "Máximo disponível para desembolsar" });
+  const text = async (page) => (await strip(page).innerText()).replace(/\s+/g, " ");
+  assert.equal((await save({ maxPrincipalLent: "10.000,00", maxPrincipalReviewOn: day(30) })).result?.ok, true);
+  await ownerPage.goto(BASE);
+  await strip(ownerPage).waitFor();
+  const lent = Number(await one(`select coalesce(sum(principal_cents),0) from loan_operation where tenant_id='ten_roberio' and status='OPEN'`));
+  const ownerText = await text(ownerPage);
+  assert.match(ownerText, /Máximo R\$ 10\.000,00/);
+  assert.match(ownerText, /Máximo disponível para desembolsar R\$ \d/);
+  await manager.goto(`${BASE}/gerente`);
+  await strip(manager).waitFor();
+  const managerText = await text(manager);
+  assert.equal(managerText.replace(/Política de crédito/g, "").trim(), ownerText.replace(/Política de crédito/g, "").trim(), "mesmo número para o dono e a gerente");
+  assert.ok(!/Política de crédito/.test(managerText), "a gerente não ganha atalho da política");
+  assert.ok(lent >= 0);
+  assert.equal((await save({})).result?.ok, true);
+  await manager.goto(`${BASE}/gerente`);
+  await strip(manager).waitFor();
+  assert.match(await text(manager), /Sem máximo definido/);
+});
+
 test("G4. celular: painel sem rolagem lateral", async () => {
   const phone = await signIn(EMAIL, NEW_PASSWORD, { width: 390, height: 844 });
   await phone.goto(`${BASE}/gerente`);
@@ -1180,3 +1205,4 @@ test("G26. valor mínimo de contrato: recusa principal abaixo do mínimo e vazio
   assert.equal((await save({})).result?.ok, true);
   assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and min_contract_cents is null`), 1, "vazio = sem mínimo");
 });
+
