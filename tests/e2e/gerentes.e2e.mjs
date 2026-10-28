@@ -1091,3 +1091,17 @@ test("G21. máximo de principal a emprestar: com data de reavaliação, trava no
   await form.getByRole("button", { name: "Voltar às datas da regra" }).click();
   assert.equal(await form.getByLabel("Vencimento da parcela 2").inputValue(), "2026-11-21");
 });
+
+test("G22. pagamento único: taxa calcula a parcela e a parcela calcula a taxa", async () => {
+  const page = await signIn("roberio@teste.local");
+  await page.goto(`${BASE}/?tela=operacoes`);
+  const form = page.getByRole("region", { name: "Nova operação" });
+  await form.getByRole("radio", { name: "Pagamento único" }).click();
+  await form.getByLabel("Valor principal (R$)").fill("1.000,00");
+  await form.getByLabel("Taxa de juros ao mês (%)").fill("30");
+  assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^1\.?300,00$/);
+  await form.getByLabel("Valor da parcela").fill("1.250,00");
+  assert.equal(await form.getByLabel("Taxa de juros ao mês (%)").inputValue(), "25");
+  await form.getByLabel("Taxa de juros ao mês (%)").fill("10");
+  assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^1\.?100,00$/);
+});

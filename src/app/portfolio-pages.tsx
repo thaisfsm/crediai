@@ -1038,9 +1038,12 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
   const [dueDate, setDueDate] = useState("");
   // Parcelado: vencimentos ajustados à mão na prévia (posição da parcela → data). Sem ajuste, valem as datas da regra.
   const [customDates, setCustomDates] = useState<Record<number, string>>({});
+  // Pagamento único: a taxa calcula o valor da parcela e, digitando a parcela, a taxa equivalente aparece (juros simples).
+  const [singleInstallment, setSingleInstallment] = useState("");
+  const [singleDriver, setSingleDriver] = useState<"rate" | "installment">("rate");
   const [resetKey, setResetKey] = useState(0);
   const { pending, feedback, onSubmit } = useFormAction(request ?? createOperationAction, () => {
-    setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setCustomDates({}); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
+    setPrincipal(""); setRate(""); setSingleInstallment(""); setSingleDriver("rate"); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setCustomDates({}); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
   const daily = single && frequency === "DAILY";
@@ -1053,6 +1056,26 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
   const validDue = /^\d{4}-\d{2}-\d{2}$/.test(dueDate);
   const fixed = single && frequency === "BIWEEKLY" && interestMode === "FIXED";
   const interestAmountCents = parseMoneyToCents(interestAmount);
+  // Parcela de uma operação de pagamento único: principal + juros do período (quitação); no diário, cada pagamento diário.
+  const dayInput = (value: string) => (/^\d+$/.test(value.trim()) && Number(value) >= 1 && Number(value) <= 365 ? Number(value) : null);
+  const installmentFromRate = (principalText: string, rateText: string, daysText: string) => {
+    const cents = parseMoneyToCents(principalText), bps = parseLoanRateToBps(rateText);
+    if (cents === null || cents <= 0 || bps === null) return "";
+    if (daily) { const count = dayInput(daysText); return count === null ? "" : centsToInput(calculateDaily({ principalCents: cents, interestRateBps: bps, days: count, loanDate: portfolio.today }).installmentCents); }
+    return centsToInput(calculateOperation({ principalCents: cents, interestRateBps: bps }).totalCents);
+  };
+  const rateFromInstallment = (principalText: string, installmentText: string, daysText: string) => {
+    const cents = parseMoneyToCents(principalText), parcel = parseMoneyToCents(installmentText), count = daily ? dayInput(daysText) : 1;
+    if (cents === null || cents <= 0 || parcel === null || parcel <= 0 || count === null) return "";
+    const interest = parcel * count - cents;
+    return interest < 0 ? "" : String(Math.round((interest * 100000) / cents) / 1000).replace(".", ",");
+  };
+  const syncSingle = (next: { principal?: string; rate?: string; days?: string; installment?: string }, driver: "rate" | "installment") => {
+    const values = { principal, rate, days, installment: singleInstallment, ...next };
+    setSingleDriver(driver);
+    if (driver === "rate") setSingleInstallment(installmentFromRate(values.principal, values.rate, values.days));
+    else setRate(rateFromInstallment(values.principal, values.installment, values.days));
+  };
   const recurringPreview = !single || daily || principalCents === null || principalCents <= 0 ? null
     : fixed ? (interestAmountCents !== null && interestAmountCents > 0 ? calculateFixedInterest({ principalCents, interestCents: interestAmountCents }) : null)
     : rateBps !== null ? calculateOperation({ principalCents, interestRateBps: rateBps }) : null;
@@ -1131,14 +1154,15 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
         <label className="field field-wide"><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
         {single ? (
           <>
-            <label className="field"><span>Valor principal (R$)</span><MoneyInput name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => setPrincipal(event.target.value)} required /></label>
+            <label className="field"><span>Valor principal (R$)</span><MoneyInput name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => { setPrincipal(event.target.value); syncSingle({ principal: event.target.value }, singleDriver); }} required /></label>
             {fixed
               ? <label className="field"><span>Juros por quinzena (R$)</span><MoneyInput name="interestAmount" inputMode="decimal" placeholder="1.200,00" value={interestAmount} onChange={(event) => setInterestAmount(event.target.value)} required /></label>
-              : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => setRate(event.target.value)} required /></label>}
+              : <label className="field"><span>{daily ? "Taxa de juros do período (%)" : frequency === "BIWEEKLY" ? "Taxa de juros por quinzena (%)" : "Taxa de juros ao mês (%)"}</span><input name="rate" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "15" : "30"} value={rate} onChange={(event) => { setRate(event.target.value); syncSingle({ rate: event.target.value }, "rate"); }} required /></label>}
+            {!fixed && <label className="field"><span>{daily ? "Valor de cada pagamento (R$)" : "Valor da parcela (R$)"}</span><MoneyInput inputMode="decimal" aria-label={daily ? "Valor de cada pagamento" : "Valor da parcela"} placeholder="Calculado pela taxa" value={singleInstallment} onChange={(event) => { setSingleInstallment(event.target.value); syncSingle({ installment: event.target.value }, "installment"); }} /><small>{daily ? "Informe a taxa ou o valor de cada pagamento: um calcula o outro." : "Principal + juros do período. Informe a taxa ou a parcela: um calcula o outro."}</small></label>}
             <DateField label="Data do empréstimo" name="loanDate" defaultValue={loanDate} onChange={setLoanDate} required />
             {daily ? (
               <>
-                <label className="field"><span>Quantidade de dias (pagamentos)</span><input name="days" inputMode="numeric" placeholder="30" value={days} onChange={(event) => setDays(event.target.value.replace(/\D/g, "").slice(0, 3))} required /></label>
+                <label className="field"><span>Quantidade de dias (pagamentos)</span><input name="days" inputMode="numeric" placeholder="30" value={days} onChange={(event) => { const value = event.target.value.replace(/\D/g, "").slice(0, 3); setDays(value); syncSingle({ days: value }, singleDriver); }} required /></label>
                 <DateField label="Primeiro vencimento" name="firstDueDate" defaultValue={firstDue} onChange={setFirstDue} min={validLoan ? loanDate : undefined} required />
               </>
             ) : <DateField label={frequency === "BIWEEKLY" ? "Primeiro vencimento" : "Vencimento"} name="dueDate" defaultValue={dueDate} onChange={setDueDate} required />}
