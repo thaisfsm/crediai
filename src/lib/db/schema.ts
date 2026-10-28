@@ -347,11 +347,14 @@ export const creditPolicies = pgTable("credit_policy", {
   maxPrincipalReviewMonthly: boolean("max_principal_review_monthly").notNull().default(false),
   // Limite do primeiro empréstimo de cliente novo (sem nenhuma operação anterior). Migração 0052.
   maxNewClientCents: bigint("max_new_client_cents", { mode: "number" }),
+  // Valor mínimo de principal por contrato (operação). Migração 0053.
+  minContractCents: bigint("min_contract_cents", { mode: "number" }),
   updatedByUserId: text("updated_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("credit_policy_tenant_id_unique").on(table.tenantId),
+  check("credit_policy_min_contract_valid", sql`${table.minContractCents} is null or ${table.minContractCents} > 0`),
   check("credit_policy_max_new_client_valid", sql`${table.maxNewClientCents} is null or ${table.maxNewClientCents} > 0`),
   check("credit_policy_max_principal_lent_valid", sql`${table.maxPrincipalLentCents} is null or ${table.maxPrincipalLentCents} > 0`),
   check("credit_policy_values_valid", sql`(${table.maxExposurePerCpfCents} is null or ${table.maxExposurePerCpfCents} > 0) and (${table.maxContractCents} is null or ${table.maxContractCents} > 0) and (${table.maxTermMonths} is null or (${table.maxTermMonths} >= 1 and ${table.maxTermMonths} <= 360)) and (${table.minRateBps} is null or (${table.minRateBps} >= 0 and ${table.minRateBps} <= 100000)) and (${table.defaultRateBps} is null or (${table.defaultRateBps} >= 0 and ${table.defaultRateBps} <= 100000))`),

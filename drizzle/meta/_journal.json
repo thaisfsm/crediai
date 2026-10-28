@@ -365,6 +365,13 @@
       "when": 1793210624775,
       "tag": "0052_limite_cliente_novo",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1793212480637,
+      "tag": "0053_valor_minimo_contrato",
+      "breakpoints": true
     }
   ]
 }

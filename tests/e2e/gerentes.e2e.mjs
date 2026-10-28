@@ -1163,3 +1163,20 @@ test("G25. limite para cliente novo: trava o primeiro empréstimo acima do limit
     await admin(`delete from client where id='c_g_nova'`);
   }
 });
+
+test("G26. valor mínimo de contrato: recusa principal abaixo do mínimo e vazio libera", async () => {
+  const ownerCookie = await apiLogin("roberio@teste.local");
+  const save = (fields) => action(ownerCookie, "saveCreditPolicyAction", fields, "/");
+  const create = (principal) => action(ownerCookie, "createOperationAction", { clientId: "c_g_dora", modality: "SINGLE", frequency: "MONTHLY", principal, rate: "10", loanDate: TODAY, dueDate: day(30) }, "/");
+  assert.equal((await save({ minContract: "0" })).result?.ok, false);
+  assert.equal((await save({ minContract: "100,00" })).result?.ok, true);
+  assert.equal(await one(`select min_contract_cents from credit_policy where tenant_id='ten_roberio'`), 10000);
+  const before = await tenantHash("ten_roberio");
+  const low = await create("70,00");
+  assert.equal(low.result?.ok, false);
+  assert.match(low.result?.error ?? "", /Valor mínimo de contrato: R\$\s?100,00/);
+  assert.equal(await tenantHash("ten_roberio"), before, "nada foi criado");
+  assert.doesNotMatch((await create("100,00")).result?.error ?? "", /Valor mínimo de contrato/, "no mínimo exato passa");
+  assert.equal((await save({})).result?.ok, true);
+  assert.equal(await one(`select count(*) from credit_policy where tenant_id='ten_roberio' and min_contract_cents is null`), 1, "vazio = sem mínimo");
+});

@@ -177,7 +177,11 @@ async function insertOperation(tx: TenantTransaction, tenantId: string, clientId
   const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets)
     .where(eq(wallets.tenantId, tenantId)).for("update");
   // Máximo de principal a emprestar (Política de crédito): o principal ainda emprestado + o desta operação não pode passar dele.
-  const [policy] = await tx.select({ max: creditPolicies.maxPrincipalLentCents, reviewOn: creditPolicies.maxPrincipalReviewOn, newClientMax: creditPolicies.maxNewClientCents }).from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+  const [policy] = await tx.select({ max: creditPolicies.maxPrincipalLentCents, reviewOn: creditPolicies.maxPrincipalReviewOn, newClientMax: creditPolicies.maxNewClientCents, minContract: creditPolicies.minContractCents }).from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
+  // Valor mínimo de contrato (Política de crédito): o principal da operação não pode ficar abaixo dele.
+  if (policy?.minContract != null && principalCents < policy.minContract) {
+    return { ok: false, error: `Valor mínimo de contrato: ${formatMoney(policy.minContract)}. Esta operação tem ${formatMoney(principalCents)}.` };
+  }
   // Limite para cliente novo: o primeiro empréstimo de quem nunca teve operação nesta carteira fica limitado.
   if (policy?.newClientMax != null && principalCents > policy.newClientMax) {
     const [prior] = await tx.select({ id: loanOperations.id }).from(loanOperations).where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.clientId, clientId))).limit(1);
@@ -286,7 +290,7 @@ export async function createCreditProposalAction(data: FormData): Promise<Action
 // direction: "next" avança uma fase, "back" volta uma fase.
 async function policyOf(tx: TenantTransaction, tenantId: string): Promise<EnginePolicy> {
   const [policy] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-  return { maxExposurePerCpfCents: policy?.maxExposurePerCpfCents ?? null, maxTermMonths: policy?.maxTermMonths ?? null, maxContractCents: policy?.maxContractCents ?? null, minRateBps: policy?.minRateBps ?? null, maxNewClientCents: policy?.maxNewClientCents ?? null };
+  return { maxExposurePerCpfCents: policy?.maxExposurePerCpfCents ?? null, maxTermMonths: policy?.maxTermMonths ?? null, maxContractCents: policy?.maxContractCents ?? null, minRateBps: policy?.minRateBps ?? null, maxNewClientCents: policy?.maxNewClientCents ?? null, minContractCents: policy?.minContractCents ?? null };
 }
 
 // Motor de crédito sobre a proposta; com oferta salva, vale a oferta (valor, prazo e taxa aprovados).
@@ -438,6 +442,8 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
   const exposure = money("maxExposurePerCpf", "a exposição máxima por CPF");
   if (!exposure.ok) return exposure;
   const contract = money("maxContract", "o limite por contrato");
+  const minContract = money("minContract", "o valor mínimo de contrato");
+  if (!minContract.ok) return minContract;
   const newClient = money("maxNewClient", "o limite para cliente novo");
   if (!newClient.ok) return newClient;
   if (!contract.ok) return contract;
@@ -458,14 +464,14 @@ export async function saveCreditPolicyAction(data: FormData): Promise<ActionResu
   if (reviewRaw !== "" && !isIsoDate(reviewRaw)) return { ok: false, error: "Informe a data de reavaliação do máximo de principal." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     const [before] = await tx.select().from(creditPolicies).where(eq(creditPolicies.tenantId, tenantId));
-    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, maxNewClientCents: newClient.value, minRateBps: rate, defaultRateBps: defaultRate, maxPrincipalLentCents: maxLent.value, maxPrincipalReviewOn: reviewRaw === "" ? null : reviewRaw, maxPrincipalReviewMonthly: reviewRaw !== "" && text(data, "maxPrincipalReviewMonthly", 4) === "on" };
+    const values = { maxExposurePerCpfCents: exposure.value, maxTermMonths: term, maxContractCents: contract.value, minContractCents: minContract.value, maxNewClientCents: newClient.value, minRateBps: rate, defaultRateBps: defaultRate, maxPrincipalLentCents: maxLent.value, maxPrincipalReviewOn: reviewRaw === "" ? null : reviewRaw, maxPrincipalReviewMonthly: reviewRaw !== "" && text(data, "maxPrincipalReviewMonthly", 4) === "on" };
     await tx.insert(creditPolicies).values({ id: id("pol"), tenantId, ...values, updatedByUserId: session.user.id })
       .onConflictDoUpdate({ target: creditPolicies.tenantId, set: { ...values, updatedByUserId: session.user.id, updatedAt: sql`now()` } });
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
     await recordAdminAudit(tx, session, {
       action: "CREDIT_POLICY_UPDATED", entity: "wallet", entityId: null, tenantId, tenantName: tenant?.name ?? null,
       description: "Política de crédito alterada.",
-      before: before ? { maxNewClientCents: before.maxNewClientCents, maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps, maxPrincipalLentCents: before.maxPrincipalLentCents, maxPrincipalReviewOn: before.maxPrincipalReviewOn } : null, after: values,
+      before: before ? { minContractCents: before.minContractCents, maxNewClientCents: before.maxNewClientCents, maxExposurePerCpfCents: before.maxExposurePerCpfCents, maxTermMonths: before.maxTermMonths, maxContractCents: before.maxContractCents, minRateBps: before.minRateBps, defaultRateBps: before.defaultRateBps, maxPrincipalLentCents: before.maxPrincipalLentCents, maxPrincipalReviewOn: before.maxPrincipalReviewOn } : null, after: values,
     });
     return { ok: true, message: "Política de crédito salva." };
   });
