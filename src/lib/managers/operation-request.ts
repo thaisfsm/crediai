@@ -11,7 +11,7 @@ import { loadManagerCash } from "./queries";
 
 // Pedido de operação da gerente de contas: o mesmo formulário do dono, mas nada entra na carteira nem no capital até o dono aprovar.
 // Só os campos do formulário de operação são guardados (qualquer outro é descartado) e o cliente precisa ser dela.
-const FORM_KEYS = ["clientId", "modality", "frequency", "installmentFrequency", "interestMode", "principal", "interestAmount", "rate", "loanDate", "dueDate", "days", "firstDueDate", "loanAmount", "installment", "term"] as const;
+const FORM_KEYS = ["clientId", "modality", "frequency", "installmentFrequency", "interestMode", "principal", "interestAmount", "rate", "loanDate", "dueDate", "days", "firstDueDate", "loanAmount", "installment", "term", "customDueDates"] as const;
 
 export async function submitOperationRequest(tx: TenantTransaction, tenantId: string, manager: { id: string; name: string }, actor: AuditActor, data: FormData): Promise<CommandResult> {
   const form: Record<string, string> = {};

@@ -1036,9 +1036,11 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
   const [firstDue, setFirstDue] = useState(addDays(portfolio.today, 1));
   const [loanDate, setLoanDate] = useState(portfolio.today);
   const [dueDate, setDueDate] = useState("");
+  // Parcelado: vencimentos ajustados à mão na prévia (posição da parcela → data). Sem ajuste, valem as datas da regra.
+  const [customDates, setCustomDates] = useState<Record<number, string>>({});
   const [resetKey, setResetKey] = useState(0);
   const { pending, feedback, onSubmit } = useFormAction(request ?? createOperationAction, () => {
-    setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
+    setPrincipal(""); setRate(""); setLoanAmount(""); setInstallment(""); setTerm(""); setDays(""); setDueDate(""); setCustomDates({}); setInterestAmount(""); setFirstDue(addDays(portfolio.today, 1)); setLoanDate(portfolio.today); setResetKey((key) => key + 1); onChanged();
   });
   const single = modality === "SINGLE";
   const daily = single && frequency === "DAILY";
@@ -1065,6 +1067,10 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
   const installmentsBelowValue = !single && preview !== null && preview.interestCents < 0;
   // Próximos vencimentos do mensal/quinzenal (renovando pagando só os juros) e do parcelado.
   const upcoming = validDue ? dueDates(single ? frequency : installmentFrequency, dueDate, single ? 3 : Math.min(count ?? 1, 360)) : [];
+  const scheduleDates = single ? upcoming : upcoming.map((date, index) => customDates[index] ?? date);
+  const scheduleEdited = !single && upcoming.some((date, index) => customDates[index] !== undefined && customDates[index] !== date);
+  const scheduleOrderOk = scheduleDates.every((date, index) => /^\d{4}-\d{2}-\d{2}$/.test(date) && (index === 0 || date > scheduleDates[index - 1]) && (!validLoan || date >= loanDate));
+  useEffect(() => { setCustomDates({}); }, [dueDate, installmentFrequency, term, modality]);
   const rows: [string, string][] = !preview ? [] : daily && dailyPreview ? [
     ["Periodicidade", "Diário"], ["Quantidade de pagamentos", String(dailyPreview.installmentCount)],
     ["Valor de cada pagamento", dailyPreview.lastInstallmentCents === dailyPreview.installmentCents ? formatMoney(dailyPreview.installmentCents) : `${formatMoney(dailyPreview.installmentCents)} (o último ${formatMoney(dailyPreview.lastInstallmentCents)})`],
@@ -1078,7 +1084,7 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
     ...(frequency === "BIWEEKLY" && principalCents ? [["Taxa equivalente", `${formatRate(Math.round((recurringPreview.interestCents * 10_000) / principalCents))} por quinzena · ${formatRate(Math.round(monthlyEquivalentRate((recurringPreview.interestCents * 10_000) / principalCents, 15)))} ao mês`] as [string, string]] : []),
   ] : installmentPreview && installmentPreview.interestCents >= 0 ? [
     ["Periodicidade", biweeklyInstallments ? "Quinzenal (parcelas fixas)" : "Mensal (parcelas fixas)"], ["Quantidade de pagamentos", String(count)], ["Valor de cada pagamento", formatMoney(installmentCents ?? 0)],
-    ["Primeiro vencimento", upcoming[0] ? formatDate(upcoming[0]) : "—"], ["Último vencimento", upcoming.length ? formatDate(upcoming[upcoming.length - 1]) : "—"],
+    ["Primeiro vencimento", scheduleDates[0] ? formatDate(scheduleDates[0]) : "—"], ["Último vencimento", scheduleDates.length ? formatDate(scheduleDates[scheduleDates.length - 1]) : "—"],
     ["Juros totais", formatMoney(installmentPreview.interestCents)],
     ["Taxa de juros (simples)", biweeklyInstallments ? `${percent(installmentPreview.monthlyRate)} por quinzena · ${percent(monthlyEquivalentRate(installmentPreview.monthlyRate, 15))} ao mês` : `${percent(installmentPreview.monthlyRate)} ao mês`],
   ] : [];
@@ -1156,14 +1162,17 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
         </div>
         {!single && installmentPreview && installmentPreview.interestCents >= 0 && upcoming.length > 0 && (
           <div className="schedule-preview field-wide" aria-label="Prévia dos vencimentos">
-            <p><strong>Prévia dos vencimentos</strong> · confira as datas e os valores antes de cadastrar.</p>
-            <ol>{upcoming.map((date, index) => <li key={date}><span>Parcela {index + 1}</span><strong>{formatDate(date)}</strong><span>{formatMoney(installmentCents ?? 0)}</span></li>)}</ol>
+            <p><strong>Prévia dos vencimentos</strong> · confira as datas e os valores antes de cadastrar. Se combinou outra data com o cliente, altere na parcela.</p>
+            <ol>{scheduleDates.map((date, index) => <li key={index}><span>Parcela {index + 1}</span><input type="date" className="schedule-date" aria-label={`Vencimento da parcela ${index + 1}`} value={date} min={validLoan ? loanDate : undefined} onChange={(event) => { const value = event.target.value; setCustomDates((current) => ({ ...current, [index]: value })); }} /><span>{formatMoney(installmentCents ?? 0)}</span>{customDates[index] !== undefined && customDates[index] !== upcoming[index] && <small>ajustada (regra: {formatDate(upcoming[index])})</small>}</li>)}</ol>
+            {scheduleEdited && <button type="button" className="outline-button" onClick={() => setCustomDates({})}>Voltar às datas da regra</button>}
+            {scheduleEdited && !scheduleOrderOk && <p className="form-feedback form-feedback-warning">Cada vencimento precisa ser depois do anterior e não pode ser antes da data do empréstimo.</p>}
+            {scheduleEdited && <input type="hidden" name="customDueDates" value={JSON.stringify(scheduleDates)} />}
           </div>
         )}
         {installmentsBelowValue && <p className="form-feedback form-feedback-warning field-wide">As parcelas somam menos que o valor emprestado.</p>}
         {exceedsCash && <p className="form-feedback form-feedback-warning">O valor é maior que o seu caixa disponível ({formatMoney(cashAvailableCents ?? 0)}). Peça ao Fernando para aumentar o caixa.</p>}
         {exceeds && !request && <p className="form-feedback form-feedback-warning">O valor é maior que o capital disponível da carteira ({formatMoney(Math.max(portfolio.summary.availableCents, 0))}).</p>}
-        <div className="form-actions"><button className="primary-button" disabled={pending || exceedsCash}><Icon name="plus" size={16} /> {pending ? "Enviando…" : request ? "Enviar para aprovação" : "Cadastrar operação"}</button></div>
+        <div className="form-actions"><button className="primary-button" disabled={pending || exceedsCash || (scheduleEdited && !scheduleOrderOk)}><Icon name="plus" size={16} /> {pending ? "Enviando…" : request ? "Enviar para aprovação" : "Cadastrar operação"}</button></div>
       </form>
       <Feedback feedback={feedback} />
     </section>

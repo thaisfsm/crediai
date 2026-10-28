@@ -1,0 +1,2 @@
+ALTER TABLE "loan_operation" ADD COLUMN "installment_due_dates" jsonb;--> statement-breakpoint
+ALTER TABLE "loan_operation" ADD CONSTRAINT "loan_operation_installment_due_dates_valid" CHECK ("loan_operation"."installment_due_dates" is null or ("loan_operation"."modality" = 'INSTALLMENT' and jsonb_typeof("loan_operation"."installment_due_dates") = 'array' and jsonb_array_length("loan_operation"."installment_due_dates") = "loan_operation"."installment_count"));
