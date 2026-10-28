@@ -178,7 +178,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       createdAt: row.createdAt.toISOString(), phaseChangedAt: row.phaseChangedAt.toISOString(),
       reviews: data.proposalReviewRows.filter((review) => review.proposalId === row.id).map((review) => ({ phase: review.phase, checks: review.checks, note: review.note, completed: review.completed })),
       offer: row.offerCents === null || row.offerTermMonths === null || row.offerRateBps === null ? null : { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps) },
-      engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0, !data.knownCpfs.has(row.cpf.replace(/\D/g, ""))),
+      engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null, minContractCents: data.policyRow?.minContractCents ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0, !data.knownCpfs.has(row.cpf.replace(/\D/g, ""))),
       installmentCents: row.negotiatedInstallmentCents, acceptedAt: row.acceptedAt?.toISOString() ?? null, acceptedVia: row.acceptedVia,
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
@@ -194,7 +194,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null,
       maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null,
       defaultRateBps: data.policyRow?.defaultRateBps ?? null,
-      maxPrincipalLentCents: data.policyRow?.maxPrincipalLentCents ?? null, maxPrincipalReviewOn: data.policyRow?.maxPrincipalReviewOn ?? null, maxPrincipalReviewMonthly: data.policyRow?.maxPrincipalReviewMonthly ?? false, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null,
+      maxPrincipalLentCents: data.policyRow?.maxPrincipalLentCents ?? null, maxPrincipalReviewOn: data.policyRow?.maxPrincipalReviewOn ?? null, maxPrincipalReviewMonthly: data.policyRow?.maxPrincipalReviewMonthly ?? false, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null, minContractCents: data.policyRow?.minContractCents ?? null,
     },
     operationRequests: data.requestRows.map((row): OperationRequestView => ({
       id: row.id, managerName: row.managerName, clientId: row.clientId, clientName: row.clientName, principalCents: row.principalCents, totalCents: row.totalCents, loanDate: row.loanDate,
