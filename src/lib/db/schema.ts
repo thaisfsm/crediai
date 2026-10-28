@@ -343,6 +343,8 @@ export const creditPolicies = pgTable("credit_policy", {
   // Máximo de principal emprestado ao mesmo tempo (carteira toda) e a data para reavaliar esse máximo. Migração 0049.
   maxPrincipalLentCents: bigint("max_principal_lent_cents", { mode: "number" }),
   maxPrincipalReviewOn: date("max_principal_review_on", { mode: "string" }),
+  // Repete a reavaliação do máximo todo mês: ao marcar como feita, a próxima data avança um mês. Migração 0051.
+  maxPrincipalReviewMonthly: boolean("max_principal_review_monthly").notNull().default(false),
   updatedByUserId: text("updated_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,0 +1,1 @@
+ALTER TABLE "credit_policy" ADD COLUMN "max_principal_review_monthly" boolean DEFAULT false NOT NULL;
