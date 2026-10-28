@@ -1924,7 +1924,19 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
   const [newRate, setNewRate] = useState(defaultRateText);
   const [newInstallment, setNewInstallment] = useState("");
   // Taxa, valor solicitado e prazo calculam a parcela; ao negociar a parcela direto, a taxa passa a ser a equivalente.
+  // Último campo digitado entre taxa e parcela: é ele que manda quando valor ou prazo mudam.
+  const [newDriver, setNewDriver] = useState<"rate" | "installment">("rate");
+  const recalcRateFromInstallment = (requestedText: string, termText: string, installmentText: string) => {
+    const requested = parseMoneyToCents(requestedText), installment = parseMoneyToCents(installmentText), term = /^\d{1,3}$/.test(termText.trim()) ? Number(termText) : null;
+    if (requested && requested > 0 && installment && installment > 0 && term && term >= 1) setNewRate(String(impliedRateBps(requested, installment, term) / 100).replace(".", ","));
+  };
+  const recalcInstallmentFromRate = (requestedText: string, termText: string, rateText: string) => {
+    const requested = parseMoneyToCents(requestedText), term = /^\d{1,3}$/.test(termText.trim()) ? Number(termText) : null, rateBps = parseLoanRateToBps(rateText);
+    if (requested === null || requested <= 0 || term === null || term < 1 || rateBps === null) return;
+    setNewInstallment(centsToInput(offerSummary(requested, term, rateBps).installmentCents));
+  };
   const recalcInstallment = (requestedText: string, termText: string, rateText: string) => {
+    if (newDriver === "installment" || (parseLoanRateToBps(rateText) === null && newInstallment)) return recalcRateFromInstallment(requestedText, termText, newInstallment);
     const requested = parseMoneyToCents(requestedText);
     const term = /^\d{1,3}$/.test(termText.trim()) ? Number(termText) : null;
     const rateBps = parseLoanRateToBps(rateText);
@@ -1932,7 +1944,7 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
     setNewInstallment(centsToInput(offerSummary(requested, term, rateBps).installmentCents));
   };
   const { pending, feedback, onSubmit } = useFormAction(createCreditProposalAction, (text) => {
-    setNewRequested(""); setNewTerm(""); setNewRate(defaultRateText); setNewInstallment("");
+    setNewRequested(""); setNewTerm(""); setNewRate(defaultRateText); setNewInstallment(""); setNewDriver("rate");
     onChanged();
   });
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
@@ -1979,11 +1991,10 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
           <label className="field"><span>CPF</span><input name="cpf" inputMode="numeric" required maxLength={14} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
           <label className="field"><span>Valor solicitado (R$)</span><MoneyInput name="requested" placeholder="5.000,00" required value={newRequested} onChange={(event) => { setNewRequested(event.target.value); recalcInstallment(event.target.value, newTerm, newRate); }} /></label>
           <label className="field"><span>Prazo (meses)</span><input name="termMonths" inputMode="numeric" required maxLength={3} value={newTerm} onChange={(event) => { setNewTerm(event.target.value); recalcInstallment(newRequested, event.target.value, newRate); }} /></label>
-          <label className="field"><span>Taxa de juros (% ao mês)</span><input name="rate" inputMode="decimal" placeholder="30" value={newRate} onChange={(event) => { setNewRate(event.target.value); recalcInstallment(newRequested, newTerm, event.target.value); }} /></label>
+          <label className="field"><span>Taxa de juros (% ao mês)</span><input name="rate" inputMode="decimal" placeholder="30" value={newRate} onChange={(event) => { setNewRate(event.target.value); setNewDriver("rate"); recalcInstallmentFromRate(newRequested, newTerm, event.target.value); }} /></label>
           <label className="field"><span>Valor da parcela (R$)</span><MoneyInput name="installment" placeholder="Calculado pela taxa" value={newInstallment} onChange={(event) => {
-            setNewInstallment(event.target.value);
-            const requested = parseMoneyToCents(newRequested), installment = parseMoneyToCents(event.target.value), term = /^\d{1,3}$/.test(newTerm.trim()) ? Number(newTerm) : null;
-            if (requested && requested > 0 && installment && installment > 0 && term && term >= 1) setNewRate(String(impliedRateBps(requested, installment, term) / 100).replace(".", ","));
+            setNewInstallment(event.target.value); setNewDriver("installment");
+            recalcRateFromInstallment(newRequested, newTerm, event.target.value);
           }} /></label>
           <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} /></label>
           <label className="field"><span>Telefone</span><input name="phone" inputMode="tel" maxLength={16} onChange={(event) => { event.currentTarget.value = maskPhone(event.currentTarget.value); }} /></label>

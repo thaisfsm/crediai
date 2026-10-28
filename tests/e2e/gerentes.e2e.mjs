@@ -1105,3 +1105,18 @@ test("G22. pagamento único: taxa calcula a parcela e a parcela calcula a taxa",
   await form.getByLabel("Taxa de juros ao mês (%)").fill("10");
   assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^1\.?100,00$/);
 });
+
+test("G23. nova proposta: parcela informada primeiro, depois valor e prazo, calcula a taxa", async () => {
+  const page = await signIn("roberio@teste.local");
+  await page.goto(`${BASE}/?tela=esteira-de-credito`);
+  const form = page.getByRole("region", { name: "Nova proposta" });
+  await form.getByLabel("Valor da parcela").fill("600,00");
+  await form.getByLabel("Valor solicitado (R$)").fill("1.000,00");
+  await form.getByLabel("Prazo (meses)").fill("2");
+  await page.waitForTimeout(300);
+  assert.equal(await form.getByLabel("Taxa de juros (% ao mês)").inputValue(), "10");
+  await form.getByLabel("Taxa de juros (% ao mês)").fill("30");
+  assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^800,00$/);
+  await form.getByLabel("Prazo (meses)").fill("4");
+  assert.match(await form.getByLabel("Valor da parcela").inputValue(), /^550,00$/);
+});
