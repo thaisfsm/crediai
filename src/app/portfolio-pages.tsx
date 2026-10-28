@@ -1771,7 +1771,7 @@ function FocusPanel({ focus, portfolio, onClear }: { focus: Exclude<OperationsFo
   const lent = focus === "lent";
   const rows = portfolio.operations.filter((operation) => operation.status === "OPEN" && (lent ? operation.principalRemainingCents > 0 : operation.interestRemainingCents > 0));
   // Maior para o menor: principal (empate: maior principal a receber) ou juros a receber.
-  rows.sort(lent ? (a, b) => b.principalCents - a.principalCents || b.principalRemainingCents - a.principalRemainingCents : (a, b) => b.interestRemainingCents - a.interestRemainingCents);
+  rows.sort(lent ? (a, b) => b.principalRemainingCents - a.principalRemainingCents || b.principalCents - a.principalCents : (a, b) => b.interestRemainingCents - a.interestRemainingCents);
   const total = lent ? portfolio.summary.lentCents : portfolio.summary.expectedInterestCents;
   return (
     <section className="panel table-panel focus-panel" aria-label={lent ? "Composição do principal emprestado" : "Composição dos juros previstos"}>
@@ -2132,7 +2132,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   const ordered = portfolio.operationOrder.flatMap((id) => byId.get(id) ?? []);
   // Vindo dos cartões "Principal emprestado" (maior principal) e "Juros previstos" (maior juros a receber) primeiro (empate: maior principal a receber; o resto mantém a ordem do servidor).
   const focused = ids ? ordered.filter((operation) => ids.has(operation.id)) : ordered;
-  if (focus === "lent") focused.sort((a, b) => b.principalCents - a.principalCents || b.principalRemainingCents - a.principalRemainingCents);
+  if (focus === "lent") focused.sort((a, b) => b.principalRemainingCents - a.principalRemainingCents || b.principalCents - a.principalCents);
   else if (focus === "interest") focused.sort((a, b) => b.interestRemainingCents - a.interestRemainingCents);
   // Filtro por cliente (nome sem acento, CPF, telefone, e-mail) ou código da operação; só esconde linhas, nada é recalculado.
   const [clientFilter, setClientFilter] = useState("");
