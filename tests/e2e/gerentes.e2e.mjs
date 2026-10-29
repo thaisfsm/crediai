@@ -419,6 +419,20 @@ test("G13. caixa da gerente: o dono define, ela vê o disponível e não envia p
   assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /R\$\s*1\.000,00/);
   assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /Caixa combinado R\$\s*3\.000,00/);
   if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-caixa.png`, fullPage: false });
+  // Sem máximo de principal da carteira, o caixa não tem alerta; com o máximo já atingido, fica em alerta explicando que não há capital para emprestar.
+  const cashCard = manager.getByLabel(/Caixa disponível, abrir operações/);
+  assert.equal(await cashCard.getAttribute("data-limit-alert"), null);
+  assert.equal((await action(ownerCookie, "saveCreditPolicyAction", { maxPrincipalLent: "1,00", maxPrincipalReviewOn: day(30) }, "/")).result?.ok, true);
+  await manager.goto(`${BASE}/gerente`);
+  await cashCard.waitFor();
+  assert.equal(await cashCard.getAttribute("data-limit-alert"), "true");
+  assert.match(await cashCard.innerText(), /limite máximo da carteira restringe novos empréstimos/);
+  assert.match(await cashCard.innerText(), /não há capital para emprestar/);
+  assert.match(await cashCard.innerText(), /R\$\s*1\.000,00/, "o caixa combinado continua visível");
+  assert.equal((await action(ownerCookie, "saveCreditPolicyAction", {}, "/")).result?.ok, true);
+  await manager.goto(`${BASE}/gerente`);
+  await cashCard.waitFor();
+  assert.equal(await cashCard.getAttribute("data-limit-alert"), null, "sem máximo, sem alerta");
   // Acima do caixa: recusado; dentro: aceito e o disponível cai (pedido reservado).
   const above = await submit("c_g_ana", "1.500,00");
   assert.equal(above.result?.ok, false);
