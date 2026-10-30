@@ -6,6 +6,7 @@ import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { dayAndMonth, formatMoney, splitMoney } from "@/lib/finance/format";
 import { CHART_VIEWBOX, chartGeometry, type ChartSeries } from "@/lib/finance/chart";
+import { portfolioLimitBlocksCash } from "@/lib/finance/cash-limit";
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { searchPortfolio, type SearchResult } from "@/lib/finance/search";
@@ -167,7 +168,7 @@ export default function Dashboard({ userId, userName, portfolio, payables, isSup
   const chargeCopy = chargeHeadings[chargeFilter];
   const reviewDue = !readOnly && portfolio.creditPolicy.maxPrincipalReviewOn !== null && portfolio.creditPolicy.maxPrincipalReviewOn <= portfolio.today;
   // Gerente: o limite máximo de principal da carteira pode deixar menos espaço que o caixa combinado dela.
-  const cashLimited = Boolean(manager) && portfolio.principalRoom.availableCents !== null && portfolio.principalRoom.availableCents < (manager?.panel.cash.availableCents ?? 0);
+  const cashLimited = Boolean(manager) && portfolioLimitBlocksCash(portfolio.principalRoom.availableCents, manager?.panel.cash.availableCents ?? 0);
   const pendingCharges = counts.dueToday + counts.overdue;
   const bellCount = pendingCharges + (reviewDue ? 1 : 0);
   const series = chart[period];
@@ -274,7 +275,7 @@ export default function Dashboard({ userId, userName, portfolio, payables, isSup
                 <Link prefetch={false} href="/?tela=operacoes" className="metric-card metric-card-clickable" aria-label="Juros previstos, ver operações que compõem o valor" onClick={(event) => { event.preventDefault(); navigate("Operações", { focus: "interest" }); }}><div className="metric-top"><span>Juros previstos</span><span className="metric-icon metric-icon-purple"><Icon name="chart" size={17} /></span></div><div className="metric-value"><Money cents={summary.expectedInterestCents} /></div><div className="metric-foot"><span className="metric-caption">Ainda a receber</span><span className="metric-neutral">Recebidos {formatMoney(summary.receivedInterestCents)}</span></div><MetricSignal variant="violet" /></Link>
               </section>
               )}
-              <PrincipalRoomStrip room={portfolio.principalRoom} onOpenPolicy={readOnly ? undefined : () => navigate("Política de crédito")} />
+              <PrincipalRoomStrip room={portfolio.principalRoom} alert={cashLimited} onOpenPolicy={readOnly ? undefined : () => navigate("Política de crédito")} />
 
               {manager && portfolio.clients.length === 0 && (
               <section className="manager-banner" aria-label="Aviso">
@@ -376,13 +377,15 @@ export default function Dashboard({ userId, userName, portfolio, payables, isSup
 }
 
 // Máximo de principal ainda disponível para desembolsar (máximo da política menos o principal emprestado); o gerente vê só este número.
-function PrincipalRoomStrip({ room, onOpenPolicy }: { room: { maxCents: number | null; lentCents: number; availableCents: number | null }; onOpenPolicy?: () => void }) {
+// Com alerta (painel da gerente), fica em vermelho e explica que o máximo da carteira trava novos empréstimos.
+function PrincipalRoomStrip({ room, alert = false, onOpenPolicy }: { room: { maxCents: number | null; lentCents: number; availableCents: number | null }; alert?: boolean; onOpenPolicy?: () => void }) {
   const limited = room.maxCents !== null && room.availableCents !== null;
   return (
-    <section className="panel" aria-label="Máximo disponível para desembolsar" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", margin: "13px 0" }}>
+    <section className="panel" aria-label="Máximo disponível para desembolsar" data-limit-alert={alert ? "true" : undefined} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", margin: "13px 0", ...(alert ? { borderColor: "#e5484d", boxShadow: "0 0 0 1px #e5484d" } : {}) }}>
       <div>
-        <div className="eyebrow">Máximo disponível para desembolsar</div>
-        <strong style={{ fontSize: 22 }}>{limited ? <Money cents={room.availableCents ?? 0} /> : "Sem máximo definido"}</strong>
+        <div className="eyebrow" style={alert ? { color: "#e5484d" } : undefined}>Máximo disponível para desembolsar</div>
+        <strong style={{ fontSize: 22, ...(alert ? { color: "#e5484d" } : {}) }}>{limited ? <Money cents={room.availableCents ?? 0} /> : "Sem máximo definido"}</strong>
+        {alert && <p style={{ margin: "4px 0 0", fontSize: 12, fontWeight: 600, color: "#e5484d" }}>O limite máximo da carteira impede novos empréstimos acima deste valor, mesmo com o caixa combinado não atingido.</p>}
       </div>
       <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>
         {limited ? <>Máximo <Money cents={room.maxCents ?? 0} /> − principal emprestado <Money cents={room.lentCents} />{room.lentCents > (room.maxCents ?? 0) ? " (acima do máximo: nenhuma operação nova cabe)" : ""}</> : onOpenPolicy ? "Defina o máximo de principal a emprestar na Política de crédito." : ""}

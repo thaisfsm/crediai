@@ -429,10 +429,15 @@ test("G13. caixa da gerente: o dono define, ela vê o disponível e não envia p
   assert.match(await cashCard.innerText(), /limite máximo da carteira restringe novos empréstimos/);
   assert.match(await cashCard.innerText(), /não há capital para emprestar/);
   assert.match(await cashCard.innerText(), /R\$\s*1\.000,00/, "o caixa combinado continua visível");
+  const roomStrip = manager.getByLabel("Máximo disponível para desembolsar");
+  assert.equal(await roomStrip.getAttribute("data-limit-alert"), "true", "faixa do máximo também em alerta");
+  assert.match(await roomStrip.innerText(), /limite máximo da carteira impede novos empréstimos/);
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-caixa-alerta.png`, fullPage: false });
   assert.equal((await action(ownerCookie, "saveCreditPolicyAction", {}, "/")).result?.ok, true);
   await manager.goto(`${BASE}/gerente`);
   await cashCard.waitFor();
   assert.equal(await cashCard.getAttribute("data-limit-alert"), null, "sem máximo, sem alerta");
+  assert.equal(await manager.getByLabel("Máximo disponível para desembolsar").getAttribute("data-limit-alert"), null);
   // Acima do caixa: recusado; dentro: aceito e o disponível cai (pedido reservado).
   const above = await submit("c_g_ana", "1.500,00");
   assert.equal(above.result?.ok, false);
