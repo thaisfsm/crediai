@@ -16,7 +16,7 @@ export default async function InvestmentPage({ params }: { params: Promise<{ id:
   const data = await loadInvestmentDetail((await params).id);
   if (!data) notFound();
   return (
-    <AppShell userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Investidores"
+    <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Investidores"
       trail={[{ label: "Investidores", href: "/investidores" }, { label: data.investor.name, href: `/investidores/${data.investor.id}` }, { label: "Investimento" }]}>
       <InvestmentDetailView data={data} />
     </AppShell>

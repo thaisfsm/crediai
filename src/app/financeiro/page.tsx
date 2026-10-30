@@ -20,7 +20,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   // loadFinancePage passa por withTenantContext: tenant ativo, assinatura válida e só a carteira da sessão.
   const data = await loadFinancePage(await searchParams);
   return (
-    <AppShell userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Financeiro" trail={[{ label: "Financeiro" }]}>
+    <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Financeiro" trail={[{ label: "Financeiro" }]}>
       <FinanceHome data={data} />
     </AppShell>
   );

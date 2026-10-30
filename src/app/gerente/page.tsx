@@ -16,5 +16,5 @@ export default async function ManagerPage({ searchParams }: { searchParams: Prom
   const panel = await loadManagerPanel();
   const { portfolio } = await loadManagerPortfolio();
   const { tela } = await searchParams;
-  return <Dashboard userName={panel.userName} portfolio={portfolio} payables={null} initialSection={tela} manager={{ panel }} />;
+  return <Dashboard userId={panel.userId} userName={panel.userName} portfolio={portfolio} payables={null} initialSection={tela} manager={{ panel }} />;
 }

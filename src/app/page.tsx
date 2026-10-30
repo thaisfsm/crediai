@@ -24,5 +24,5 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
   // Contas a pagar do dia: a mesma fonte e o mesmo resumo da tela Financeiro → Contas a pagar.
   const payables = await loadDashboardPayables();
   const { tela } = await searchParams;
-  return <Dashboard userName={session.user.name} portfolio={portfolio} payables={payables} isSuperAdmin={isSuperAdmin} initialSection={tela} />;
+  return <Dashboard userId={session.user.id} userName={session.user.name} portfolio={portfolio} payables={payables} isSuperAdmin={isSuperAdmin} initialSection={tela} />;
 }
