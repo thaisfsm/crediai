@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
+import { forgetThemeUser, ThemeToggle } from "./theme-toggle";
 import { Icon, type IconName } from "./ui-icon";
 
 // Menu lateral do app, usado pelo dashboard (telas em /?tela=…) e pelas páginas próprias (/investidores, /financeiro, /contas-a-pagar).
@@ -108,8 +109,8 @@ export function Sidebar({ active, initials, mobileOpen, pendingCharges = 0, pend
 }
 
 // Moldura das páginas próprias (fora do dashboard): o mesmo menu lateral e uma barra superior com o caminho e a conta.
-export function AppShell({ userName, isSuperAdmin, active, trail, children }: {
-  userName: string; isSuperAdmin: boolean; active: NavLabel; trail: { label: string; href?: string }[]; children: ReactNode;
+export function AppShell({ userId, userName, isSuperAdmin, active, trail, children }: {
+  userId: string; userName: string; isSuperAdmin: boolean; active: NavLabel; trail: { label: string; href?: string }[]; children: ReactNode;
 }) {
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -133,6 +134,7 @@ export function AppShell({ userName, isSuperAdmin, active, trail, children }: {
             ))}
           </div>
           <div className="topbar-actions">
+            <ThemeToggle userId={userId} />
             <span className="topbar-divider" />
             <div className="top-action-wrap">
               <button className="top-profile" aria-label={`Menu da conta de ${userName}`} aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}><span className="profile-avatar">{initials}</span><span>{userName}</span><Icon name="chevron" size={14} /></button>
@@ -141,7 +143,7 @@ export function AppShell({ userName, isSuperAdmin, active, trail, children }: {
                   <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
                   <button role="menuitem" onClick={() => { setProfileOpen(false); router.push(navHref("Configurações")); }}><Icon name="settings" size={15} /> Configurações</button>
                   {isSuperAdmin && <button role="menuitem" onClick={() => { setProfileOpen(false); router.push("/admin"); }}><Icon name="settings" size={15} /> Administração da plataforma</button>}
-                  <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
+                  <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); forgetThemeUser(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
                 </div>
               )}
             </div>

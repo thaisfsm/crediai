@@ -127,14 +127,14 @@ export async function loadManagerPanel() {
     const payoutRows = await tx.select({ id: accountManagerPayouts.id, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes })
       .from(accountManagerPayouts).where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
     const cash = await loadManagerCash(tx, tenantId, manager.id);
-    return { manager, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, cash };
+    return { manager, userId: session.user.id, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, cash };
   });
   const paidOutCents = data.payoutRows.reduce((total, payout) => total + payout.amountCents, 0);
   const summary = managerCommission(commissionGroups(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), paidOutCents);
   const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps);
   const live = data.operations.filter((operation) => operation.status !== "CANCELED");
   return {
-    managerName: data.manager.name, userName: data.userName, today: todayIso(), summary, cash: data.cash,
+    managerName: data.manager.name, userId: data.userId, userName: data.userName, today: todayIso(), summary, cash: data.cash,
     counts: {
       clients: cards.length, overdue: cards.filter((card) => card.situation === "OVERDUE").length, onTime: cards.filter((card) => card.situation === "ON_TIME").length,
       paid: cards.filter((card) => card.situation === "PAID").length, none: cards.filter((card) => card.situation === "NO_OPERATIONS").length,

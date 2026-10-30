@@ -1,0 +1,77 @@
+/* Tema claro: tokens e ajustes finos. Vem depois de tema-claro.gerado.css (as cores convertidas regra a regra).
+   Tudo fica sob :root[data-theme="light"]; sem o atributo (tema escuro) nada aqui vale. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #13263a; --muted: #5d6d7c; --muted-strong: #3d4f5f; --line: #e3e8ee;
+  --surface: #ffffff; --canvas: #f4f6f9; --navy: #071019; --navy-soft: #0c1b27;
+  --teal: #0f8a83; --teal-dark: #0b746e; --teal-pale: #e6f4f2;
+  --positive: #1a8a5c; --warning: #b26b12; --danger: #c7353f;
+  --central-cyan: #0e7f99; --central-teal: #0f8a83; --central-ink: #13263a; --central-muted: #5d6d7c;
+  --central-line: #e3e8ee; --central-card: #ffffff; --central-green: #1a8a5c; --central-amber: #b26b12; --central-red: #c7353f;
+}
+:root[data-theme="light"], :root[data-theme="light"] body { color: var(--ink); background: var(--canvas); }
+:root[data-theme="light"] body { background-image: none; }
+:root[data-theme="light"] .main-area::before { display: none; }
+
+/* Menu lateral: igual nos dois temas. Os tokens voltam aos valores escuros dentro dele. */
+:root[data-theme="light"] .sidebar {
+  color-scheme: dark;
+  --ink: #e7f1f8; --muted: #8296a7; --muted-strong: #a7bac9; --line: rgba(141,179,203,.14); --surface: #0c1722; --canvas: #071019;
+  --teal: #43d9d1; --teal-dark: #21bcb9; --teal-pale: rgba(54,211,205,.11); --positive: #4bd7a4; --warning: #efbd64; --danger: #ff777d;
+}
+:root[data-theme="light"] .sidebar :focus-visible { outline-color: #56e2dc; }
+:root[data-theme="light"] :focus-visible { outline-color: #1a9e95; }
+/* No celular o menu fica fora da tela até abrir: a sombra só aparece com ele aberto (sobre fundo claro ela vazava na borda). */
+@media (max-width: 960px) {
+  :root[data-theme="light"] .sidebar { box-shadow: none; }
+  :root[data-theme="light"] .sidebar.sidebar-open { box-shadow: 16px 0 44px rgba(10, 25, 40, .28); }
+}
+:root[data-theme="light"] .mobile-scrim, :root[data-theme="light"] .payment-overlay { background: rgba(15, 32, 48, .38); }
+
+/* Barra superior */
+:root[data-theme="light"] .topbar { background: rgba(255, 255, 255, .92); border-bottom-color: var(--line); }
+:root[data-theme="light"] .top-profile .profile-avatar { color: #0b6f69; background: #e6f4f2; border: 1px solid #c9e6e2; }
+
+/* Cards, painéis e popovers: branco, borda discreta, sombra leve. Mesmas medidas do tema escuro. */
+:root[data-theme="light"] .metric-card, :root[data-theme="light"] .panel, :root[data-theme="light"] .secondary-metrics {
+  border-color: var(--line); background: #fff; box-shadow: 0 1px 2px rgba(16, 42, 66, .04), 0 4px 14px rgba(16, 42, 66, .04);
+}
+:root[data-theme="light"] .metric-featured { border-color: #bfe3de; background: linear-gradient(180deg, #f3faf9, #fff 60%); }
+:root[data-theme="light"] .metric-card-clickable:hover { border-color: #9fd6cf; box-shadow: 0 2px 4px rgba(16, 42, 66, .05), 0 10px 24px rgba(16, 42, 66, .08); }
+:root[data-theme="light"] .metric-card-clickable:active { border-color: #6cc3b8; box-shadow: 0 2px 6px rgba(16, 42, 66, .08); }
+:root[data-theme="light"] .metric-card::after { background: linear-gradient(90deg, transparent, rgba(15, 138, 131, .14), transparent); }
+:root[data-theme="light"] .metric-value, :root[data-theme="light"] .chart-stats strong { color: var(--ink); }
+:root[data-theme="light"] .search-popover, :root[data-theme="light"] .notification-popover, :root[data-theme="light"] .core-status-popover {
+  border-color: var(--line); background: #fff; box-shadow: 0 16px 40px rgba(16, 42, 66, .14);
+}
+:root[data-theme="light"] .intelligence-panel { border-color: var(--line); background: linear-gradient(105deg, #f4f9fc, #fff 60%, #f7f6fc); box-shadow: 0 1px 2px rgba(16, 42, 66, .04); }
+
+/* Botão principal: ciano CrediAI sólido com texto branco */
+:root[data-theme="light"] .primary-button { border-color: #0f8a83; color: #fff; background: #0f8a83; box-shadow: 0 1px 2px rgba(12, 100, 94, .18); }
+:root[data-theme="light"] .primary-button:hover { border-color: #0b746e; background: #0b746e; box-shadow: 0 3px 10px rgba(12, 100, 94, .2); }
+:root[data-theme="light"] .primary-button.danger-button { color: #fff; background: #c7353f; border-color: #c7353f; }
+:root[data-theme="light"] .outline-button { border-color: #d5dde5; color: #3d4f5f; background: #fff; }
+:root[data-theme="light"] .outline-button:hover { border-color: #8ccdc5; color: #0b746e; background: #f1f9f8; }
+
+/* Campos de formulário: fundo branco, borda sutil, foco ciano */
+:root[data-theme="light"] .field input, :root[data-theme="light"] .field select, :root[data-theme="light"] .field textarea,
+:root[data-theme="light"] .central-filters input, :root[data-theme="light"] .central-filters select,
+:root[data-theme="light"] .central-form input, :root[data-theme="light"] .central-form select {
+  border-color: #d3dbe3; color: var(--ink); background-color: #fff; color-scheme: light;
+}
+:root[data-theme="light"] .field input::placeholder, :root[data-theme="light"] .central-filters input::placeholder { color: #8a98a5; }
+:root[data-theme="light"] .field input:focus, :root[data-theme="light"] .field select:focus, :root[data-theme="light"] .field textarea:focus,
+:root[data-theme="light"] .central-filters input:focus, :root[data-theme="light"] .central-filters select:focus,
+:root[data-theme="light"] .central-form input:focus, :root[data-theme="light"] .central-form select:focus {
+  border-color: #1a9e95; box-shadow: 0 0 0 3px rgba(26, 158, 149, .15);
+}
+:root[data-theme="light"] .field { color: #3d4f5f; }
+
+/* Tabelas: cabeçalho e divisórias discretas; a coluna de ações fixa tem o fundo do card */
+:root[data-theme="light"] .data-table th { border-bottom-color: var(--line); color: #5d6d7c; }
+:root[data-theme="light"] .data-table td { border-bottom-color: #edf1f4; color: #2f4250; }
+:root[data-theme="light"] .data-table td strong, :root[data-theme="light"] .data-table tfoot td { color: var(--ink); }
+:root[data-theme="light"] .data-table th:last-child:empty, :root[data-theme="light"] .data-table td.actions-cell { background: #fff; box-shadow: -10px 0 12px -10px rgba(16, 42, 66, .18); }
+
+/* Alternância de tema (sol/lua) no cabeçalho */
+.theme-toggle svg { display: block; }

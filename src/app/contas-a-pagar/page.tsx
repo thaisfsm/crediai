@@ -19,7 +19,7 @@ export default async function PayablesPage({ searchParams }: { searchParams: Pro
   // withTenantContext: só a carteira da sessão, também para o MASTER (nunca a de outro tenant).
   const data = await loadPayablesPage(await searchParams);
   return (
-    <AppShell userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Contas a pagar" trail={[{ label: "Financeiro", href: "/financeiro" }, { label: "Contas a pagar" }]}>
+    <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Contas a pagar" trail={[{ label: "Financeiro", href: "/financeiro" }, { label: "Contas a pagar" }]}>
       <PayablesHome data={data} />
     </AppShell>
   );

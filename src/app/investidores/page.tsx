@@ -19,7 +19,7 @@ export default async function InvestorsPage({ searchParams }: { searchParams: Pr
   // tenant só a própria, e só com tenant ativo e assinatura válida.
   const data = await loadInvestorsPage(await searchParams);
   return (
-    <AppShell userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Investidores" trail={[{ label: "Investidores" }]}>
+    <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Investidores" trail={[{ label: "Investidores" }]}>
       <InvestorsHome data={data} />
     </AppShell>
   );

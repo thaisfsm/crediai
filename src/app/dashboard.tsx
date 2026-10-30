@@ -9,6 +9,7 @@ import { CHART_VIEWBOX, chartGeometry, type ChartSeries } from "@/lib/finance/ch
 import type { ChargeFilter, ChartPeriod } from "@/lib/finance/portfolio";
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { searchPortfolio, type SearchResult } from "@/lib/finance/search";
+import { forgetThemeUser, ThemeToggle } from "./theme-toggle";
 import { Icon } from "./ui-icon";
 import { Sidebar, initialsOfUser, navHref, navKeyFromSlug, useTableLabels, type NavKey } from "./app-shell";
 import { RenegotiationPage } from "./renegotiation-page";
@@ -144,7 +145,7 @@ function MetricSignal({ variant = "cyan" }: { variant?: "cyan" | "blue" | "viole
 export type ManagerMode = { panel: ManagerPanel };
 const MANAGER_SECTIONS: NavKey[] = ["Visão geral", "Clientes", "Operações", "Cobranças", "Comissão"];
 
-export default function Dashboard({ userName, portfolio, payables, isSuperAdmin = false, initialSection, manager }: { userName: string; portfolio: TenantPortfolio; payables: PayablesOverview | null; isSuperAdmin?: boolean; initialSection?: string; manager?: ManagerMode }) {
+export default function Dashboard({ userId, userName, portfolio, payables, isSuperAdmin = false, initialSection, manager }: { userId: string; userName: string; portfolio: TenantPortfolio; payables: PayablesOverview | null; isSuperAdmin?: boolean; initialSection?: string; manager?: ManagerMode }) {
   const router = useRouter();
   const initials = initialsOfUser(userName);
   const [active, setActive] = useState<NavKey>(() => { const key = navKeyFromSlug(initialSection); return manager && !MANAGER_SECTIONS.includes(key) ? "Visão geral" : key; });
@@ -229,6 +230,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
               <button className={`icon-button notification-button ${notificationsOpen ? "icon-button-selected" : ""}`} aria-label="Notificações" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(!notificationsOpen)}><Icon name="bell" size={18} />{bellCount > 0 && <span className="notification-dot" />}</button>
               {notificationsOpen && <div className="notification-popover"><div className="popover-title"><strong>Notificações</strong><span>{bellCount > 0 ? `${bellCount} pendente${bellCount > 1 ? "s" : ""}` : "Tudo em dia"}</span></div><p><i className="notification-mark amber-mark" />Você tem <strong>{counts.dueToday} cobrança{counts.dueToday === 1 ? "" : "s"}</strong> para hoje.</p><p><i className="notification-mark teal-mark" />{counts.overdue > 0 ? <><strong>{counts.overdue} operaç{counts.overdue === 1 ? "ão" : "ões"}</strong> em atraso.</> : "Nenhuma operação em atraso."}</p>{reviewDue && <p><i className="notification-mark amber-mark" /><strong>Reavaliar o máximo de principal:</strong> a data chegou. <button type="button" className="auth-link-button" onClick={() => { setNotificationsOpen(false); navigate("Política de crédito"); }}>Abrir política de crédito</button></p>}<button onClick={() => setNotificationsOpen(false)}>Entendi</button></div>}
             </div>
+            <ThemeToggle userId={userId} />
             <span className="topbar-divider" />
             {/* Único lugar com o usuário e o "Sair". */}
             <div className="top-action-wrap">
@@ -238,7 +240,7 @@ export default function Dashboard({ userName, portfolio, payables, isSuperAdmin 
                   <div className="popover-title"><strong>{userName}</strong><span>Minha conta</span></div>
                   {readOnly ? null : <button role="menuitem" onClick={() => { setProfileOpen(false); navigate("Configurações"); }}><Icon name="settings" size={15} /> Configurações</button>}
                   {isSuperAdmin && <button role="menuitem" onClick={() => { setProfileOpen(false); router.push("/admin"); }}><Icon name="settings" size={15} /> Administração da plataforma</button>}
-                  <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
+                  <button role="menuitem" className="profile-signout" onClick={async () => { await authClient.signOut(); forgetThemeUser(); router.push("/login"); router.refresh(); }}><Icon name="arrow" size={15} /> Sair</button>
                 </div>
               )}
             </div>

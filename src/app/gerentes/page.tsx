@@ -22,7 +22,7 @@ export default async function ManagersPage() {
   // withTenantContext (dentro do loader): só a carteira da sessão; o gerente de contas é mandado para /gerente.
   const data = await loadManagersPage();
   return (
-    <AppShell userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Gerentes" trail={[{ label: "Gerentes de contas" }]}>
+    <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Gerentes" trail={[{ label: "Gerentes de contas" }]}>
       <ManagersHome data={data} actions={actions} />
     </AppShell>
   );
