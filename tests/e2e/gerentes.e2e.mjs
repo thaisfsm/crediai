@@ -117,6 +117,10 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   await region.getByText("Conferir antes de pagar").waitFor();
   await region.getByText("Comissões já pagas").waitFor();
   assert.equal(await region.getByLabel("Valor pago (R$)").inputValue(), "30,00", "sugestão = comissão gerada (Ana 10,00 + Carla 20,00)");
+  // Só entram os clientes/contratos com comissão gerada: o Beto (sem juros recebidos, comissão R$ 0) não aparece nem é marcado.
+  assert.equal(await region.getByLabel("Incluir Beto Indicado no pagamento").count(), 0, "cliente sem comissão gerada fora da conferência");
+  assert.equal(await region.locator(".payout-review").getByText("Beto Indicado").count(), 0);
+  assert.equal(await region.getByLabel("Incluir Ana Indicada no pagamento").isChecked(), true);
   await region.getByLabel("Incluir Carla Indicada no pagamento").uncheck();
   await poll(`select 1`, 1);
   await owner.waitForTimeout(300);
@@ -125,6 +129,13 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   await region.getByLabel("Valor pago (R$)").fill("10,00");
   await region.getByRole("button", { name: "Registrar pagamento da comissão" }).click();
   await poll(`select coalesce(sum(amount_cents),0) from account_manager_payout where tenant_id='ten_roberio'`, 1000);
+  // O servidor confere o saldo: acima da comissão a pagar (R$ 20,00) é recusado e nada é gravado (sem pagar em dobro).
+  const ownerApi = await apiLogin("roberio@teste.local");
+  const over = await action(ownerApi, "registerManagerPayoutAction", { managerId, amount: "20,01", paidOn: TODAY });
+  assert.equal(over.result?.ok, false, "acima do saldo recusado");
+  const zero = await action(ownerApi, "registerManagerPayoutAction", { managerId, amount: "0,00", paidOn: TODAY });
+  assert.equal(zero.result?.ok, false, "R$ 0 recusado");
+  assert.equal(await one(`select count(*) from account_manager_payout where tenant_id='ten_roberio'`), 1, "só o pagamento confirmado foi gravado");
   // Acesso de leitura com senha provisória mostrada uma vez.
   await owner.reload();
   const region2 = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
@@ -979,6 +990,10 @@ test("G6. isolamento: outro tenant não vê nem mexe, e o painel não enxerga cl
   const own = await action(await apiLogin("roberio@teste.local"), "createManagerAction", { name: "Outro Gerente", commission: "5" });
   assert.equal(own.result?.ok, true);
   const otherId = await one(`select id from account_manager where name='Outro Gerente'`);
+  // Gerente sem nenhum contrato com comissão gerada: pagamento recusado no servidor e nada gravado.
+  const noCommission = await action(await apiLogin("roberio@teste.local"), "registerManagerPayoutAction", { managerId: otherId, amount: "5,00", paidOn: TODAY });
+  assert.equal(noCommission.result?.ok, false, "sem comissão gerada, nada a pagar");
+  assert.equal(await one(`select count(*) from account_manager_payout`), 1);
   await admin(`update client set account_manager_id='${otherId}' where id='c_g_dora'`);
   await manager.reload();
   assert.ok(!(await manager.locator("body").innerText()).includes("Dora Sem Gerente"), "cliente de outro gerente do mesmo tenant não aparece");

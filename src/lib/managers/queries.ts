@@ -65,6 +65,15 @@ export async function loadManagerCash(tx: Parameters<Parameters<typeof withTenan
   return managerCashOf(manager?.cashLimitCents ?? 0, operations, Number(reserved?.total ?? 0));
 }
 
+// Saldo de comissão de UM gerente, com a mesma conta da tela (comissão gerada sobre os juros recebidos − já pago). Usado pelo
+// pagamento da comissão para nunca pagar sem comissão gerada nem pagar de novo o que já foi pago.
+export async function loadManagerCommissionSummary(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string, managerId: string, managerBps: number) {
+  const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, managerId);
+  const [paid] = await tx.select({ total: sql<string>`coalesce(sum(${accountManagerPayouts.amountCents}), 0)` }).from(accountManagerPayouts)
+    .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, managerId)));
+  return managerCommission(commissionGroups(clientRows, operations, managerBps, overrideBps), Number(paid?.total ?? 0));
+}
+
 export type ManagerOperationRow = {
   id: string; code: string; loanDate: string; status: OperationView["status"]; state: OperationView["state"];
   principalCents: number; totalCents: number; paidCents: number; balanceCents: number; interestPaidCents: number;

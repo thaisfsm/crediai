@@ -5,6 +5,7 @@ import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
 import { formatMoney, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { loadManagerCommissionSummary } from "./queries";
 
 // Regras de gravação dos gerentes de contas, usadas pelo dono da carteira (/gerentes, withTenantContext) e pelo MASTER
 // (/admin/clientes/[id]/gerentes, withPlatformContext). Cada função recebe o tenant EXPLÍCITO e filtra tenant_id em toda consulta;
@@ -168,6 +169,13 @@ export async function registerPayout(tx: TenantTransaction, tenantId: string, ac
   if (paidOn > todayIso()) return { ok: false, error: "A data do pagamento não pode ser futura." };
   const manager = await ownManager(tx, tenantId, managerId);
   if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  // Trava o gerente até o fim da transação: dois pagamentos ao mesmo tempo não passam pela conferência do saldo juntos.
+  await tx.execute(sql`select 1 from ${accountManagers} where ${accountManagers.id} = ${manager.id} and ${accountManagers.tenantId} = ${tenantId} for update`);
+  // Só se paga comissão gerada (contratos com juros recebidos) e ainda não paga: nada de pagamento sem comissão nem em dobro.
+  const summary = await loadManagerCommissionSummary(tx, tenantId, manager.id, manager.commissionBps);
+  if (summary.earnedCents <= 0) return { ok: false, error: "Nenhum contrato deste gerente tem comissão gerada ainda. Nada a pagar." };
+  if (summary.balanceCents <= 0) return { ok: false, error: "Toda a comissão gerada deste gerente já foi paga. Nada a pagar." };
+  if (cents > summary.balanceCents) return { ok: false, error: `O valor passa da comissão a pagar (${formatMoney(summary.balanceCents)}). Confira o valor.` };
   const payoutId = id("mgp");
   await tx.insert(accountManagerPayouts).values({ id: payoutId, tenantId, managerId: manager.id, amountCents: cents, paidOn, notes, createdByUserId: actor.user.id });
   await recordAdminAudit(tx, actor, {
