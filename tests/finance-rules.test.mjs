@@ -32,10 +32,10 @@ test("A2. a taxa contratada nunca é a taxa Price de 9,61%", () => {
   const terms = (bps) => ({ modality: "INSTALLMENT", frequency: "MONTHLY", principalCents: 1_000_000, interestRateBps: bps, interestCents: 600_000, firstDueDate: "2026-10-10", installmentCount: 10, installmentCents: 160_000, renewals: [] });
   const payments = [pay("p1", 160_000, "2026-10-10"), pay("p2", 100_000, "2026-11-10")];
   assert.deepEqual(operationLedger(terms(961), payments, "2026-11-20"), operationLedger(terms(600), payments, "2026-11-20"));
-  // Cada parcela leva juros e principal na proporção simples do contrato: 1.600 = 600 de juros + 1.000 de principal.
+  // Principal primeiro: a 1ª parcela de R$ 1.600 é toda principal.
   const ledger = operationLedger(terms(961), payments, "2026-11-20");
-  assert.equal(ledger.items[0].interestCents, 60_000);
-  assert.equal(ledger.items[0].principalCents, 100_000);
+  assert.equal(ledger.items[0].interestCents, 0);
+  assert.equal(ledger.items[0].principalCents, 160_000);
 });
 
 test("N. mensal com juros simples: R$ 8.000 a 30% = R$ 2.400 por período; 2 períodos = R$ 4.800, sem juros sobre juros", () => {
@@ -149,7 +149,8 @@ test("E/F. diário: R$ 10.000 a 30% em 30 dias = R$ 13.000 em 30 pagamentos, som
   assert.equal(done.state, "PAID");
   assert.equal(done.interestPaidCents, 300_000);
   assert.equal(done.principalPaidCents, 1_000_000);
-  assert.ok(done.items[0].interestCents > 0 && done.items[0].principalCents > 0);
+  // Principal primeiro: o 1º dia é todo principal; o lucro só aparece depois de recuperar os R$ 10.000.
+  assert.ok(done.items[0].interestCents === 0 && done.items[0].principalCents === done.items[0].amountCents);
   // Três dias pagos e o quarto vencido: Em atraso.
   const late = operationLedger(terms, payments.slice(0, 3), "2026-10-06");
   assert.equal(late.nextItem.number, 4);
@@ -192,9 +193,9 @@ test("H. parcelado (Amany): R$ 2.000 em 2 × R$ 1.500, 1ª paga em 05/10 → pr�
   assert.equal(ledger.nextItem.number, 2);
   assert.equal(ledger.schedule[0].state, "PAID");
   assert.equal(ledger.balanceCents, 150_000);
-  // Proporcional: 1/3 de cada parcela é juros (R$ 500) e 2/3 principal (R$ 1.000), como antes.
-  assert.equal(ledger.items[0].interestCents, 50_000);
-  assert.equal(ledger.items[0].principalCents, 100_000);
+  // Principal primeiro: a 1ª parcela de R$ 1.500 é toda principal; a 2ª leva R$ 500 de principal e R$ 1.000 de lucro.
+  assert.equal(ledger.items[0].interestCents, 0);
+  assert.equal(ledger.items[0].principalCents, 150_000);
   const done = operationLedger(terms, [pay("amany1", 150_000, "2026-10-05"), pay("amany2", 150_000, "2026-11-05")], "2026-11-05");
   assert.equal(done.state, "PAID");
   assert.equal(done.interestPaidCents, 100_000);
