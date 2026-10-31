@@ -403,6 +403,14 @@
 :root[data-theme="light"] .schedule-preview p { color:#2c3c46; }
 :root[data-theme="light"] .schedule-preview li { color:#4d5f6e; border-bottom:1px dashed rgba(16,42,66,0.105); }
 :root[data-theme="light"] .schedule-preview li strong { color:#18262f; }
+:root[data-theme="light"] .schedule-editor li { border:1px solid rgba(16,42,66,0.105); background:rgba(241,245,249,0.45); }
+:root[data-theme="light"] .schedule-editor .schedule-number { color:#2c3c46; }
+:root[data-theme="light"] .schedule-editor .schedule-date { border:1px solid rgba(16,42,66,0.165); color:#18262f; background-color:#ffffff; color-scheme:light; }
+:root[data-theme="light"] .schedule-editor .schedule-amount { border:1px solid rgba(16,42,66,0.165); color:#18262f; background-color:#ffffff; color-scheme:light; }
+:root[data-theme="light"] .schedule-editor .schedule-amount[aria-invalid="true"] { border-color:rgba(187,27,32,0.54); }
+:root[data-theme="light"] .schedule-total { color:#2c3c46; }
+:root[data-theme="light"] .schedule-total strong { color:#18262f; }
+:root[data-theme="light"] .schedule-editor li small { color:#9e7014; }
 :root[data-theme="light"] .schedule-form { border:1px solid rgba(16,42,66,0.135); background:rgba(16,42,66,0.105); }
 :root[data-theme="light"] .revision-changes { color:#4d5f6e; }
 :root[data-theme="light"] .report-operation-row td { background:rgba(16,42,66,0.105); }

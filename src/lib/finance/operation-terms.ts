@@ -24,7 +24,16 @@ export function operationTermsFromForm(data: FormData) {
     if (!Number.isInteger(installmentCount) || installmentCount < 1 || installmentCount > 360) return { ok: false as const, error: installmentFrequency === "BIWEEKLY" ? "Informe a quantidade de parcelas quinzenais, de 1 a 360." : "Informe o prazo total em meses, de 1 a 360." };
     if (!isIsoDate(firstDueDate)) return { ok: false as const, error: "Informe o primeiro vencimento." };
     if (firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes da data do empréstimo." };
-    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount, frequency: installmentFrequency });
+    // Valores combinados por parcela (centavos, um por parcela). Só ficam gravados quando não são todos iguais ao valor da parcela.
+    let customAmounts: number[] | null = null;
+    const amountsRaw = text(data, "customAmounts", 8000);
+    if (amountsRaw !== "") {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(amountsRaw); } catch { parsed = null; }
+      if (!Array.isArray(parsed) || parsed.length !== installmentCount || !parsed.every((item) => Number.isInteger(item) && item > 0 && item <= MAX_CENTS)) return { ok: false as const, error: "Os valores das parcelas precisam ser maiores que zero, um para cada parcela." };
+      if ((parsed as number[]).some((value) => value !== installmentCents)) customAmounts = parsed as number[];
+    }
+    const calculated = calculateInstallments({ principalCents, installmentCents, count: installmentCount, frequency: installmentFrequency, amountsCents: customAmounts });
     if (calculated.interestCents < 0) return { ok: false as const, error: `As ${installmentCount} parcelas somam ${formatMoney(calculated.totalCents)}, menos que o valor emprestado de ${formatMoney(principalCents)}.` };
     // Vencimentos combinados com o cliente: um por parcela, em ordem crescente, sem ser antes do empréstimo. Só ficam gravados
     // quando diferem da regra mensal/quinzenal; o primeiro vencimento passa a ser o da primeira parcela.
@@ -43,7 +52,7 @@ export function operationTermsFromForm(data: FormData) {
     const effectiveFirstDue = customDates ? customDates[0] : firstDueDate;
     return {
       ok: true as const, principalCents, loanDate, dueDate: customDates ? customDates[customDates.length - 1] : installmentDueDate(firstDueDate, installmentCount, installmentFrequency),
-      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents, firstDueDate: effectiveFirstDue, installmentDueDates: customDates, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
+      values: { modality: "INSTALLMENT", frequency: installmentFrequency, installmentCount, installmentCents: customAmounts ? Math.min(...customAmounts) : installmentCents, installmentAmounts: customAmounts, firstDueDate: effectiveFirstDue, installmentDueDates: customDates, interestRateBps: calculated.interestRateBps, interestCents: calculated.interestCents, totalCents: calculated.totalCents, calculationRule: calculated.calculationRule },
     };
   }
   const frequencyInput = text(data, "frequency", 20);

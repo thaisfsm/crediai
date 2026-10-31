@@ -44,7 +44,7 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
     renewals, deferrals, paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" as const : "INTEREST_FIRST" as const,
     settlementPaymentId: operation.settlementPaymentId, settlementBalanceCents: operation.settlementBalanceCents, settlementDiscountCents: operation.settlementDiscountCents,
     modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" as const : "SINGLE" as const,
-    installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate, customDueDates: operation.installmentDueDates,
+    installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, firstDueDate: operation.firstDueDate, customDueDates: operation.installmentDueDates, customAmounts: operation.installmentAmounts,
     frequency: operation.frequency === "BIWEEKLY" || operation.frequency === "DAILY" ? operation.frequency : "MONTHLY",
   };
 }

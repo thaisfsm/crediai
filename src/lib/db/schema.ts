@@ -549,6 +549,9 @@ export const loanOperations = pgTable("loan_operation", {
   paymentOrder: text("payment_order").notNull().default("INTEREST_FIRST"),
   // Parcelado: vencimentos combinados com o cliente quando fogem da regra mensal/quinzenal (um por parcela, em ordem). Migração 0050.
   installmentDueDates: jsonb("installment_due_dates").$type<string[]>(),
+  // Parcelado: valor combinado de cada parcela, em centavos (um por parcela), quando não são todas iguais. Vazio = parcela fixa
+  // (installment_cents). Com valores diferentes, installment_cents guarda o menor. Migração 0054.
+  installmentAmounts: jsonb("installment_amounts").$type<number[]>(),
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
@@ -579,6 +582,7 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_settlement_consistent", sql`(${table.settlementPaymentId} is null) = (${table.settlementBalanceCents} is null) and (${table.settlementPaymentId} is null) = (${table.settlementDiscountCents} is null) and (${table.settlementPaymentId} is null or (${table.status}::text = 'PAID' and ${table.settlementDiscountCents} >= 0 and ${table.settlementBalanceCents} > 0))`),
   check("loan_operation_renegotiated_not_self", sql`${table.renegotiatedIntoId} is null or ${table.renegotiatedIntoId} <> ${table.id}`),
   check("loan_operation_renegotiated_consistent", sql`(${table.status}::text = 'RENEGOTIATED') = (${table.renegotiatedIntoId} is not null and ${table.renegotiatedOn} is not null and ${table.renegotiatedAt} is not null and ${table.renegotiatedPrincipalCents} >= 0 and ${table.renegotiatedInterestCents} >= 0)`),
+  check("loan_operation_installment_amounts_valid", sql`${table.installmentAmounts} is null or (${table.modality} = 'INSTALLMENT' and jsonb_typeof(${table.installmentAmounts}) = 'array' and jsonb_array_length(${table.installmentAmounts}) = ${table.installmentCount})`),
   check("loan_operation_installment_due_dates_valid", sql`${table.installmentDueDates} is null or (${table.modality} = 'INSTALLMENT' and jsonb_typeof(${table.installmentDueDates}) = 'array' and jsonb_array_length(${table.installmentDueDates}) = ${table.installmentCount})`),
   check("loan_operation_payment_order_valid", sql`${table.paymentOrder} in ('INTEREST_FIRST', 'PRINCIPAL_FIRST')`),
   check("loan_operation_principal_positive", sql`${table.principalCents} > 0`),

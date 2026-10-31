@@ -27,7 +27,7 @@ export type OperationRecord = {
   // Parcelas jogadas para o final (só empréstimo parcelado), em ordem de criação.
   deferrals?: DeferralRecord[];
   // Modalidade: pagamento único (padrão) ou parcelado com parcela fixa.
-  modality?: OperationModality; installmentCount?: number | null; installmentCents?: number | null; firstDueDate?: string | null; customDueDates?: string[] | null;
+  modality?: OperationModality; installmentCount?: number | null; installmentCents?: number | null; firstDueDate?: string | null; customDueDates?: string[] | null; customAmounts?: number[] | null;
   // Periodicidade do pagamento único (mensal, quinzenal ou diário). Operações antigas: mensal.
   frequency?: Frequency;
   // Correções feitas antes de qualquer pagamento (Etapa G), mais antiga primeiro.
@@ -198,7 +198,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     const originalDueDate = originalDueDateOf(operation.firstDueDate, renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate, operation.dueDate);
     const ledgerTerms: LedgerTerms = {
       modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
-      firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, customDueDates: operation.customDueDates ?? null, renewals,
+      firstDueDate: originalDueDate, installmentCount: operation.installmentCount ?? null, installmentCents: operation.installmentCents ?? null, customDueDates: operation.customDueDates ?? null, customAmounts: operation.customAmounts ?? null, renewals,
       settlementPaymentId: operation.settlementPaymentId ?? null, paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST",
       deferrals: deferralRows.map((item) => ({ originalNumber: item.originalNumber, additionCents: item.additionCents, newDueDate: item.newDueDate, newAmountCents: item.newAmountCents })),
     };
