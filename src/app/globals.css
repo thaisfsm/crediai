@@ -1356,3 +1356,13 @@ button { color:inherit; }
 .delinquency-band-pdd .metric-icon, .delinquency-band-pdd .delinquency-note { color: var(--danger); }
 .delinquency-band-active { border-color: rgba(79,230,222,.65); box-shadow: 0 0 0 1px rgba(79,230,222,.4), 0 8px 26px rgba(0,0,0,.2); }
 .delinquency-pdd-tag { padding: 2px 7px; border: 1px solid rgba(255,119,125,.45); border-radius: 999px; color: var(--danger); font-size: 10px; font-weight: 650; }
+
+/* Nova operação, pagamento único: grade de 3 colunas iguais, campos alinhados pelo topo e sem buracos
+   (6 campos = 2 linhas; o cliente ocupa 1, 2 ou 3 colunas conforme a quantidade de campos da modalidade). */
+.form-grid-single { grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; }
+.form-grid-single > .operation-preview { grid-column:1 / -1; }
+.form-grid-single > .client-span-1 { grid-column:span 1; }
+.form-grid-single > .client-span-2 { grid-column:span 2; }
+.form-grid-single > .client-span-3 { grid-column:1 / -1; }
+@media (max-width:960px) { .form-grid-single { grid-template-columns:repeat(2,minmax(0,1fr)); } .form-grid-single > .client-span-1, .form-grid-single > .client-span-2, .form-grid-single > .client-span-3 { grid-column:1 / -1; } }
+@media (max-width:640px) { .form-grid-single { grid-template-columns:minmax(0,1fr); } }
