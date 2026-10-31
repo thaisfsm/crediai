@@ -1146,12 +1146,12 @@ function OperationForm({ portfolio, onChanged, onNewClient, request, cashAvailab
           <button type="button" role="radio" aria-checked={interestMode === "FIXED"} className={interestMode === "FIXED" ? "is-active" : ""} onClick={() => setInterestMode("FIXED")}>Valor fixo de juros (R$)</button>
         </div>
       )}
-      <form className="form-grid" onSubmit={onSubmit} key={`${modality}-${frequency}-${interestMode}-${resetKey}`}>
+      <form className={`form-grid${single ? " form-grid-single" : ""}`} onSubmit={onSubmit} key={`${modality}-${frequency}-${interestMode}-${resetKey}`}>
         <input type="hidden" name="modality" value={modality} />
         {!single && <input type="hidden" name="installmentFrequency" value={installmentFrequency} />}
         {single && <input type="hidden" name="frequency" value={frequency} />}
         {fixed && <input type="hidden" name="interestMode" value="FIXED" />}
-        <label className="field field-wide"><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+        <label className={`field field-wide${single ? (daily ? " client-span-3" : fixed ? " client-span-2" : " client-span-1") : ""}`}><span>Cliente</span><select name="clientId" required defaultValue=""><option value="" disabled>Selecione o cliente</option>{portfolio.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
         {single ? (
           <>
             <label className="field"><span>Valor principal (R$)</span><MoneyInput name="principal" inputMode="decimal" placeholder={frequency === "BIWEEKLY" ? "8.000,00" : daily ? "10.000,00" : "1.000,00"} value={principal} onChange={(event) => { setPrincipal(event.target.value); syncSingle({ principal: event.target.value }, singleDriver); }} required /></label>
