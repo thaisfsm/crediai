@@ -99,26 +99,34 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
   );
 }
 
-// Antes de pagar: lista os contratos de cada cliente com a comissão gerada e os pagamentos já feitos. A caixa de cada cliente tira ele
-// do cálculo (a sugestão do valor = comissão dos clientes marcados − o que já foi pago). O valor continua editável e nada é gravado até confirmar.
+// Antes de pagar: lista SÓ os contratos com comissão gerada (juros já recebidos × percentual > 0) e os pagamentos já feitos. A caixa de
+// cada cliente tira ele do cálculo (sugestão = comissão dos clientes marcados − o que já foi pago, nunca acima do saldo). O valor continua
+// editável, o servidor confere de novo o saldo e nada é gravado até confirmar.
 function PayoutForm({ manager }: { manager: Manager }) {
   const { actions } = useScope();
   const router = useRouter();
   const form = useFormAction(actions.registerPayout, () => router.refresh());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const toggle = (clientId: string) => setExcluded((current) => { const next = new Set(current); if (next.has(clientId)) next.delete(clientId); else next.add(clientId); return next; });
-  const included = manager.clients.filter((client) => !excluded.has(client.id));
+  const payable = manager.clients
+    .map((client) => ({ ...client, contracts: client.contracts.filter((contract) => contract.commissionCents > 0) }))
+    .filter((client) => client.commissionCents > 0 && client.contracts.length > 0);
+  const hidden = manager.clients.length - payable.length;
+  const included = payable.filter((client) => !excluded.has(client.id));
   const selectedCents = included.reduce((total, client) => total + client.commissionCents, 0);
-  const suggestedCents = Math.max(0, selectedCents - manager.summary.paidOutCents);
+  const balanceCents = manager.summary.balanceCents;
+  const suggestedCents = Math.min(balanceCents, Math.max(0, selectedCents - manager.summary.paidOutCents));
+  const blocked = payable.length === 0 ? "Nenhum contrato deste gerente tem comissão gerada ainda (sem juros recebidos). Não há o que pagar."
+    : balanceCents <= 0 ? "Toda a comissão gerada deste gerente já foi paga. Não há o que pagar agora." : null;
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
       <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <div className="field-wide payout-review">
         <h3>Conferir antes de pagar</h3>
-        {manager.clients.length === 0 ? <p>Nenhum cliente indicado ainda.</p> : (
+        {payable.length === 0 ? <p>{manager.clients.length === 0 ? "Nenhum cliente indicado ainda." : "Nenhum contrato com comissão gerada."}</p> : (
           <table className="data-table fit-table">
             <thead><tr><th>Incluir</th><th>Cliente / contrato</th><th>Situação</th><th>Comissão</th><th>Juros recebidos</th><th>Comissão gerada</th></tr></thead>
-            <tbody>{manager.clients.map((client) => (
+            <tbody>{payable.map((client) => (
               <Fragment key={client.id}>
                 <tr>
                   <td><input type="checkbox" aria-label={`Incluir ${client.name} no pagamento`} checked={!excluded.has(client.id)} onChange={() => toggle(client.id)} /></td>
@@ -134,6 +142,7 @@ function PayoutForm({ manager }: { manager: Manager }) {
             ))}</tbody>
           </table>
         )}
+        {hidden > 0 && payable.length > 0 && <p><small>{hidden} {hidden === 1 ? "cliente sem comissão gerada não aparece" : "clientes sem comissão gerada não aparecem"} aqui (ainda sem juros recebidos).</small></p>}
         <h3>Comissões já pagas</h3>
         {manager.payouts.length === 0 ? <p>Nenhum pagamento de comissão registrado ainda.</p> : (
           <table className="data-table fit-table">
@@ -141,12 +150,14 @@ function PayoutForm({ manager }: { manager: Manager }) {
             <tbody>{manager.payouts.map((payout) => <tr key={payout.id}><td>{payout.paidOn.split("-").reverse().join("/")}</td><td>{formatMoney(payout.amountCents)}</td><td>{payout.notes ?? "—"}</td></tr>)}</tbody>
           </table>
         )}
-        <p><small>Marcados: {included.length} de {manager.clients.length} · comissão gerada {formatMoney(selectedCents)} − já paga {formatMoney(manager.summary.paidOutCents)} = <strong>{formatMoney(suggestedCents)}</strong> a pagar. Desmarcar um cliente só tira ele da conta sugerida; nada é gravado até você confirmar.</small></p>
+        {blocked ? <p className="form-feedback form-feedback-error" role="status">{blocked}</p> : (
+          <p><small>Marcados: {included.length} de {payable.length} · comissão gerada {formatMoney(selectedCents)} − já paga {formatMoney(manager.summary.paidOutCents)} = <strong>{formatMoney(suggestedCents)}</strong> a pagar (máximo {formatMoney(balanceCents)}). Desmarcar um cliente só tira ele da conta sugerida; nada é gravado até você confirmar.</small></p>
+        )}
       </div>
-      <label className="field"><span>Valor pago (R$)</span><MoneyInput key={suggestedCents} name="amount" defaultValue={suggestedCents > 0 ? (suggestedCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder={(manager.summary.balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required /></label>
-      <label className="field"><span>Data</span><input name="paidOn" type="date" defaultValue={todayIso()} max={todayIso()} required /></label>
-      <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={300} placeholder="Opcional" /></label>
-      <div className="form-actions"><button className="primary-button" disabled={form.pending}><Icon name="check" size={15} /> {form.pending ? "Registrando…" : "Registrar pagamento da comissão"}</button></div>
+      <label className="field"><span>Valor pago (R$)</span><MoneyInput key={suggestedCents} name="amount" defaultValue={suggestedCents > 0 ? (suggestedCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder={(balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required disabled={Boolean(blocked)} /></label>
+      <label className="field"><span>Data</span><input name="paidOn" type="date" defaultValue={todayIso()} max={todayIso()} required disabled={Boolean(blocked)} /></label>
+      <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={300} placeholder="Opcional" disabled={Boolean(blocked)} /></label>
+      <div className="form-actions"><button className="primary-button" disabled={form.pending || Boolean(blocked)}><Icon name="check" size={15} /> {form.pending ? "Registrando…" : "Registrar pagamento da comissão"}</button></div>
       <Feedback feedback={form.feedback} />
     </form>
   );
