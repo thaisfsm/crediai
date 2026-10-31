@@ -550,7 +550,7 @@ button { color:inherit; }
   .metric-card { min-height:118px; }
 }
 @media (max-width:420px) {
-  .intelligence-panel { grid-template-columns:34px minmax(0,1fr) auto; gap:8px; padding:11px 10px; }
+  .intelligence-panel { grid-template-columns:30px minmax(0,1fr) minmax(86px,108px); gap:8px; padding:11px 10px; }
   .intelligence-orb { width:33px; height:33px; border-radius:10px; }
   .intelligence-kicker { font-size:7px; letter-spacing:.7px; }.intelligence-copy h2 { font-size:11px; }
   .intelligence-stat { padding-right:4px; }.intelligence-stat span { white-space:normal; }
@@ -1152,6 +1152,17 @@ button { color:inherit; }
 .schedule-preview ol { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:6px 14px; margin:0; padding:0; list-style:none; max-height:220px; overflow:auto; }
 .schedule-preview li { display:flex; justify-content:space-between; gap:8px; color:#8296a7; font-size:11.5px; padding:4px 0; border-bottom:1px dashed rgba(112,145,170,.14); }
 .schedule-preview li strong { color:#eef6fb; font-weight:600; }
+/* Prévia editável da nova operação: uma linha por parcela (nº, data, valor), em colunas que quebram conforme a largura,
+   sem rolagem lateral; com muitas parcelas a lista rola só para baixo. */
+.schedule-editor ol { grid-template-columns:repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap:6px 12px; max-height:360px; overflow-x:hidden; overflow-y:auto; }
+.schedule-editor li { display:grid; grid-template-columns:30px minmax(0,1fr) minmax(86px,108px); align-items:center; gap:4px 10px; min-width:0; padding:6px 8px; border:1px solid rgba(112,145,170,.14); border-radius:8px; background:rgba(7,17,31,.45); }
+.schedule-editor .schedule-number { color:#a9bcc9; font-weight:600; }
+.schedule-editor .schedule-date { width:100%; min-width:0; min-height:32px; padding:0 8px; border:1px solid rgba(112,145,170,.22); border-radius:7px; color:#eef6fb; background-color:#07111f; font:inherit; font-size:12px; color-scheme:dark; }
+.schedule-editor .schedule-amount { width:100%; min-width:0; min-height:32px; padding:0 8px; text-align:right; border:1px solid rgba(112,145,170,.22); border-radius:7px; color:#eef6fb; background-color:#07111f; font:inherit; font-size:12px; font-weight:600; color-scheme:dark; }
+.schedule-editor .schedule-amount[aria-invalid="true"] { border-color:rgba(255,133,137,.6); }
+.schedule-total { margin:8px 0 0; color:#a9bcc9; font-size:11.5px; line-height:1.5; }
+.schedule-total strong { color:#eef6fb; }
+.schedule-editor li small { grid-column:2 / -1; color:#ecc16b; font-size:10.5px; }
 .schedule-form { border:1px solid rgba(112,145,170,.18); border-radius:12px; padding:14px; margin:0 0 14px; background:rgba(7,17,31,.35); }
 .revision-changes { margin:6px 0 0; padding-left:16px; color:#8296a7; font-size:12px; display:grid; gap:2px; }
 .edit-review { grid-column:1 / -1; display:grid; gap:10px; min-width:0; overflow-x:auto; }

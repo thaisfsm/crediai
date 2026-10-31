@@ -37,8 +37,9 @@ export const INSTALLMENT_RULE = "FIXED_MONTHLY_INSTALLMENTS_V1";
 export const BIWEEKLY_INSTALLMENT_RULE = "FIXED_BIWEEKLY_INSTALLMENTS_V1";
 export type InstallmentFrequency = "MONTHLY" | "BIWEEKLY";
 
-export function calculateInstallments({ principalCents, installmentCents, count, frequency = "MONTHLY" }: { principalCents: number; installmentCents: number; count: number; frequency?: InstallmentFrequency }) {
-  const totalCents = installmentCents * count;
+// amountsCents (opcional): valor combinado de cada parcela, quando não são todas iguais; o total é a soma.
+export function calculateInstallments({ principalCents, installmentCents, count, frequency = "MONTHLY", amountsCents }: { principalCents: number; installmentCents: number; count: number; frequency?: InstallmentFrequency; amountsCents?: number[] | null }) {
+  const totalCents = amountsCents && amountsCents.length === count ? amountsCents.reduce((sum, value) => sum + value, 0) : installmentCents * count;
   const interestCents = totalCents - principalCents;
   // Taxa simples por período (ao mês no mensal, por quinzena no quinzenal). "monthlyRate" mantém o nome antigo.
   const monthlyRate = simpleMonthlyRate({ principalCents, interestCents: Math.max(interestCents, 0), months: count });
@@ -238,6 +239,8 @@ export type LedgerTerms = {
   deferrals?: LedgerDeferral[];
   // Parcelado: vencimentos combinados (um por parcela) quando diferem da regra mensal/quinzenal; sem eles, pela regra.
   customDueDates?: string[] | null;
+  // Parcelado: valor combinado de cada parcela (um por parcela) quando não são todas iguais; sem ele, parcela fixa.
+  customAmounts?: number[] | null;
 };
 export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string };
 export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null };
@@ -260,14 +263,15 @@ export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "princi
 }
 
 // Parcelas do contrato amortizado: todas iguais; no diário a última leva o ajuste para fechar o total.
-export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals" | "customDueDates">, paidCents: number): ScheduleItem[] {
+export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals" | "customDueDates" | "customAmounts">, paidCents: number): ScheduleItem[] {
   const count = terms.installmentCount ?? 0, base = terms.installmentCents ?? 0;
   const totalCents = terms.principalCents + terms.interestCents;
   // Parcelado: mensal ou quinzenal (operações antigas são todas mensais); diário: um vencimento por dia.
   const frequency: Frequency = terms.modality === "INSTALLMENT" ? (terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") : terms.frequency;
   const custom = terms.modality === "INSTALLMENT" && terms.customDueDates?.length === count ? terms.customDueDates : null;
   const dates = custom ?? dueDates(frequency, terms.firstDueDate, count);
-  const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: index === count - 1 ? totalCents - base * (count - 1) : base }));
+  const amounts = terms.modality === "INSTALLMENT" && terms.customAmounts?.length === count ? terms.customAmounts : null;
+  const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: amounts ? amounts[index] : index === count - 1 ? totalCents - base * (count - 1) : base }));
   // Parcelas renegociadas para o final, na ordem em que foram feitas (cada nova data vem depois da anterior).
   const deferrals = [...(terms.deferrals ?? [])].filter((item) => original.some((entry) => entry.originalNumber === item.originalNumber))
     .sort((a, b) => a.newDueDate.localeCompare(b.newDueDate) || a.originalNumber - b.originalNumber);

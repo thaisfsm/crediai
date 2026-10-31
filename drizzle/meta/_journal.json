@@ -372,6 +372,13 @@
       "when": 1793212480637,
       "tag": "0053_valor_minimo_contrato",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1793442663094,
+      "tag": "0054_valores_por_parcela",
+      "breakpoints": true
     }
   ]
 }
