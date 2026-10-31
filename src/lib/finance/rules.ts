@@ -358,15 +358,20 @@ function stateFor(balanceCents: number, nextDue: string | null, asOf: string): {
   return { state: daysUntilDue < 0 ? "OVERDUE" : daysUntilDue === 0 ? "DUE_TODAY" : "ACTIVE", daysUntilDue };
 }
 
-// Parcelado e diário: os juros pagos acompanham a proporção do contrato sobre o TOTAL pago até cada pagamento
-// (juros acumulados = arredondamento de total pago × juros / total do contrato), e cada pagamento leva a diferença.
-// Assim o arredondamento nunca se acumula de um pagamento para o outro (no máximo meio centavo de diferença em
-// relação à proporção exata, em qualquer momento), e o pagamento que zera o saldo leva o resto exato dos juros.
-// As parcelas são cobertas em ordem pelo total pago; a situação vem da primeira parcela não paga.
+// Proporção antiga do parcelado (cada parcela = parte principal + parte juros). Não é mais usada no extrato: ficou só como
+// referência de arredondamento. O extrato usa principalFirstInterest (regra oficial de 31/10/2026).
 export function amortizedInterestPaid(paidCents: number, terms: Pick<LedgerTerms, "principalCents" | "interestCents">) {
   const totalCents = terms.principalCents + terms.interestCents;
   if (paidCents >= totalCents) return terms.interestCents;
   return Math.min(terms.interestCents, Math.round((paidCents * terms.interestCents) / Math.max(totalCents, 1)));
+}
+
+// REGRA OFICIAL (Thaís, 31/10/2026): todo valor recebido abate primeiro o principal; o lucro (juros recebidos) só existe
+// depois que o principal da operação foi recuperado. Juros acumulados após receber `paidCents` no total = o que passou do
+// principal, limitado aos juros do contrato. Vale para todo parcelado e diário, antigos e novos, calculado na leitura (o
+// saldo, as parcelas e os pagamentos gravados não mudam; muda só quanto de cada pagamento é principal e quanto é lucro).
+export function principalFirstInterest(paidCents: number, terms: Pick<LedgerTerms, "principalCents" | "interestCents">) {
+  return Math.min(terms.interestCents, Math.max(paidCents - terms.principalCents, 0));
 }
 
 function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered: T[], asOf: string) {
@@ -374,11 +379,8 @@ function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered
   const additionsCents = (contract.deferrals ?? []).reduce((total, item) => total + item.additionCents, 0);
   const terms: LedgerTerms = additionsCents > 0 ? { ...contract, interestCents: contract.interestCents + additionsCents } : contract;
   const totalCents = terms.principalCents + terms.interestCents;
-  // Juros acumulados após pagar `paid`: a proporção do contrato ORIGINAL até o total original e, daí em diante, só o acréscimo
-  // das parcelas renegociadas (que fica no fim). Assim os pagamentos já feitos nunca mudam de divisão quando há renegociação.
-  const originalTotalCents = contract.principalCents + contract.interestCents;
-  const interestAt = (paid: number) => paid >= totalCents ? terms.interestCents
-    : Math.min(terms.interestCents, paid <= originalTotalCents ? amortizedInterestPaid(paid, contract) : contract.interestCents + (paid - originalTotalCents));
+  // Juros acumulados após pagar `paid`: principal primeiro; o acréscimo das parcelas renegociadas também é juros e fica no fim.
+  const interestAt = (paid: number) => (paid >= totalCents ? terms.interestCents : principalFirstInterest(paid, terms));
   let interestPaidCents = 0, principalPaidCents = 0;
   const items: LedgerItem<T>[] = ordered.map((payment) => {
     const balanceBeforeCents = Math.max(totalCents - interestPaidCents - principalPaidCents, 0);
