@@ -1435,7 +1435,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
     <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Pagamentos de ${operation.clientName}`}>
         <div className="panel-header">
-          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installmentTotal} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
+          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installmentTotal} vence` : recurringOp && operation.pendingPeriods.length > 1 ? `Juros pendentes de ${operation.pendingPeriods.length} períodos, desde` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <OperationProfitHero operation={operation} />
@@ -1478,7 +1478,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             <input type="hidden" name="operationId" value={operation.id} />
             <input type="hidden" name="paymentMode" value={mode} />
             {mode === "INTEREST_ONLY_RENEWAL" && <input type="hidden" name="expectedPeriod" value={operation.periodNumber} />}
-            <div className="payment-shortcuts field-wide" role="group" aria-label="Modalidade do pagamento">
+            <div className="payment-shortcuts payment-modes" role="group" aria-label="Modalidade do pagamento">
               {recurringOp && <button type="button" className={mode === "INTEREST_ONLY_RENEWAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "INTEREST_ONLY_RENEWAL"} disabled={!canRenew} title={renewCheck && !renewCheck.ok ? renewCheck.error : undefined} onClick={() => choose("INTEREST_ONLY_RENEWAL", operation.interestRemainingCents)}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
               {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => choose("MANUAL", next.remainingCents)}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
               <button type="button" className={mode === "MANUAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "MANUAL"} onClick={() => choose("MANUAL", null)}>Pagamento manual</button>
@@ -1496,7 +1496,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
               </div>
             )}
             {plan?.ok && plan.pendingPeriods.length > 1 && (mode === "INTEREST_ONLY_RENEWAL" || plan.interestCents > 0) && (
-              <div className="capital-note field-wide" aria-live="polite">
+              <div className="capital-note field-full" aria-live="polite">
                 <strong>Juros pendentes por período:</strong>{" "}
                 {plan.pendingPeriods.map((item) => `${item.number}º (venc. ${formatDate(item.dueDate)}) ${formatMoney(item.remainingCents)}`).join(" · ")}
               </div>

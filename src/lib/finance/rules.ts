@@ -266,7 +266,9 @@ export type LedgerTerms = {
 // mode/allocationOrder: gravados no pagamento (migration 0054). Ausentes (null) = pagamento antigo, pela regra de antes.
 export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null };
 // interestPaidCents: quanto dos juros deste período já foi pago (cada período é acompanhado separadamente).
-export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null; interestPaidCents?: number };
+export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null; interestPaidCents?: number;
+  // Período aberto no vencimento com juros anteriores ainda sem pagar (juros contínuos): não conta como renovação.
+  withArrears?: boolean };
 // Juros pendentes de um período (composição mostrada na prévia, do mais antigo para o atual).
 export type PendingPeriod = { number: number; dueDate: string; interestCents: number; paidCents: number; remainingCents: number };
 // number = número ATUAL entre as obrigações ativas (a parcela renegociada mantém o número original, que é o histórico);
@@ -467,7 +469,7 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
   const left = (period: LedgerPeriod) => Math.max(period.interestCents - (period.interestPaidCents ?? 0), 0);
   const pending = () => periods.reduce((total, period) => total + left(period), 0);
   const open = (period: Omit<LedgerPeriod, "number" | "interestPaidCents">) => {
-    periods.push({ number: periods.length + 1, ...period, interestPaidCents: 0 });
+    periods.push({ number: periods.length + 1, ...period, interestPaidCents: 0, ...(pending() > 0 ? { withArrears: true } : {}) });
     if (completedBy) { completedBy.kind = "RENEWAL"; completedBy.renewedPeriod = current(); }
     completedBy = null;
   };
@@ -527,7 +529,9 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     interestCents, totalCents: terms.principalCents + interestCents,
     interestRemainingCents, principalRemainingCents: principalOpen, balanceCents,
     schedule: [] as ScheduleItem[], nextItem: null as ScheduleItem | null, nextDueDate: dueDate,
-    periods, periodNumber: period.number, periodInterestCents: period.interestCents, periodDueDate: period.dueDate, renewalCount: periods.length - 1, forgivenCents: 0,
+    periods, periodNumber: period.number, periodInterestCents: period.interestCents, periodDueDate: period.dueDate,
+    // Renovações: períodos abertos com os juros anteriores pagos (na hora ou no vencimento). Os abertos em atraso não contam.
+    renewalCount: periods.slice(1).filter((item) => !item.withArrears).length, forgivenCents: 0,
     pendingPeriods,
     // Próximo valor a cobrar: os juros pendentes (ou o saldo, se só restar principal).
     amountDueCents: interestRemainingCents > 0 ? interestRemainingCents : balanceCents,

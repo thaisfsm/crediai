@@ -71,6 +71,7 @@ test("MP3. oito 'Só os juros' seguidos (caso Tatiana corrigido): juros R$ 800, 
   assert.ok(hoje.pendingPeriods.every((item) => item.remainingCents === 10000));
   assert.equal(hoje.interestRemainingCents, 360000);
   assert.equal(hoje.balanceCents, 860000);
+  assert.equal(hoje.renewalCount, 8, "períodos abertos em atraso não contam como renovação");
 });
 
 test("MP4. renovação sem duplicidade: o mesmo período não renova duas vezes; valor diferente e pagamento retroativo recusados", () => {

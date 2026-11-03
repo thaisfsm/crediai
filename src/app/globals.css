@@ -752,6 +752,10 @@ button { color:inherit; }
 .payment-summary dd { margin:3px 0 0; color:#dff4f6; font-size:13px; font-weight:650; font-variant-numeric:tabular-nums; }
 .payment-summary .payment-balance { border-color:rgba(73,218,214,.3); background:rgba(39,160,157,.08); }
 .payment-shortcuts { display:flex; flex-wrap:wrap; gap:6px; }
+.payment-modes { grid-column:1 / -1; }
+.payment-modes > button { flex:0 0 auto; }
+/* O painel abre dentro da linha da tabela (fit-table): os botões de modalidade não esticam na largura toda. */
+.payment-panel .form-grid.form-grid .payment-modes > .outline-button, .payment-panel .form-grid.form-grid .payment-modes > .primary-button { width:auto; }
 .payment-history { margin-top:16px; padding-top:12px; border-top:1px solid rgba(128,168,187,.12); }
 .payment-history h3 { margin:0 0 8px; color:#dcebf2; font-size:12px; }
 .payment-history ul { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
