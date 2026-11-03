@@ -2,7 +2,7 @@
 import { addDays, daysBetween, formatDate, initialsOf, shortDate, todayIso } from "./format";
 import type { ClientProfile } from "./client-profile";
 import type { ChartSeries } from "./chart";
-import { interestModeOf, operationLedger, paymentKindLabels, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
+import { interestModeOf, operationLedger, paymentLabel, type Frequency, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED" | "RENEGOTIATED";
 
@@ -294,7 +294,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
     const operation = operationById.get(payment.operationId);
     return {
       key: payment.id, operationId: payment.operationId, clientName: payment.clientName, initials: initialsOf(payment.clientName), color: colorFor(operation?.clientId ?? payment.clientName),
-      detail: `Op. #${operationCode(payment.operationId)} · ${paymentKindLabels[payment.kind]} · Pago em ${formatDate(payment.paidAt)}`, amountCents: payment.amountCents,
+      detail: `Op. #${operationCode(payment.operationId)} · ${paymentLabel(payment)} · Pago em ${formatDate(payment.paidAt)}`, amountCents: payment.amountCents,
       status: relativePaid(payment.paidAt, today), tone: "received",
     };
   });

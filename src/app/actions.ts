@@ -857,6 +857,8 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   const paidAt = text(data, "paidAt", 10) || todayIso();
   const notes = optional(text(data, "notes", 500));
   const newDueDateInput = text(data, "newDueDate", 10);
+  // Modalidade escolhida na tela: "Só os juros e renovar" (INTEREST_ONLY). Ela prevalece sobre a ordem de apropriação.
+  const interestOnlyChosen = text(data, "paymentMode", 20) === "INTEREST_ONLY";
   if (newDueDateInput && !isIsoDate(newDueDateInput)) return { ok: false, error: "Informe o novo vencimento." };
   if (!operationId) return { ok: false, error: "Operação inválida." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
@@ -884,7 +886,10 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     // Renovação na hora só para o pagamento mais recente (os retroativos renovam no vencimento, pela mesma regra).
     const latest = previous.every((payment) => payment.paidAt <= paidAt);
     const before = operationLedger(terms, previous, paidAt);
-    const renewal = latest ? interestOnlyRenewal(terms, before, amountCents) : null;
+    const renewal = latest ? interestOnlyRenewal(terms, before, amountCents, interestOnlyChosen) : null;
+    if (interestOnlyChosen && !renewal) {
+      return { ok: false, error: `"Só os juros e renovar" vale para o pagamento mais recente, com valor igual aos juros do período (${formatMoney(before.interestRemainingCents)}) e principal em aberto.` };
+    }
     if (newDueDateInput && !renewal) {
       return { ok: false, error: `Novo vencimento só vale para o pagamento somente dos juros do período (${formatMoney(before.interestRemainingCents)}).` };
     }

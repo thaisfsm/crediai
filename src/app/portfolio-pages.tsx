@@ -14,7 +14,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentLabel, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
@@ -1400,18 +1400,20 @@ function DeferInstallmentForm({ operation, number, today, onClose, onDone }: { o
 // readOnly: operação de ciclo encerrado aberta pelo relatório; só consulta (o servidor também recusa alterações).
 function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void; readOnly?: boolean }) {
   const [amount, setAmount] = useState("");
-  const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { setAmount(""); onChanged(); });
+  // Modalidade escolhida: "Só os juros e renovar" marca o pagamento como somente juros; digitar outro valor desfaz a escolha.
+  const [interestOnly, setInterestOnly] = useState(false);
+  const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { setAmount(""); setInterestOnly(false); onChanged(); });
   const isOpen = operation.status === "OPEN" && !readOnly;
   const amountCents = parseMoneyToCents(amount);
   const check = amountCents !== null ? checkPayment({ amountCents, balanceCents: operation.balanceCents, formatMoney }) : null;
-  // Prévia deste pagamento (hoje) pelo mesmo extrato usado no servidor: juros primeiro, depois principal.
+  // Prévia deste pagamento (hoje) pelo mesmo extrato usado no servidor, na ordem de apropriação do contrato.
   const after = check?.ok ? ledgerOf(operation, [...operation.payments, { id: "preview", amountCents: amountCents ?? 0, paidAt: today, createdAt: "9999" }], today) : null;
   const thisPayment = after?.items.find((item) => item.id === "preview");
   const recurringOp = !amortized(operation);
   const canRenew = recurringOp && operation.interestRemainingCents > 0 && operation.principalRemainingCents > 0;
   const next = operation.nextInstallment;
-  // Pagamento somente de juros: a mesma regra central que o servidor aplica (interestOnlyRenewal).
-  const renewal = check?.ok === true && amountCents !== null ? interestOnlyRenewal(operation.ledgerTerms, operation, amountCents) : null;
+  // Pagamento somente de juros: a mesma regra central que o servidor aplica (interestOnlyRenewal), com a escolha do usuário.
+  const renewal = check?.ok === true && amountCents !== null ? interestOnlyRenewal(operation.ledgerTerms, operation, amountCents, interestOnly) : null;
   const renews = renewal !== null;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
@@ -1469,12 +1471,13 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
         {isOpen && !settling && (
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
+            {renews && <input type="hidden" name="paymentMode" value="INTEREST_ONLY" />}
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
-            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
+            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => { setAmount(event.target.value); setInterestOnly(false); }} required autoFocus /></label>
             <div className="payment-shortcuts field-wide">
-              {canRenew && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.interestRemainingCents))}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
-              {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(next.remainingCents))}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
-              <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.balanceCents))}>Saldo total ({formatMoney(operation.balanceCents)})</button>
+              {canRenew && <button type="button" className={interestOnly ? "primary-button" : "outline-button"} aria-pressed={interestOnly} onClick={() => { setAmount(centsToInput(operation.interestRemainingCents)); setInterestOnly(true); }}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
+              {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => { setAmount(centsToInput(next.remainingCents)); setInterestOnly(false); }}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
+              <button type="button" className="outline-button" onClick={() => { setAmount(centsToInput(operation.balanceCents)); setInterestOnly(false); }}>Saldo total ({formatMoney(operation.balanceCents)})</button>
             </div>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
             {check && !check.ok && <p className="form-feedback form-feedback-warning">{check.error}</p>}
@@ -1521,7 +1524,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           {operation.payments.length === 0 ? <p className="muted-cell">Nenhum pagamento registrado.</p> : (
             <ul>{operation.payments.map((payment) => (
               <li key={payment.id}>
-                <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
+                <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentLabel(payment)}</span>
                 {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !operation.settlementPaymentId && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}

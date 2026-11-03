@@ -15,8 +15,13 @@ export function calculateOperation({ principalCents, interestRateBps }: { princi
 
 export type PaymentKind = "INTEREST" | "PARTIAL" | "SETTLEMENT" | "RENEWAL" | "INSTALLMENT";
 export const paymentKindLabels: Record<PaymentKind, string> = {
-  INTEREST: "Juros", PARTIAL: "Pagamento de principal", SETTLEMENT: "Quitação", RENEWAL: "Juros / Renovação", INSTALLMENT: "Parcela",
+  INTEREST: "Pagamento de juros", PARTIAL: "Amortização do principal", SETTLEMENT: "Quitação", RENEWAL: "Pagamento de juros / Renovação", INSTALLMENT: "Parcela",
 };
+// Rótulo do histórico: o tipo do pagamento e, quando ele cobriu juros e principal ao mesmo tempo, as duas partes.
+export function paymentLabel(item: { kind: PaymentKind; interestCents: number; principalCents: number }) {
+  if (item.kind === "PARTIAL" && item.interestCents > 0) return "Juros + amortização do principal";
+  return paymentKindLabels[item.kind];
+}
 
 // ══ Regra matemática oficial: JUROS SIMPLES ═══════════════════════════════════════════════════════════════════════
 // Todas as operações do CrediAI usam juros simples:  J = P × i × n  e  M = P + J
@@ -446,7 +451,10 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     const interestLeft = Math.max(current().interestCents - periodInterestPaid, 0);
     const balanceBeforeCents = principalOpen + interestLeft;
     // Principal primeiro: o pagamento abate o principal em aberto e só o resto cobre os juros do período (lucro).
-    const principalFirst = terms.paymentOrder === "PRINCIPAL_FIRST";
+    // Exceção: pagamento registrado pela opção "Só os juros e renovar" (tem linha em loan_renewal). A modalidade escolhida
+    // prevalece: o valor cobre os juros do período e não reduz o principal, em qualquer ordem de apropriação.
+    const row = rows.get(payment.id);
+    const principalFirst = terms.paymentOrder === "PRINCIPAL_FIRST" && !row;
     const principalPart = principalFirst ? Math.min(payment.amountCents, principalOpen) : 0;
     const interestPart = Math.min(payment.amountCents - principalPart, interestLeft);
     const principalPartFinal = principalFirst ? principalPart : Math.min(payment.amountCents - interestPart, principalOpen);
@@ -457,7 +465,6 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     const settles = principalOpen === 0 && periodInterestPaid >= current().interestCents;
     const item: LedgerItem<T> = { ...payment, interestCents: interestPart, principalCents: principalPartFinal, kind: settles ? "SETTLEMENT" : principalPartFinal > 0 ? "PARTIAL" : "INTEREST", balanceBeforeCents, renewedPeriod: null };
     completedBy = !settles && principalPartFinal === 0 && interestPart > 0 && periodInterestPaid >= current().interestCents ? item : null;
-    const row = rows.get(payment.id);
     if (row && principalOpen > 0 && periodInterestPaid >= current().interestCents) {
       completedBy = item;
       open({ dueDate: row.newDueDate, interestCents: row.interestCents, principalBaseCents: row.principalBaseCents, openedOn: payment.paidAt, openedBy: "PAYMENT", paymentId: payment.id });
@@ -484,8 +491,10 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
 // Pagamento somente de juros (regra central): só existe nos juros recorrentes (mensal e quinzenal), quando o valor é
 // exatamente o que falta dos juros do período atual e ainda há principal em aberto. Quita os juros do período, mantém o
 // principal, abre o período seguinte (vencimento por nextDueDate, ou a data informada) com juros sobre o principal.
-export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLedger, "interestRemainingCents" | "principalRemainingCents" | "nextDueDate">, amountCents: number) {
-  if (isAmortized(terms) || terms.paymentOrder === "PRINCIPAL_FIRST" || ledger.principalRemainingCents <= 0 || ledger.interestRemainingCents <= 0 || amountCents !== ledger.interestRemainingCents) return null;
+// explicit = o usuário escolheu "Só os juros e renovar". Nos contratos de principal primeiro, pagar o valor dos juros sem
+// escolher essa opção continua abatendo o principal; com a escolha explícita, é pagamento de juros e renova.
+export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLedger, "interestRemainingCents" | "principalRemainingCents" | "nextDueDate">, amountCents: number, explicit = false) {
+  if (isAmortized(terms) || (terms.paymentOrder === "PRINCIPAL_FIRST" && !explicit) || ledger.principalRemainingCents <= 0 || ledger.interestRemainingCents <= 0 || amountCents !== ledger.interestRemainingCents) return null;
   const anchorDay = Number(terms.firstDueDate.slice(8, 10));
   return {
     previousDueDate: ledger.nextDueDate,
