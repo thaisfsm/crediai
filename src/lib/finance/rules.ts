@@ -15,13 +15,32 @@ export function calculateOperation({ principalCents, interestRateBps }: { princi
 
 export type PaymentKind = "INTEREST" | "PARTIAL" | "SETTLEMENT" | "RENEWAL" | "INSTALLMENT";
 export const paymentKindLabels: Record<PaymentKind, string> = {
-  INTEREST: "Pagamento de juros", PARTIAL: "Amortização do principal", SETTLEMENT: "Quitação", RENEWAL: "Pagamento de juros / Renovação", INSTALLMENT: "Parcela",
+  INTEREST: "Pagamento de juros", PARTIAL: "Amortização do principal", SETTLEMENT: "Quitação", RENEWAL: "Juros / Renovação", INSTALLMENT: "Parcela",
 };
 // Rótulo do histórico: o tipo do pagamento e, quando ele cobriu juros e principal ao mesmo tempo, as duas partes.
-export function paymentLabel(item: { kind: PaymentKind; interestCents: number; principalCents: number }) {
+export function paymentLabel(item: { kind: PaymentKind; interestCents: number; principalCents: number; mode?: PaymentMode | null }) {
+  if (item.mode === "EARLY_SETTLEMENT") return "Liquidação antecipada";
+  if (item.mode === "INTEREST_ONLY_RENEWAL" && item.kind !== "SETTLEMENT") return "Juros / Renovação";
   if (item.kind === "PARTIAL" && item.interestCents > 0) return "Juros + amortização do principal";
   return paymentKindLabels[item.kind];
 }
+
+// ══ Modalidade do pagamento (escolhida na tela, validada e gravada pelo servidor) ═══════════════════════════════════
+//  • INTEREST_ONLY_RENEWAL: só os juros pendentes, com renovação. Tudo é juros, o principal não muda e abre o próximo
+//    período. Vale em qualquer contrato recorrente (juros primeiro ou principal primeiro): a escolha prevalece.
+//  • MANUAL: valor livre, dividido pela ordem de apropriação do contrato (gravada junto, para não mudar depois).
+//  • PRINCIPAL_AMORTIZATION: abate só o principal (até o principal em aberto). Os juros pendentes continuam pendentes.
+//  • FULL_SETTLEMENT: exatamente o saldo total (principal em aberto + juros pendentes). Quita.
+//  • EARLY_SETTLEMENT: liquidação antecipada pelo valor negociado (ação própria, settledLedger).
+export const PAYMENT_MODES = ["INTEREST_ONLY_RENEWAL", "MANUAL", "PRINCIPAL_AMORTIZATION", "FULL_SETTLEMENT", "EARLY_SETTLEMENT"] as const;
+export type PaymentMode = (typeof PAYMENT_MODES)[number];
+export type AllocationOrder = "INTEREST_FIRST" | "PRINCIPAL_FIRST";
+export const paymentModeLabels: Record<PaymentMode, string> = {
+  INTEREST_ONLY_RENEWAL: "Só os juros e renovar", MANUAL: "Pagamento manual", PRINCIPAL_AMORTIZATION: "Amortizar principal",
+  FULL_SETTLEMENT: "Saldo total", EARLY_SETTLEMENT: "Liquidação antecipada",
+};
+export const isPaymentMode = (value: unknown): value is PaymentMode => typeof value === "string" && (PAYMENT_MODES as readonly string[]).includes(value);
+export const isAllocationOrder = (value: unknown): value is AllocationOrder => value === "INTEREST_FIRST" || value === "PRINCIPAL_FIRST";
 
 // ══ Regra matemática oficial: JUROS SIMPLES ═══════════════════════════════════════════════════════════════════════
 // Todas as operações do CrediAI usam juros simples:  J = P × i × n  e  M = P + J
@@ -244,8 +263,12 @@ export type LedgerTerms = {
   // Parcelado: vencimentos combinados (um por parcela) quando diferem da regra mensal/quinzenal; sem eles, pela regra.
   customDueDates?: string[] | null;
 };
-export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string };
-export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null };
+// mode/allocationOrder: gravados no pagamento (migration 0054). Ausentes (null) = pagamento antigo, pela regra de antes.
+export type LedgerPayment = { id: string; amountCents: number; paidAt: string; createdAt?: string; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null };
+// interestPaidCents: quanto dos juros deste período já foi pago (cada período é acompanhado separadamente).
+export type LedgerPeriod = { number: number; dueDate: string; interestCents: number; principalBaseCents: number; openedOn: string | null; openedBy: "CONTRACT" | "PAYMENT" | "DUE_DATE"; paymentId: string | null; interestPaidCents?: number };
+// Juros pendentes de um período (composição mostrada na prévia, do mais antigo para o atual).
+export type PendingPeriod = { number: number; dueDate: string; interestCents: number; paidCents: number; remainingCents: number };
 // number = número ATUAL entre as obrigações ativas (a parcela renegociada mantém o número original, que é o histórico);
 // originalNumber = número no contrato original; deferredTo = número atual da obrigação para onde a parcela foi; deferredFrom =
 // número original da parcela que originou esta obrigação do final; additionCents = acréscimo dessa obrigação.
@@ -348,7 +371,7 @@ function settledLedger<T extends LedgerPayment>(base: (list: T[], date: string) 
     items: [...prior.items, item],
     paidCents: prior.paidCents + settlement.amountCents, interestPaidCents, principalPaidCents,
     interestRemainingCents: 0, principalRemainingCents: Math.max(prior.principalRemainingCents - principalPart, 0), balanceCents: 0,
-    amountDueCents: 0, nextItem: null,
+    amountDueCents: 0, nextItem: null, pendingPeriods: [] as PendingPeriod[],
     // Parcelas que faltavam ficam encerradas na liquidação: sem valor em aberto e sem data de cobrança.
     schedule: prior.schedule.map((entry) => (entry.state === "PAID" || entry.state === "DEFERRED" ? entry : { ...entry, state: "CLOSED" as const, remainingCents: 0 })),
     forgivenCents: Math.max(prior.balanceCents - settlement.amountCents, 0),
@@ -407,7 +430,8 @@ function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered
     interestRemainingCents: Math.max(terms.interestCents - interestPaidCents, 0),
     principalRemainingCents: Math.max(terms.principalCents - principalPaidCents, 0),
     balanceCents, schedule, nextItem, nextDueDate: nextDue,
-    periods: [] as LedgerPeriod[], periodNumber: 1, periodInterestCents: terms.interestCents, renewalCount: 0, forgivenCents: 0,
+    periods: [] as LedgerPeriod[], periodNumber: 1, periodInterestCents: terms.interestCents, periodDueDate: nextDue, renewalCount: 0, forgivenCents: 0,
+    pendingPeriods: [] as PendingPeriod[],
     // Próximo valor a cobrar: o que falta da próxima parcela.
     amountDueCents: nextItem?.remainingCents ?? 0,
     ...stateFor(balanceCents, nextItem?.dueDate ?? null, asOf),
@@ -415,57 +439,75 @@ function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered
 }
 
 // Mensal e quinzenal (juros recorrentes). Regras:
-//  1. Período k vence em dueDate_k e cobra juros_k = taxa do período × principal em aberto no início do período.
-//  2. Cada pagamento quita primeiro os juros do período atual e depois o principal (regra de apropriação existente).
-//  3. Renovação: com os juros do período quitados e principal em aberto, abre-se o período seguinte — na hora, quando
-//     o pagamento foi registrado como "somente juros" (linha em loan_renewal, com o vencimento escolhido), ou no
-//     vencimento do período, quando os juros foram pagos e nada mais (ex.: pagamento registrado antes de existir a
-//     renovação, como o do Alexandre). O próximo vencimento vem de nextDueDate e os juros, do principal em aberto.
-//  4. Quitação: principal em aberto zerado com os juros do período pagos.
-// Não há juros sobre juros, nem juros de atraso: um período vencido sem os juros pagos fica Em atraso e só renova
-// quando os juros dele forem pagos.
+//  1. Período k vence em dueDate_k e cobra juros_k = taxa do período × principal em aberto no início do período (juros
+//     simples: nunca sobre juros pendentes, nunca capitalizados). Cada período guarda quanto dos seus juros foi pago.
+//  2. Divisão de cada pagamento, pela modalidade gravada nele:
+//     • "Só os juros e renovar" (ou pagamento antigo com linha em loan_renewal): juros pendentes, do período mais antigo
+//       para o atual; o principal não muda.
+//     • Amortizar principal: só principal.
+//     • Manual / saldo total / antigos sem modalidade: a ordem de apropriação gravada no pagamento (ou a do contrato,
+//       nos antigos). Juros primeiro: juros pendentes e depois principal. Principal primeiro: principal e depois juros.
+//  3. Renovação: com os juros pendentes quitados e principal em aberto, abre-se o período seguinte — na hora, quando o
+//     pagamento foi "Só os juros e renovar" (linha em loan_renewal, com o vencimento escolhido), ou no vencimento.
+//  4. Juros contínuos (contratos de principal primeiro, os criados desde 26/10): enquanto houver principal em aberto, cada
+//     vencimento ultrapassado abre o período seguinte mesmo com juros anteriores sem pagar (ficam pendentes, um a um).
+//     Contratos antigos (juros primeiro): um período vencido sem os juros pagos fica Em atraso e só renova quando os
+//     juros dele forem pagos (regra de sempre, preservada para não mudar o histórico deles).
+//  5. Quitação: principal em aberto e juros pendentes zerados.
+// Não há multa, juros de mora nem juros sobre juros.
 function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T[], asOf: string) {
   const anchorDay = Number(terms.firstDueDate.slice(8, 10));
+  const continuous = terms.paymentOrder === "PRINCIPAL_FIRST";
   const rows = new Map(terms.renewals.map((row) => [row.paymentId, row]));
-  const periods: LedgerPeriod[] = [{ number: 1, dueDate: terms.firstDueDate, interestCents: terms.interestCents, principalBaseCents: terms.principalCents, openedOn: null, openedBy: "CONTRACT", paymentId: null }];
-  let principalOpen = terms.principalCents, periodInterestPaid = 0, interestPaidCents = 0, principalPaidCents = 0;
-  // Pagamento só de juros que completou os juros do período atual (vira "Juros / Renovação" se o período renovar).
+  const periods: LedgerPeriod[] = [{ number: 1, dueDate: terms.firstDueDate, interestCents: terms.interestCents, principalBaseCents: terms.principalCents, openedOn: null, openedBy: "CONTRACT", paymentId: null, interestPaidCents: 0 }];
+  let principalOpen = terms.principalCents, interestPaidCents = 0, principalPaidCents = 0;
+  // Pagamento só de juros que completou os juros pendentes (vira "Juros / Renovação" se o período renovar).
   let completedBy: LedgerItem<T> | null = null;
   const current = () => periods[periods.length - 1];
-  const open = (period: Omit<LedgerPeriod, "number">) => {
-    periods.push({ number: periods.length + 1, ...period });
-    periodInterestPaid = 0;
+  const left = (period: LedgerPeriod) => Math.max(period.interestCents - (period.interestPaidCents ?? 0), 0);
+  const pending = () => periods.reduce((total, period) => total + left(period), 0);
+  const open = (period: Omit<LedgerPeriod, "number" | "interestPaidCents">) => {
+    periods.push({ number: periods.length + 1, ...period, interestPaidCents: 0 });
     if (completedBy) { completedBy.kind = "RENEWAL"; completedBy.renewedPeriod = current(); }
     completedBy = null;
   };
-  // Renovação no vencimento: juros do período pagos, principal em aberto e a data chegou.
+  // Juros pendentes, do período mais antigo para o atual.
+  const payInterest = (amount: number) => {
+    let rest = amount;
+    for (const period of periods) {
+      const part = Math.min(rest, left(period));
+      period.interestPaidCents = (period.interestPaidCents ?? 0) + part;
+      rest -= part;
+    }
+    return amount - rest;
+  };
+  // Renovação no vencimento: juros pagos e a data chegou; nos juros contínuos, também depois do vencimento sem os juros pagos.
   const renewOnDue = (date: string) => {
     // Período sem juros (taxa 0%) não renova: vencido com principal em aberto, fica Em atraso.
-    while (principalOpen > 0 && current().interestCents > 0 && periodInterestPaid >= current().interestCents && date >= current().dueDate) {
+    while (principalOpen > 0 && current().interestCents > 0 && ((left(current()) === 0 && pending() === 0 && date >= current().dueDate) || (continuous && date > current().dueDate))) {
       const due = current().dueDate;
       open({ dueDate: nextDueDate(terms.frequency, due, anchorDay), interestCents: periodInterest(terms, principalOpen), principalBaseCents: principalOpen, openedOn: due, openedBy: "DUE_DATE", paymentId: null });
     }
   };
   const items: LedgerItem<T>[] = ordered.map((payment) => {
     renewOnDue(payment.paidAt);
-    const interestLeft = Math.max(current().interestCents - periodInterestPaid, 0);
-    const balanceBeforeCents = principalOpen + interestLeft;
-    // Principal primeiro: o pagamento abate o principal em aberto e só o resto cobre os juros do período (lucro).
-    // Exceção: pagamento registrado pela opção "Só os juros e renovar" (tem linha em loan_renewal). A modalidade escolhida
-    // prevalece: o valor cobre os juros do período e não reduz o principal, em qualquer ordem de apropriação.
+    const balanceBeforeCents = principalOpen + pending();
     const row = rows.get(payment.id);
-    const principalFirst = terms.paymentOrder === "PRINCIPAL_FIRST" && !row;
-    const principalPart = principalFirst ? Math.min(payment.amountCents, principalOpen) : 0;
-    const interestPart = Math.min(payment.amountCents - principalPart, interestLeft);
-    const principalPartFinal = principalFirst ? principalPart : Math.min(payment.amountCents - interestPart, principalOpen);
-    periodInterestPaid += interestPart;
+    const mode = payment.mode ?? null;
+    const order: AllocationOrder = payment.allocationOrder ?? terms.paymentOrder ?? "INTEREST_FIRST";
+    // A modalidade escolhida prevalece sobre a ordem do contrato: só juros nunca abate principal; amortização só principal.
+    const interestOnly = mode === "INTEREST_ONLY_RENEWAL" || (mode === null && row !== undefined);
+    const principalFirst = !interestOnly && (mode === "PRINCIPAL_AMORTIZATION" || order === "PRINCIPAL_FIRST");
+    let principalPart = principalFirst ? Math.min(payment.amountCents, principalOpen) : 0;
+    const interestPart = payInterest(payment.amountCents - principalPart);
+    if (!principalFirst) principalPart = Math.min(payment.amountCents - interestPart, principalOpen);
     interestPaidCents += interestPart;
-    principalOpen -= principalPartFinal;
-    principalPaidCents += principalPartFinal;
-    const settles = principalOpen === 0 && periodInterestPaid >= current().interestCents;
-    const item: LedgerItem<T> = { ...payment, interestCents: interestPart, principalCents: principalPartFinal, kind: settles ? "SETTLEMENT" : principalPartFinal > 0 ? "PARTIAL" : "INTEREST", balanceBeforeCents, renewedPeriod: null };
-    completedBy = !settles && principalPartFinal === 0 && interestPart > 0 && periodInterestPaid >= current().interestCents ? item : null;
-    if (row && principalOpen > 0 && periodInterestPaid >= current().interestCents) {
+    principalOpen -= principalPart;
+    principalPaidCents += principalPart;
+    const settles = principalOpen === 0 && pending() === 0;
+    const item: LedgerItem<T> = { ...payment, interestCents: interestPart, principalCents: principalPart, kind: settles ? "SETTLEMENT" : principalPart > 0 ? "PARTIAL" : "INTEREST", balanceBeforeCents, renewedPeriod: null };
+    completedBy = !settles && principalPart === 0 && interestPart > 0 && pending() === 0 ? item : null;
+    if (row && principalOpen > 0 && pending() === 0) {
       completedBy = item;
       open({ dueDate: row.newDueDate, interestCents: row.interestCents, principalBaseCents: row.principalBaseCents, openedOn: payment.paidAt, openedBy: "PAYMENT", paymentId: payment.id });
     }
@@ -474,32 +516,106 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
   renewOnDue(asOf);
   const period = current();
   const interestCents = periods.reduce((total, item) => total + item.interestCents, 0);
-  const interestRemainingCents = principalOpen > 0 || periodInterestPaid < period.interestCents ? Math.max(period.interestCents - periodInterestPaid, 0) : 0;
+  const interestRemainingCents = pending();
   const balanceCents = principalOpen + interestRemainingCents;
+  const pendingPeriods: PendingPeriod[] = periods.filter((item) => left(item) > 0)
+    .map((item) => ({ number: item.number, dueDate: item.dueDate, interestCents: item.interestCents, paidCents: item.interestPaidCents ?? 0, remainingCents: left(item) }));
+  // Vencimento a cobrar: o do período pendente mais antigo (em atraso, se já passou); sem pendência, o do período atual.
+  const dueDate = pendingPeriods[0]?.dueDate ?? period.dueDate;
   return {
     items, paidCents: interestPaidCents + principalPaidCents, interestPaidCents, principalPaidCents,
     interestCents, totalCents: terms.principalCents + interestCents,
     interestRemainingCents, principalRemainingCents: principalOpen, balanceCents,
-    schedule: [] as ScheduleItem[], nextItem: null as ScheduleItem | null, nextDueDate: period.dueDate,
-    periods, periodNumber: period.number, periodInterestCents: period.interestCents, renewalCount: periods.length - 1, forgivenCents: 0,
-    // Próximo valor a cobrar: os juros que faltam do período (ou o saldo, se só restar principal).
+    schedule: [] as ScheduleItem[], nextItem: null as ScheduleItem | null, nextDueDate: dueDate,
+    periods, periodNumber: period.number, periodInterestCents: period.interestCents, periodDueDate: period.dueDate, renewalCount: periods.length - 1, forgivenCents: 0,
+    pendingPeriods,
+    // Próximo valor a cobrar: os juros pendentes (ou o saldo, se só restar principal).
     amountDueCents: interestRemainingCents > 0 ? interestRemainingCents : balanceCents,
-    ...stateFor(balanceCents, period.dueDate, asOf),
+    ...stateFor(balanceCents, dueDate, asOf),
   };
 }
 
 // Pagamento somente de juros (regra central): só existe nos juros recorrentes (mensal e quinzenal), quando o valor é
-// exatamente o que falta dos juros do período atual e ainda há principal em aberto. Quita os juros do período, mantém o
-// principal, abre o período seguinte (vencimento por nextDueDate, ou a data informada) com juros sobre o principal.
-// explicit = o usuário escolheu "Só os juros e renovar". Nos contratos de principal primeiro, pagar o valor dos juros sem
-// escolher essa opção continua abatendo o principal; com a escolha explícita, é pagamento de juros e renova.
-export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLedger, "interestRemainingCents" | "principalRemainingCents" | "nextDueDate">, amountCents: number, explicit = false) {
+// exatamente o total dos juros pendentes e ainda há principal em aberto. Quita os juros, mantém o principal e abre o
+// período seguinte ao atual (vencimento por nextDueDate, ou a data informada) com juros sobre o principal em aberto.
+// explicit = o usuário escolheu "Só os juros e renovar" (vale em qualquer ordem de apropriação). Sem a escolha, só os
+// contratos antigos (juros primeiro) renovam pelo valor — comportamento de antes, para quem não envia a modalidade.
+export function interestOnlyRenewal(terms: LedgerTerms, ledger: Pick<OperationLedger, "interestRemainingCents" | "principalRemainingCents" | "nextDueDate"> & { periodDueDate?: string }, amountCents: number, explicit = false) {
   if (isAmortized(terms) || (terms.paymentOrder === "PRINCIPAL_FIRST" && !explicit) || ledger.principalRemainingCents <= 0 || ledger.interestRemainingCents <= 0 || amountCents !== ledger.interestRemainingCents) return null;
   const anchorDay = Number(terms.firstDueDate.slice(8, 10));
+  const previousDueDate = ledger.periodDueDate ?? ledger.nextDueDate;
   return {
-    previousDueDate: ledger.nextDueDate,
-    defaultNewDueDate: nextDueDate(terms.frequency, ledger.nextDueDate, anchorDay),
+    previousDueDate,
+    defaultNewDueDate: nextDueDate(terms.frequency, previousDueDate, anchorDay),
     principalBaseCents: ledger.principalRemainingCents,
     nextInterestCents: periodInterest(terms, ledger.principalRemainingCents),
   };
 }
+
+const formatDate = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+export type PaymentPlanInput = { mode: PaymentMode; amountCents: number; paidAt: string; newDueDate?: string | null; expectedPeriod?: number | null };
+export type PaymentRenewalPlan = { periodNumber: number; previousDueDate: string; newDueDate: string; principalBaseCents: number; interestCents: number };
+// Plano de um pagamento: a MESMA função monta a prévia da tela e o que o servidor grava. Recebe os termos do contrato, os
+// pagamentos já gravados e a modalidade escolhida; valida a combinação, recalcula a divisão (nada vem do navegador além
+// do valor, da data e da modalidade) e devolve o extrato depois do pagamento. O servidor grava exatamente isto.
+export function planPayment<T extends LedgerPayment>(terms: LedgerTerms, previous: T[], input: PaymentPlanInput, asOf: string, paymentId = "preview", formatMoney: (cents: number) => string = (cents) => (cents / 100).toFixed(2)) {
+  const fail = (error: string) => ({ ok: false as const, error });
+  const { mode, amountCents, paidAt } = input;
+  if (!Number.isInteger(amountCents) || amountCents <= 0) return fail("Informe o valor recebido, por exemplo 300,00.");
+  if (mode === "EARLY_SETTLEMENT") return fail("A liquidação antecipada tem formulário próprio, com confirmação.");
+  const recurring = !isAmortized(terms);
+  const latest = previous.every((payment) => payment.paidAt <= paidAt);
+  const before = operationLedger(terms, previous, paidAt);
+  if (before.balanceCents <= 0) return fail("Esta operação não tem saldo em aberto.");
+  let renewal: PaymentRenewalPlan | null = null;
+  if (mode === "INTEREST_ONLY_RENEWAL") {
+    if (!recurring) return fail("\"Só os juros e renovar\" existe só no pagamento único mensal ou quinzenal.");
+    if (before.principalRemainingCents <= 0) return fail("Não há principal em aberto: não há período para renovar. Use \"Saldo total\".");
+    if (before.interestRemainingCents <= 0) return fail("Os juros deste período já estão pagos. Aguarde o próximo período ou use outra modalidade.");
+    if (!latest) return fail("\"Só os juros e renovar\" vale só para o pagamento mais recente: há pagamento registrado depois desta data.");
+    if (input.expectedPeriod != null && input.expectedPeriod !== before.periodNumber) return fail("Este período já foi renovado por outro pagamento. Atualize a tela e confira antes de registrar de novo.");
+    if (amountCents !== before.interestRemainingCents) {
+      const many = before.pendingPeriods.length > 1 ? ` (${before.pendingPeriods.length} períodos pendentes)` : "";
+      return fail(`"Só os juros e renovar" recebe exatamente os juros pendentes: ${formatMoney(before.interestRemainingCents)}${many}. Para outro valor, use "Pagamento manual".`);
+    }
+    const base = interestOnlyRenewal(terms, before, amountCents, true);
+    if (!base) return fail("Esta operação não pode renovar agora.");
+    const newDueDate = input.newDueDate || base.defaultNewDueDate;
+    if (newDueDate <= base.previousDueDate) return fail(`O novo vencimento precisa ser depois do vencimento atual (${formatDate(base.previousDueDate)}).`);
+    renewal = { periodNumber: before.periodNumber + 1, previousDueDate: base.previousDueDate, newDueDate, principalBaseCents: base.principalBaseCents, interestCents: base.nextInterestCents };
+  } else if (input.newDueDate) {
+    return fail("Novo vencimento só vale para \"Só os juros e renovar\".");
+  }
+  if (mode === "PRINCIPAL_AMORTIZATION") {
+    if (!recurring) return fail("No parcelado e no diário, use \"Pagamento manual\" ou \"Saldo total\".");
+    if (before.principalRemainingCents <= 0) return fail("Não há principal em aberto para amortizar.");
+    if (amountCents > before.principalRemainingCents) return fail(`A amortização não pode passar do principal em aberto (${formatMoney(before.principalRemainingCents)}).`);
+  }
+  if (mode === "FULL_SETTLEMENT") {
+    if (!latest) return fail("O saldo total vale só para o pagamento mais recente: há pagamento registrado depois desta data.");
+    if (amountCents !== before.balanceCents) return fail(`O saldo total nesta data é ${formatMoney(before.balanceCents)}.`);
+  }
+  const payment = { id: paymentId, amountCents, paidAt, createdAt: "9999-12-31T23:59:59.999Z", mode, allocationOrder: terms.paymentOrder ?? "INTEREST_FIRST" } as LedgerPayment as T;
+  const list = [...previous, payment];
+  const planned: LedgerTerms = renewal ? { ...terms, renewals: [...terms.renewals, { paymentId, ...renewal }] } : terms;
+  const after = operationLedger(planned, list, asOf);
+  const item = after.items.find((entry) => entry.id === paymentId);
+  if (!item) return fail("Pagamento inválido.");
+  const check = checkPayment({ amountCents, balanceCents: item.balanceBeforeCents, formatMoney });
+  if (!check.ok) return check;
+  const sum = list.reduce((total, entry) => total + entry.amountCents, 0);
+  if (after.paidCents !== sum) return fail("Com esta data, os pagamentos registrados depois dela passariam do saldo da operação. Confira a data do pagamento.");
+  if (mode === "INTEREST_ONLY_RENEWAL" && (item.principalCents !== 0 || item.interestCents !== amountCents)) return fail("Pagamento de juros inconsistente com o contrato.");
+  return {
+    ok: true as const, mode, allocationOrder: terms.paymentOrder ?? "INTEREST_FIRST", renewal, before, after, item,
+    settles: after.balanceCents === 0,
+    // Resumo da prévia (o mesmo que o servidor grava).
+    interestCents: item.interestCents, principalCents: item.principalCents,
+    principalBeforeCents: before.principalRemainingCents, principalAfterCents: before.principalRemainingCents - item.principalCents,
+    interestPendingBeforeCents: before.interestRemainingCents, interestPendingAfterCents: Math.max(before.interestRemainingCents - item.interestCents, 0),
+    pendingPeriods: before.pendingPeriods,
+    nextDueDate: renewal ? renewal.newDueDate : after.nextDueDate,
+    nextInterestCents: renewal ? renewal.interestCents : after.periodInterestCents,
+  };
+}
+export type PaymentPlan = Extract<ReturnType<typeof planPayment>, { ok: true }>;

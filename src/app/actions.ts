@@ -26,7 +26,7 @@ import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, operationLedger, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -837,9 +837,12 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
 }
 
 async function operationPayments(tx: TenantTransaction, tenantId: string, operationId: string) {
-  const rows = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt }).from(payments)
+  const rows = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt, paymentMode: payments.paymentMode, allocationOrder: payments.allocationOrder }).from(payments)
     .where(and(eq(payments.operationId, operationId), eq(payments.tenantId, tenantId)));
-  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+  return rows.map(({ paymentMode, allocationOrder, ...row }) => ({
+    ...row, createdAt: row.createdAt.toISOString(),
+    mode: isPaymentMode(paymentMode) ? paymentMode : null, allocationOrder: isAllocationOrder(allocationOrder) ? allocationOrder : null,
+  }));
 }
 
 // Cada centavo pago precisa caber no saldo do momento em que foi pago; senão um pagamento posterior passaria do saldo.
@@ -848,17 +851,27 @@ function fitsLedger(terms: LedgerTerms, list: LedgerPayment[], ledger: ReturnTyp
   return ledger.paidCents === sum && sum <= terms.principalCents + ledger.interestCents;
 }
 
-// Registra um pagamento. A divisão entre juros e principal, o período, o vencimento, o saldo e a quitação vêm de
-// operationLedger (rules.ts). Pagamento somente de juros (valor = juros que faltam do período, com principal em aberto),
-// no mensal e no quinzenal: renova o período na hora, com o vencimento padrão da periodicidade ou a data informada.
+// Registra um pagamento pela modalidade escolhida na tela (paymentMode), validada aqui. Prévia e gravação usam a mesma
+// função (planPayment, rules.ts): ela confere a combinação modalidade × valor × contrato, recalcula a divisão entre juros e
+// principal, o período, o vencimento e o saldo. O pagamento grava a modalidade e a ordem de apropriação usadas, para que
+// uma mudança posterior na regra do contrato não reclassifique o histórico.
+// Sem paymentMode (tela antiga aberta antes da atualização): regra de antes — no contrato antigo (juros primeiro), valor
+// igual aos juros pendentes renova; nos demais casos, pagamento manual.
 export async function registerPaymentAction(data: FormData): Promise<ActionResult> {
   const operationId = text(data, "operationId", 80);
   const amountCents = parseMoneyToCents(text(data, "amount", 40));
   const paidAt = text(data, "paidAt", 10) || todayIso();
   const notes = optional(text(data, "notes", 500));
   const newDueDateInput = text(data, "newDueDate", 10);
-  // Modalidade escolhida na tela: "Só os juros e renovar" (INTEREST_ONLY). Ela prevalece sobre a ordem de apropriação.
-  const interestOnlyChosen = text(data, "paymentMode", 20) === "INTEREST_ONLY";
+  const modeInput = text(data, "paymentMode", 40);
+  // "INTEREST_ONLY" era o nome usado pela versão anterior da tela.
+  const chosenMode = modeInput === "INTEREST_ONLY" ? "INTEREST_ONLY_RENEWAL" : modeInput;
+  if (chosenMode && !isPaymentMode(chosenMode)) return { ok: false, error: "Modalidade de pagamento inválida." };
+  if (chosenMode === "EARLY_SETTLEMENT") return { ok: false, error: "A liquidação antecipada tem formulário próprio, com confirmação." };
+  const expectedInput = text(data, "expectedPeriod", 6);
+  const expectedPeriod = expectedInput ? Number(expectedInput) : null;
+  if (expectedPeriod !== null && (!Number.isInteger(expectedPeriod) || expectedPeriod < 1)) return { ok: false, error: "Período inválido." };
+  if (chosenMode === "INTEREST_ONLY_RENEWAL" && expectedPeriod === null && modeInput !== "INTEREST_ONLY") return { ok: false, error: "Atualize a tela e escolha de novo \"Só os juros e renovar\"." };
   if (newDueDateInput && !isIsoDate(newDueDateInput)) return { ok: false, error: "Informe o novo vencimento." };
   if (!operationId) return { ok: false, error: "Operação inválida." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
@@ -866,7 +879,7 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   // Pagamento só entra no capital e no lucro quando o dinheiro chegou: data futura não é aceita.
   if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
-    // Trava a operação para que dois pagamentos simultâneos não passem do saldo.
+    // Trava a operação: dois pagamentos (ou duas renovações) simultâneos são aplicados um depois do outro e revalidados.
     const [operation] = await tx.select().from(loanOperations)
       .where(and(eq(loanOperations.id, operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, await currentCycle(tx, tenantId))))
       .for("update");
@@ -876,47 +889,36 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     const previous = await operationPayments(tx, tenantId, operation.id);
     const terms = await ledgerTermsOf(tx, tenantId, operation);
     const today = todayIso();
+    let mode: PaymentMode = chosenMode ? (chosenMode as PaymentMode) : "MANUAL";
+    if (!chosenMode && terms.paymentOrder !== "PRINCIPAL_FIRST" && previous.every((payment) => payment.paidAt <= paidAt)
+      && interestOnlyRenewal(terms, operationLedger(terms, previous, paidAt), amountCents)) mode = "INTEREST_ONLY_RENEWAL";
+    if (!chosenMode && newDueDateInput && mode !== "INTEREST_ONLY_RENEWAL") {
+      return { ok: false, error: "Novo vencimento só vale para \"Só os juros e renovar\"." };
+    }
     const paymentId = id("pay");
-    const list = [...previous, { id: paymentId, amountCents, paidAt, createdAt: new Date().toISOString() }];
-    const after = operationLedger(terms, list, today);
-    const item = after.items.find((entry) => entry.id === paymentId)!;
-    const check = checkPayment({ amountCents, balanceCents: item.balanceBeforeCents, formatMoney });
-    if (!check.ok) return check;
-    if (!fitsLedger(terms, list, after)) return { ok: false, error: "Com esta data, os pagamentos registrados depois dela passariam do saldo da operação. Confira a data do pagamento." };
-    // Renovação na hora só para o pagamento mais recente (os retroativos renovam no vencimento, pela mesma regra).
-    const latest = previous.every((payment) => payment.paidAt <= paidAt);
-    const before = operationLedger(terms, previous, paidAt);
-    const renewal = latest ? interestOnlyRenewal(terms, before, amountCents, interestOnlyChosen) : null;
-    if (interestOnlyChosen && !renewal) {
-      return { ok: false, error: `"Só os juros e renovar" vale para o pagamento mais recente, com valor igual aos juros do período (${formatMoney(before.interestRemainingCents)}) e principal em aberto.` };
-    }
-    if (newDueDateInput && !renewal) {
-      return { ok: false, error: `Novo vencimento só vale para o pagamento somente dos juros do período (${formatMoney(before.interestRemainingCents)}).` };
-    }
-    if (renewal) {
-      const newDueDate = newDueDateInput || renewal.defaultNewDueDate;
-      if (newDueDate <= renewal.previousDueDate) return { ok: false, error: `O novo vencimento precisa ser depois do vencimento atual (${formatDate(renewal.previousDueDate)}).` };
-      await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
+    const plan = planPayment(terms, previous, { mode, amountCents, paidAt, newDueDate: newDueDateInput || null, expectedPeriod }, today, paymentId, formatMoney);
+    if (!plan.ok) return plan;
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes, paymentMode: plan.mode, allocationOrder: plan.allocationOrder });
+    if (plan.renewal) {
       await tx.insert(loanRenewals).values({
-        id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: before.periodNumber + 1, previousDueDate: renewal.previousDueDate, newDueDate,
-        principalBaseCents: renewal.principalBaseCents, interestCents: renewal.nextInterestCents, createdByUserId: session.user.id,
+        id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: plan.renewal.periodNumber, previousDueDate: plan.renewal.previousDueDate, newDueDate: plan.renewal.newDueDate,
+        principalBaseCents: plan.renewal.principalBaseCents, interestCents: plan.renewal.interestCents, createdByUserId: session.user.id,
       });
       // first_due_date guarda o primeiro vencimento combinado (operações antigas não o tinham).
-      await tx.update(loanOperations).set({ dueDate: newDueDate, firstDueDate: terms.firstDueDate, updatedAt: sql`now()` })
+      await tx.update(loanOperations).set({ dueDate: plan.renewal.newDueDate, firstDueDate: terms.firstDueDate, updatedAt: sql`now()` })
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return {
         ok: true,
-        message: `Pagamento somente de juros de ${formatMoney(amountCents)} registrado. Período renovado até ${formatDate(newDueDate)}. Valor para quitação: ${formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}.`,
+        message: `Juros / Renovação: ${formatMoney(amountCents)} recebidos como juros. Principal mantido em ${formatMoney(plan.principalAfterCents)}. Período renovado até ${formatDate(plan.renewal.newDueDate)}, com juros de ${formatMoney(plan.renewal.interestCents)}. Valor para quitação: ${formatMoney(plan.renewal.principalBaseCents + plan.renewal.interestCents)}.`,
       };
     }
-    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes });
-    if (after.balanceCents === 0) {
-      const settledAt = list.reduce((latestDate, payment) => (payment.paidAt > latestDate ? payment.paidAt : latestDate), paidAt);
+    if (plan.settles) {
+      const settledAt = [...previous, { paidAt }].reduce((latestDate, payment) => (payment.paidAt > latestDate ? payment.paidAt : latestDate), paidAt);
       await tx.update(loanOperations).set({ status: "PAID", settledAt, updatedAt: sql`now()` })
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Operação quitada.` };
     }
-    return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Saldo em aberto: ${formatMoney(after.balanceCents)}. Próximo vencimento: ${formatDate(after.nextDueDate)}.` };
+    return { ok: true, message: `${paymentModeLabels[plan.mode]}: ${formatMoney(amountCents)} registrado (juros ${formatMoney(plan.interestCents)}, principal ${formatMoney(plan.principalCents)}). Saldo em aberto: ${formatMoney(plan.after.balanceCents)}. Próximo vencimento: ${formatDate(plan.after.nextDueDate)}.` };
   });
   if (result.ok) revalidatePath("/");
   return result;
@@ -954,7 +956,7 @@ export async function settleOperationEarlyAction(data: FormData): Promise<Action
       return { ok: false, error: `O valor negociado precisa cobrir ao menos o principal que ainda não voltou (${formatMoney(prior.principalRemainingCents)}). Desconto sobre o principal não é tratado aqui.` };
     }
     const paymentId = id("pay");
-    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes: notes ?? "Liquidação antecipada" });
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes: notes ?? "Liquidação antecipada", paymentMode: "EARLY_SETTLEMENT", allocationOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST" });
     const discountCents = prior.balanceCents - amountCents;
     await tx.update(loanOperations).set({
       status: "PAID", settledAt: paidAt, settlementPaymentId: paymentId, settlementBalanceCents: prior.balanceCents, settlementDiscountCents: discountCents,
@@ -1043,6 +1045,11 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
     const terms = await ledgerTermsOf(tx, tenantId, operation);
     const renewalPaymentIds = new Set(terms.renewals.map((renewal) => renewal.paymentId));
+    // "Só os juros e renovar" gravado com a modalidade: o valor é exatamente os juros que ele pagou e fica travado (só a
+    // data e a observação podem ser corrigidas). A modalidade e a ordem de apropriação nunca mudam na edição.
+    if (payment.paymentMode === "INTEREST_ONLY_RENEWAL" && amountCents !== payment.amountCents) {
+      return { ok: false, error: `Este pagamento foi registrado como "Só os juros e renovar" (${formatMoney(payment.amountCents)} de juros); o valor não pode ser alterado. Corrija só a data ou a observação.` };
+    }
     // O pagamento que renovou um período pagou os juros daquele período (o valor registrado na época). Pode ser corrigido
     // para mais (o excedente abate o principal) e a renovação continua; para menos, os juros do período ficariam sem pagar.
     if (renewalPaymentIds.has(payment.id)) {
@@ -1055,7 +1062,7 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     }
     const all = await operationPayments(tx, tenantId, operation.id);
     const others = all.filter((item) => item.id !== payment.id);
-    const list = [...others, { id: payment.id, amountCents, paidAt, createdAt: payment.createdAt.toISOString() }];
+    const list = [...others, { id: payment.id, amountCents, paidAt, createdAt: payment.createdAt.toISOString(), mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null }];
     const after = operationLedger(terms, list, todayIso());
     const edited = after.items.find((item) => item.id === payment.id)!;
     if (amountCents > edited.balanceBeforeCents || !fitsLedger(terms, list, after)) {

@@ -77,7 +77,7 @@ test("JR4. liquidação antecipada depois de renovações: encerra, principal R$
 test("JR5. histórico identifica cada modalidade", () => {
   const { terms, payments } = register(base("PRINCIPAL_FIRST"), [["p1", 10000, "2026-11-05", true], ["a2", 100000, "2026-11-20", false]]);
   const ledger = operationLedger(terms, payments, "2026-11-20");
-  assert.deepEqual(ledger.items.map(paymentLabel), ["Pagamento de juros / Renovação", "Amortização do principal"]);
+  assert.deepEqual(ledger.items.map(paymentLabel), ["Juros / Renovação", "Amortização do principal"]);
   const mixed = operationLedger(base("INTEREST_FIRST"), [pay("m", 110000, "2026-11-01")], "2026-11-01");
   assert.equal(paymentLabel(mixed.items[0]), "Juros + amortização do principal");
   const settled = operationLedger(base("INTEREST_FIRST"), [pay("s", 510000, "2026-11-01")], "2026-11-01");
