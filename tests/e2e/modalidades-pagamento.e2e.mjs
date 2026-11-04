@@ -265,3 +265,40 @@ test("ME8. liquidação antecipada grava a modalidade; o tenant B não mudou", a
   assert.equal((await op(opA)).status, "PAID");
   assert.equal(await otherTenants(), othersBefore, "o tenant B não muda");
 });
+
+test("ME9. caso Tatiana com dados fictícios: 8 'Só os juros e renovar' de R$ 100 (05 a 12/2023) → juros R$ 800, principal recebido R$ 0, principal R$ 5.000, 8 renovações, vencimento 01/01/2024", async () => {
+  await admin(`insert into client(id, tenant_id, name) values ('c_e2e_mp_t', 'ten_roberio', 'Modalidade T Caso Tatiana')`);
+  const opT = await createSingle("c_e2e_mp_t", "2023-04-01", "2023-05-01");
+  assert.equal((await op(opT)).payment_order, "PRINCIPAL_FIRST");
+  const capitalBefore = await available();
+  for (let index = 0; index < 8; index += 1) {
+    const paidAt = `2023-${String(5 + index).padStart(2, "0")}-01`;
+    const result = await action(robério, "registerPaymentAction", { operationId: opT, amount: "100,00", paidAt, paymentMode: "INTEREST_ONLY_RENEWAL", expectedPeriod: String(index + 1) });
+    assert.equal(result?.ok, true, `${paidAt}: ${JSON.stringify(result)}`);
+  }
+  // Classificação gravada no banco: os 8 pagamentos são "Só os juros e renovar", com 8 renovações sobre o principal de R$ 5.000.
+  assert.equal(await one(`select count(*)::int from payment where operation_id = '${opT}' and payment_mode = 'INTEREST_ONLY_RENEWAL' and amount_cents = 10000`), 8);
+  assert.deepEqual((await admin(`select period_number p, new_due_date::text d, principal_base_cents::int b, interest_cents::int j from loan_renewal where operation_id = '${opT}' order by period_number`)).map((row) => [row.p, row.d, row.b, row.j]),
+    [2, 3, 4, 5, 6, 7, 8, 9].map((period) => [period, `${period === 9 ? "2024-01" : `2023-${String(period + 4).padStart(2, "0")}`}-01`, 500000, 10000]));
+  assert.equal((await op(opT)).due, "2024-01-01", "próximo vencimento");
+  assert.equal(await available(), capitalBefore + 80000, "total recebido R$ 800, uma vez");
+  // Na tela: juros R$ 800, principal recebido R$ 0, principal restante R$ 5.000, 8 × "Juros / Renovação".
+  await spaced();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  await page.goto(`${BASE}/login`);
+  await page.getByLabel("E-mail").fill("roberio@teste.local");
+  await page.getByLabel("Senha").fill(process.env.E2E_PASSWORD ?? "Senha-Teste-Local-123");
+  await page.getByRole("button", { name: /Entrar/ }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 20_000 });
+  const panel = await panelOf(page, "Modalidade T Caso Tatiana");
+  const history = panel.locator(".payment-history li");
+  assert.equal(await history.count(), 8);
+  for (const label of await history.locator(".status-chip").allInnerTexts()) assert.equal(label.trim(), "Juros / Renovação");
+  const numbers = await summary(panel);
+  assert.equal(numbers["Juros recebidos"], "R$ 800,00");
+  assert.equal(numbers["Principal recebido"], "R$ 0,00");
+  assert.equal(numbers["Principal restante"], "R$ 5.000,00");
+  if (SHOTS) await panel.screenshot({ path: `${SHOTS}/5-caso-tatiana-ficticio-desktop.png` });
+  await context.close();
+});
