@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { transferOperationAction } from "./gerentes/actions";
-import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, completeMaxPrincipalReviewAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, completeMaxPrincipalReviewAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, reclassifyPaymentAsInterestAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -14,7 +14,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, periodStatusLabels, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planInterestReclassification, planPayment, periodStatusLabels, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
@@ -1252,6 +1252,39 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
   );
 }
 
+// Trocar o tipo do recebimento para "Juros / Renovação" (lançado por engano como pagamento manual ou amortização). Mesmo
+// valor, mesma data: muda só a classificação. A prévia usa a mesma função que o servidor grava.
+function ReclassifyAsInterestForm({ operation, payment, today, onClose, onChanged }: { operation: OperationView; payment: AllocatedPaymentView; today: string; onClose: () => void; onChanged: () => void }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const { pending, feedback, onSubmit } = useFormAction(reclassifyPaymentAsInterestAction, () => { onChanged(); onClose(); });
+  const recurring = operation.ledgerTerms.modality === "SINGLE" && operation.ledgerTerms.frequency !== "DAILY";
+  const changeable = !payment.mode || payment.mode === "MANUAL" || payment.mode === "PRINCIPAL_AMORTIZATION";
+  if (!recurring || !changeable || operation.status !== "OPEN" || operation.renewals.some((item) => item.paymentId === payment.id)) return null;
+  const plan = planInterestReclassification(operation.ledgerTerms, operation.payments, payment.id, today, formatMoney);
+  return (
+    <form className="form-grid edit-payment-form" onSubmit={onSubmit} aria-label="Trocar para juros recebidos">
+      <input type="hidden" name="paymentId" value={payment.id} />
+      <p className="field-wide"><strong>Tipo do recebimento</strong> · hoje: {paymentLabel(payment)}. Se este valor foi de juros, troque para Juros / Renovação (o valor e a data continuam iguais).</p>
+      {!plan.ok ? <p className="form-feedback form-feedback-warning field-wide">{plan.error}</p> : (
+        <>
+          <div className="operation-preview field-wide" aria-live="polite">
+            <div><span>Passa a pagar</span><strong>Juros do {plan.period}º período</strong></div>
+            <div><span>Juros recebidos após</span><strong>{formatMoney(plan.after.interestPaidCents)}</strong></div>
+            <div><span>Principal em aberto após</span><strong>{formatMoney(plan.after.principalRemainingCents)}</strong></div>
+            <div><span>Saldo após</span><strong>{formatMoney(plan.after.balanceCents)}</strong></div>
+            {plan.renewal && <div><span>Renova até</span><strong>{formatDate(plan.renewal.newDueDate)}</strong></div>}
+          </div>
+          <label className="field-check field-full"><input type="checkbox" name="confirm" value="yes" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>Confirmo que este recebimento foi de juros.</span></label>
+          <div className="form-actions">
+            <button className="primary-button" disabled={pending || !confirmed}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Trocar para Juros / Renovação"}</button>
+          </div>
+        </>
+      )}
+      <Feedback feedback={feedback} />
+    </form>
+  );
+}
+
 // Liquidação antecipada: o cliente quita a operação com um valor total negociado. Mostra o resumo do contrato, o que ficou
 // de fora (desconto) e exige confirmação explícita antes de gravar. O servidor refaz todas as contas.
 function EarlySettlementForm({ operation, today, onClose, onChanged }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void }) {
@@ -1567,6 +1600,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
                 {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
+                {editingId === payment.id && <ReclassifyAsInterestForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
               </li>
             ))}</ul>
           )}

@@ -700,3 +700,28 @@ export function planPayment<T extends LedgerPayment>(terms: LedgerTerms, previou
   };
 }
 export type PaymentPlan = Extract<ReturnType<typeof planPayment>, { ok: true }>;
+
+// Troca do tipo de um recebimento já gravado para "Juros / Renovação" (ex.: lançado por engano como pagamento manual e
+// abatendo principal). Mesmo valor, mesma data, mesmo pagamento: só a classificação muda. Vale para o pagamento único
+// mensal ou quinzenal e só para o recebimento mais recente (um posterior dependeria do período que este passa a pagar).
+// O período pago é o mais antigo com juros a receber na data do recebimento; o valor precisa ser exatamente os juros que
+// faltam desse período. A gravação usa este mesmo plano (planPayment), então prévia e servidor dão o mesmo resultado.
+export function planInterestReclassification<T extends LedgerPayment>(terms: LedgerTerms, payments: T[], paymentId: string, asOf: string, formatMoney: (cents: number) => string = (cents) => (cents / 100).toFixed(2)) {
+  const fail = (error: string) => ({ ok: false as const, error });
+  const payment = payments.find((item) => item.id === paymentId);
+  if (!payment) return fail("Pagamento não encontrado.");
+  if (payment.mode === "INTEREST_ONLY_RENEWAL" || terms.renewals.some((row) => row.paymentId === paymentId)) return fail("Este recebimento já está como juros.");
+  if (payment.mode && payment.mode !== "MANUAL" && payment.mode !== "PRINCIPAL_AMORTIZATION") return fail("Só pagamento manual ou amortização do principal pode ser trocado para juros.");
+  if (isAmortized(terms) || terms.settlementPaymentId) return fail("A troca para juros existe só no pagamento único mensal ou quinzenal em aberto.");
+  const others = payments.filter((item) => item.id !== paymentId);
+  if (others.some((item) => item.paidAt > payment.paidAt || (item.paidAt === payment.paidAt && (item.createdAt ?? "") > (payment.createdAt ?? "")))) {
+    return fail("Há recebimento registrado depois deste. A troca para juros vale só para o recebimento mais recente.");
+  }
+  const before = operationLedger(terms, others, payment.paidAt);
+  const period = before.pendingPeriods[0];
+  if (!period) return fail(`Em ${formatDate(payment.paidAt)} não havia juros a receber nesta operação.`);
+  if (payment.amountCents !== period.remainingCents) return fail(`Em ${formatDate(payment.paidAt)}, o ${period.number}º período tinha ${formatMoney(period.remainingCents)} de juros a receber; este recebimento é de ${formatMoney(payment.amountCents)}. Só o valor exato dos juros pode virar juros.`);
+  const plan = planPayment(terms, others, { mode: "INTEREST_ONLY_RENEWAL", amountCents: payment.amountCents, paidAt: payment.paidAt, period: period.number }, asOf, paymentId, formatMoney);
+  if (!plan.ok) return plan;
+  return { ...plan, previousMode: payment.mode ?? null, previousAllocationOrder: payment.allocationOrder ?? null, previousPeriod: payment.period ?? null, current: operationLedger(terms, payments, asOf) };
+}

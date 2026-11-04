@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_SCHEDULE_UPDATED: "Cronograma de pagamentos ao investidor alterado",
   OPERATION_UPDATED: "Operação corrigida (sem pagamentos)",
   OPERATION_SETTLED_EARLY: "Empréstimo liquidado antecipadamente",
+  PAYMENT_RECLASSIFIED_AS_INTEREST: "Recebimento trocado para Juros / Renovação",
   OPERATION_INSTALLMENT_DEFERRED: "Parcela renegociada para o final do contrato",
   OPERATION_RENEGOTIATED: "Operações renegociadas em um novo contrato",
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
@@ -77,7 +78,7 @@ export const AUDIT_ENTITIES: Record<string, string> = {
   investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
   capital_movement: "Movimentação financeira", wallet: "Carteira", investment_payment: "Pagamento a investidor",
   investor_bank_account: "Conta bancária do investidor", investor_document: "Documento do investidor",
-  account_manager: "Gerente de contas", account_manager_payout: "Comissão paga ao gerente",
+  account_manager: "Gerente de contas", payment: "Pagamento", account_manager_payout: "Comissão paga ao gerente",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.
