@@ -116,7 +116,7 @@ test("TJE2. troca grava: mesmo pagamento (id, valor, data), Juros / Renovação 
   assert.equal(await one(`select due_date::text from loan_operation where id = '${opA}'`), renewal.b);
   const [rec] = await admin(`select previous_mode a, new_mode b, previous_period_number c, new_period_number d, authorized_by e from payment_reclassification where payment_id = '${pA}'`);
   assert.deepEqual(rec, { a: "MANUAL", b: "INTEREST_ONLY_RENEWAL", c: null, d: 1, e: "Robério Santos" });
-  assert.equal(await one(`select count(*)::int from admin_audit_log where action = 'PAYMENT_RECLASSIFIED_AS_INTEREST' and entity_id = '${pA}'`), 1);
+  assert.equal(await one(`select count(*)::int from admin_audit_log where action = 'PAYMENT_RECLASSIFIED_AS_INTEREST' and entity_id = '${opA}' and after->>'paymentId' = '${pA}'`), 1);
   assert.equal(Number(await one(`select sum(amount_cents) from payment where tenant_id = 'ten_roberio'`)), sumBefore, "capital: nenhum centavo a mais ou a menos");
   const again = await reclassify(pA);
   assert.equal(again?.ok, false); assert.match(again.error, /já está como juros/);
@@ -170,4 +170,19 @@ test("TJE4. tela: Editar pagamento mostra a troca com prévia e grava Juros / Re
     await context.close();
   }
   assert.equal(await one(`select payment_mode from payment where operation_id = (select id from loan_operation where client_id = 'c_e2e_tj_d')`), "INTEREST_ONLY_RENEWAL");
+});
+
+test("TJE5. banco (papel sem BYPASSRLS): a carteira só grava reclassificação dos próprios pagamentos", async () => {
+  const appUrl = databaseUrl.replace(/\/\/[^@]+@/, "//crediai_app:app_local_pw@");
+  const app = postgres(appUrl, { max: 1, onnotice: () => {} });
+  try {
+    const target = await one(`select id from payment where tenant_id = 'ten_roberio' and payment_mode = 'MANUAL' limit 1`);
+    const insert = (tenant) => app.begin(async (tx) => {
+      await tx`select set_config('app.crediai_role', 'TENANT_USER', true), set_config('app.tenant_id', ${tenant}, true)`;
+      await tx.unsafe(`insert into payment_reclassification(id, tenant_id, payment_id, previous_mode, new_mode, reason, authorized_by) values ('rec_tj5_${tenant}', 'ten_roberio', '${target}', 'MANUAL', 'MANUAL', 'teste de política da carteira', 'teste')`);
+    });
+    await assert.rejects(insert("ten_fernando"), /row-level security|política|policy/, "outro tenant não grava");
+    await insert("ten_roberio");
+    assert.equal(await one(`select count(*)::int from payment_reclassification where id = 'rec_tj5_ten_roberio'`), 1);
+  } finally { await app.end(); }
 });

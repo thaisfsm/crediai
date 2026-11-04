@@ -650,7 +650,9 @@ export const paymentReclassifications = pgTable("payment_reclassification", {
   foreignKey({ name: "payment_reclassification_payment_same_tenant_fk", columns: [table.tenantId, table.paymentId], foreignColumns: [payments.tenantId, payments.id] }).onDelete("restrict"),
   check("payment_reclassification_reason_not_blank", sql`length(trim(${table.reason})) >= 10`),
   pgPolicy("payment_reclassification_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
-  pgPolicy("payment_reclassification_insert_admin_only", { for: "insert", withCheck: adminScope }),
+  // Nome antigo mantido (migração 0055); desde a 0058 a carteira grava a reclassificação dos próprios pagamentos (Editar
+  // pagamento > Trocar para Juros / Renovação) e o MASTER, de qualquer uma.
+  pgPolicy("payment_reclassification_insert_admin_only", { for: "insert", withCheck: tenantScope(table.tenantId) }),
   pgPolicy("payment_reclassification_update_admin_only", { for: "update", using: sql`false`, withCheck: sql`false` }),
   pgPolicy("payment_reclassification_delete_admin_only", { for: "delete", using: sql`false` }),
 ]).enableRLS();

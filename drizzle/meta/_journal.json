@@ -400,6 +400,13 @@
       "when": 1793802823029,
       "tag": "0057_cliente_data_nascimento",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1793822177610,
+      "tag": "0058_reclassificacao_pela_carteira",
+      "breakpoints": true
     }
   ]
 }

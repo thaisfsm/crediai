@@ -1147,9 +1147,9 @@ export async function reclassifyPaymentAsInterestAction(data: FormData): Promise
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
     }
     await recordAdminAudit(tx, session, {
-      action: "PAYMENT_RECLASSIFIED_AS_INTEREST", entity: "payment", entityId: payment.id, tenantId, tenantName: tenant?.name ?? null,
-      before: { mode: payment.paymentMode, interestPaidCents: plan.current.interestPaidCents, principalPaidCents: plan.current.principalPaidCents, principalRemainingCents: plan.current.principalRemainingCents, balanceCents: plan.current.balanceCents },
-      after: { mode: plan.mode, period: plan.period, interestPaidCents: plan.after.interestPaidCents, principalPaidCents: plan.after.principalPaidCents, principalRemainingCents: plan.after.principalRemainingCents, balanceCents: plan.after.balanceCents },
+      action: "PAYMENT_RECLASSIFIED_AS_INTEREST", entity: "loan_operation", entityId: operation.id, tenantId, tenantName: tenant?.name ?? null,
+      before: { paymentId: payment.id, mode: payment.paymentMode, interestPaidCents: plan.current.interestPaidCents, principalPaidCents: plan.current.principalPaidCents, principalRemainingCents: plan.current.principalRemainingCents, balanceCents: plan.current.balanceCents },
+      after: { paymentId: payment.id, mode: plan.mode, period: plan.period, interestPaidCents: plan.after.interestPaidCents, principalPaidCents: plan.after.principalPaidCents, principalRemainingCents: plan.after.principalRemainingCents, balanceCents: plan.after.balanceCents },
     });
     return { ok: true, message: `Recebimento de ${formatDate(payment.paidAt)} trocado para Juros / Renovação do ${plan.period}º período. Principal em aberto: ${formatMoney(plan.after.principalRemainingCents)}. Saldo em aberto: ${formatMoney(plan.after.balanceCents)}.` };
   });

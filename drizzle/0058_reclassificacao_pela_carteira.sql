@@ -1,0 +1,1 @@
+ALTER POLICY "payment_reclassification_insert_admin_only" ON "payment_reclassification" TO public WITH CHECK ((coalesce(current_setting('app.crediai_role', true), '') = 'SUPER_ADMIN' or "payment_reclassification"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')));
