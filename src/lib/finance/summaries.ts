@@ -54,6 +54,7 @@ export function toPaymentRecord(payment: PaymentRow, clientName: string, revisio
   return {
     id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes, createdAt: payment.createdAt.toISOString(),
     revisions, mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null,
+    period: payment.interestPeriodNumber ?? null,
   };
 }
 

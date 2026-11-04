@@ -160,9 +160,9 @@ test("ME6. edição sem reclassificar: valor do 'Só os juros' travado (data e o
   const noted = await action(robério, "editPaymentAction", { paymentId: first.id, amount: "100,00", paidAt: first.d, notes: "conferido" });
   assert.equal(noted?.ok, true, JSON.stringify(noted));
   assert.equal(await one(`select payment_mode from payment where id = '${first.id}'`), "INTEREST_ONLY_RENEWAL");
-  await assert.rejects(admin(`update payment set payment_mode = 'MANUAL' where id = '${first.id}'`), /não podem ser alteradas/);
-  await assert.rejects(admin(`update payment set allocation_order = 'INTEREST_FIRST' where id = '${first.id}'`), /não podem ser alteradas/);
-  await assert.rejects(admin(`update payment set payment_mode = 'JUROS' where id = '${first.id}'`), /payment_mode_valid|não podem/);
+  await assert.rejects(admin(`update payment set payment_mode = 'MANUAL' where id = '${first.id}'`), /só mudam por reclassificação autorizada/);
+  await assert.rejects(admin(`update payment set allocation_order = 'INTEREST_FIRST' where id = '${first.id}'`), /só mudam por reclassificação autorizada/);
+  await assert.rejects(admin(`update payment set payment_mode = 'JUROS' where id = '${first.id}'`), /payment_mode_valid|só mudam por reclassificação autorizada/);
   assert.equal((await action(fernando, "editPaymentAction", { paymentId: first.id, amount: "100,00", paidAt: first.d, notes: "x" }))?.ok, false, "outro tenant");
 });
 
@@ -204,7 +204,7 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
     if (SHOTS) await panel.screenshot({ path: `${SHOTS}/1-historico-juros-renovacao-${tag}.png` });
 
     // Prévia do "Só os juros e renovar" com todos os campos pedidos; o gravado bate com a prévia.
-    await panel.getByRole("button", { name: /^Só os juros e renovar/ }).click();
+    await panel.getByRole("button", { name: /^Receber juros e renovar/ }).first().click();
     await panel.getByText(/^Juros \/ Renovação\./).waitFor();
     const preview = await previewOf(panel);
     assert.equal(preview["Para juros"], "R$ 100,00");
@@ -215,7 +215,7 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
     assert.equal(preview["Juros do próximo período"], "R$ 100,00");
     assert.equal(preview["Situação após"], "Renovação / Ativa");
     if (SHOTS) { await panel.locator(".payment-plan-preview").scrollIntoViewIfNeeded(); await page.screenshot({ path: `${SHOTS}/2-previa-so-juros-${tag}.png` }); }
-    await panel.locator("form").getByRole("button", { name: "Registrar pagamento" }).click();
+    await panel.locator("form").getByRole("button", { name: "Confirmar recebimento e renovar" }).click();
     await panel.getByText(/Juros \/ Renovação: R\$\s?100,00 recebidos como juros/).waitFor({ timeout: 15_000 });
     const due = (await op(opA)).due;
     assert.equal(preview["Próximo vencimento"], `${due.slice(8, 10)}/${due.slice(5, 7)}/${due.slice(0, 4)}`, "vencimento gravado = prévia");
@@ -224,19 +224,19 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
 
     // Contrato D (principal primeiro, atrasado): composição dos juros pendentes período a período.
     panel = await panelOf(page, "Modalidade D Atrasado");
-    const pendingD = await panel.getByRole("button", { name: /^Só os juros e renovar/ }).innerText();
-    await panel.getByRole("button", { name: /^Só os juros e renovar/ }).click();
+    const pendingD = await panel.getByRole("button", { name: /^Receber juros e renovar/ }).first().innerText();
+    await panel.getByRole("button", { name: /^Receber juros e renovar/ }).first().click();
     const composition = await panel.getByText(/Juros pendentes por período:/).locator("..").innerText();
     assert.match(composition, /1º \(venc\. .*\) R\$\s?100,00 · 2º/);
     const previewD = await previewOf(panel);
     assert.equal(previewD["Para principal"], "R$ 0,00");
     assert.equal(previewD["Principal depois"], "R$ 5.000,00");
-    assert.equal(previewD["Juros pendentes depois"].replace(/\s/g, " "), "R$ 100,00");
+    assert.equal(previewD["Juros pendentes depois"].replace(/\s/g, " "), "R$ 300,00", "só o 1º período é pago; os outros três continuam pendentes");
     if (SHOTS) { await panel.locator(".payment-plan-preview").scrollIntoViewIfNeeded(); await page.screenshot({ path: `${SHOTS}/3-atrasado-composicao-${tag}.png` }); }
     if (tag === "celular") {
       const amount = pendingD.match(/R\$\s?([\d.,]+)/)[1];
       assert.equal(previewD["Para juros"].replace(/\s/g, " "), `R$ ${amount}`);
-      await panel.locator("form").getByRole("button", { name: "Registrar pagamento" }).click();
+      await panel.locator("form").getByRole("button", { name: "Confirmar recebimento e renovar" }).click();
       await panel.getByText(/recebidos como juros\. Principal mantido em R\$\s?5\.000,00/).waitFor({ timeout: 15_000 });
       assert.equal(await one(`select count(*)::int from payment where operation_id = '${opD}' and payment_mode = 'INTEREST_ONLY_RENEWAL'`), 1);
       await page.waitForTimeout(800);
@@ -245,8 +245,8 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
 
     // Contrato C (antigo) com os juros do período já pagos: "Só os juros e renovar" aparece desabilitado só quando não pode.
     panel = await panelOf(page, "Modalidade C Antigo");
-    const renewButton = panel.getByRole("button", { name: /^Só os juros e renovar/ });
-    assert.equal(await renewButton.isDisabled(), (await summary(panel))["Juros restantes"] === "R$ 0,00");
+    const renewButton = panel.getByRole("button", { name: /^Receber juros e renovar/ }).first();
+    assert.equal(await renewButton.count() === 0, (await summary(panel))["Juros restantes"] === "R$ 0,00", "ação por período só onde há juros a receber");
     await panel.getByRole("button", { name: "Pagamento manual" }).click();
     await panel.getByLabel("Valor recebido (R$)").fill("250,00");
     const manualPreview = await previewOf(panel);
@@ -255,7 +255,9 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
     await panel.getByRole("button", { name: "Fechar" }).click();
     await context.close();
   }
-  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opD}'`), 1);
+  // Contrato D atrasado: o 1º período já tinha o seguinte aberto; pagar só ele não cria renovação nova nem toca nos outros.
+  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opD}'`), 0);
+  assert.equal(await one(`select count(*)::int from payment where operation_id = '${opD}' and interest_period_number = 1 and payment_mode = 'INTEREST_ONLY_RENEWAL'`), 1);
 });
 
 test("ME8. liquidação antecipada grava a modalidade; o tenant B não mudou", async () => {

@@ -100,10 +100,13 @@ test("MP5. juros dos períodos seguintes continuam com juros anteriores pendente
   assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-07-02").interestRemainingCents, 40000);
   assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-05-01").interestRemainingCents, 10000, "no dia do vencimento ainda não está atrasado");
   assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-05-02").interestRemainingCents, 20000);
-  // Com atraso, "Só os juros e renovar" recebe todos os pendentes (composição na prévia) e renova o período atual.
-  const plan = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 30000, paidAt: "2023-07-01", expectedPeriod: 3 }, "2023-07-01");
+  // Com atraso, o recebimento é POR PERÍODO (04/11): a soma de vários períodos é recusada; o período atual (3º) renova.
+  const summed = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 30000, paidAt: "2023-07-01", expectedPeriod: 3 }, "2023-07-01");
+  assert.equal(summed.ok, false);
+  const plan = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 10000, paidAt: "2023-07-01", period: 3 }, "2023-07-01");
   assert.equal(plan.ok, true);
   assert.equal(plan.pendingPeriods.length, 3);
+  assert.equal(plan.after.interestRemainingCents, 30000, "períodos 1 e 2 continuam pendentes + o 4º período recém-aberto");
   assert.equal(plan.renewal.previousDueDate, "2023-07-01");
   assert.equal(plan.renewal.newDueDate, "2023-08-01");
   assert.equal(plan.principalAfterCents, 500000);
@@ -162,7 +165,7 @@ test("MP10. liquidação antecipada: só pelo formulário próprio; principal pr
 
 test("MP11. prévia = gravado: o extrato recalculado a partir do que o servidor grava bate com a prévia em todos os modos", () => {
   const cases = [
-    [contract("PRINCIPAL_FIRST"), "INTEREST_ONLY_RENEWAL", 30000, "2023-07-01", { expectedPeriod: 3 }],
+    [contract("PRINCIPAL_FIRST"), "INTEREST_ONLY_RENEWAL", 10000, "2023-07-01", { period: 3 }],
     [contract("INTEREST_FIRST"), "INTEREST_ONLY_RENEWAL", 10000, "2023-04-20", { expectedPeriod: 1 }],
     [contract("PRINCIPAL_FIRST"), "MANUAL", 123456, "2023-06-10", {}],
     [contract("INTEREST_FIRST"), "MANUAL", 123456, "2023-06-10", {}],
@@ -173,7 +176,7 @@ test("MP11. prévia = gravado: o extrato recalculado a partir do que o servidor 
     const preview = planPayment(terms, [], { mode, amountCents, paidAt, ...extra }, "2023-08-20", "preview");
     assert.equal(preview.ok, true, `${mode}: ${preview.error}`);
     // O que o servidor grava: o pagamento (com modalidade e ordem) e, se renovou, a linha de loan_renewal.
-    const saved = { id: "pay_x", amountCents, paidAt, createdAt: "2026-11-03T12:00:00Z", mode: preview.mode, allocationOrder: preview.allocationOrder };
+    const saved = { id: "pay_x", amountCents, paidAt, createdAt: "2026-11-03T12:00:00Z", mode: preview.mode, allocationOrder: preview.allocationOrder, period: preview.period };
     const savedTerms = preview.renewal ? { ...terms, renewals: [{ paymentId: "pay_x", ...preview.renewal }] } : terms;
     const reread = operationLedger(savedTerms, [saved], "2023-08-20");
     const item = reread.items[0];
