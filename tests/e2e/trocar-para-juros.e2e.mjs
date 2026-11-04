@@ -43,11 +43,6 @@ async function action(cookie, name, fields) {
   const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
   return result ? JSON.parse(result) : null;
 }
-const available = () => one(`select (w.initial_capital_cents
-  + coalesce((select sum(case when kind in ('CONTRIBUTION','OTHER_INCOME') then amount_cents else -amount_cents end) from capital_movement where tenant_id = 'ten_roberio' and cycle_number = w.cycle_number), 0)
-  - coalesce((select sum(principal_cents) from loan_operation where tenant_id = 'ten_roberio' and status <> 'CANCELED' and cycle_number = w.cycle_number), 0)
-  + coalesce((select sum(p.amount_cents) from payment p join loan_operation o on o.id = p.operation_id where p.tenant_id = 'ten_roberio' and o.cycle_number = w.cycle_number), 0))::bigint
-  from wallet w where w.tenant_id = 'ten_roberio'`).then(Number);
 const dataHash = () => one(`select md5(string_agg(x, '|' order by x)) from (select 'o'||row(o.*)::text x from loan_operation o union all select 'p'||row(p.*)::text from payment p
   union all select 'r'||row(r.*)::text from loan_renewal r union all select 'm'||row(m.*)::text from capital_movement m) t`);
 const otherTenants = () => one(`select md5(string_agg(x, '|' order by x)) from (select 'o'||row(o.*)::text x from loan_operation o where tenant_id <> 'ten_roberio'
@@ -60,8 +55,6 @@ const panelOf = async (page, client) => {
   await panel.waitFor();
   return panel;
 };
-const summary = async (panel) => Object.fromEntries(await panel.locator(".payment-summary div").evaluateAll((items) => items.map((item) => [item.querySelector("dt")?.textContent?.trim(), item.querySelector("dd")?.textContent?.replace(/\s/g, " ").trim()])));
-const previewOf = async (panel) => Object.fromEntries(await panel.locator(".payment-plan-preview div").evaluateAll((items) => items.map((item) => [item.querySelector("span")?.textContent?.trim(), item.querySelector("strong")?.textContent?.replace(/\s/g, " ").trim()])));
 
 
 
