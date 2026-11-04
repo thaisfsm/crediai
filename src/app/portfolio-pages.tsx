@@ -533,6 +533,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
         {!editing && prefill.notice && <p className="form-feedback" style={{ gridColumn: "1 / -1" }} role="status">{prefill.notice}</p>}
         <label className="field field-wide"><span>Nome completo</span><input name="name" placeholder="Nome completo" maxLength={120} defaultValue={editing?.name ?? ""} required /></label>
         <label className="field"><span>CPF</span><MaskedInput name="document" mask={maskCpf} initial={editing ? formatCpf(editing.document) ?? "" : ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
+        <DateField label="Data de nascimento" name="birthDate" min="1900-01-01" max={todayIso()} defaultValue={editing?.birthDate ?? ""} className="field" />
         <label className="field"><span>Telefone</span><MaskedInput name="phone" mask={maskPhone} initial={editing ? formatPhone(editing.phone) ?? "" : ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
         <label className="field"><span>WhatsApp</span><MaskedInput name="whatsapp" mask={maskPhone} initial={formatPhone(editing?.whatsapp ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
         <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
@@ -766,6 +767,7 @@ function ClientProfilePanel({ client, readOnly = false }: { client: ClientRow; r
       <div className="panel-header"><div><h2>Cadastro</h2><p>{readOnly ? "Dados de contato do cliente que você indicou." : "Use \"Editar\" na lista de clientes para alterar estes dados."}</p></div></div>
       <dl className="payment-summary profile-summary">
         <div><dt>CPF</dt><dd>{formatCpf(client.document) ?? "—"}</dd></div>
+        <div><dt>Data de nascimento</dt><dd>{client.birthDate ? formatDate(client.birthDate) : "—"}</dd></div>
         <div><dt>Telefone</dt><dd>{formatPhone(client.phone) ?? "—"}</dd></div>
         <div><dt>WhatsApp</dt><dd>{client.whatsapp ? (whatsappHref(client.whatsapp) ? <a className="text-link inline-link" href={whatsappHref(client.whatsapp) ?? undefined} target="_blank" rel="noreferrer noopener">{formatPhone(client.whatsapp)}</a> : formatPhone(client.whatsapp)) : "—"}</dd></div>
         <div><dt>E-mail</dt><dd>{client.email ? <a className="text-link inline-link" href={`mailto:${client.email}`}>{client.email}</a> : "—"}</dd></div>

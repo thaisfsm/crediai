@@ -444,6 +444,8 @@ export const clients = pgTable("client", {
   document: text("document"),
   phone: text("phone"),
   notes: text("notes"),
+  // Data de nascimento (opcional; não pode ser futura).
+  birthDate: date("birth_date", { mode: "string" }),
   // Contatos e redes sociais (opcionais). Instagram/Facebook/TikTok guardam @usuário ou o endereço do perfil, como digitado.
   whatsapp: text("whatsapp"),
   email: text("email"),
