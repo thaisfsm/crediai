@@ -326,3 +326,52 @@ export function checkPriorContribution({ investment, alreadyDeclared, movement, 
 
 // Referência para a auditoria: sequências longas de dígitos (conta, chave, documento) ficam só com os 4 últimos.
 export const maskReference = (reference: string | null) => (reference ? reference.replace(/\d{5,}/g, (digits) => `•••${digits.slice(-4)}`) : null);
+
+// ── Liquidação antecipada do contrato de investidor ──────────────────────────────────────────────────────────────────
+// A carteira devolve agora ao investidor o principal que falta e um rendimento final negociado, e o contrato se encerra.
+// Nada já pago muda: as baixas feitas continuam como estão. As linhas do cronograma sem nenhuma baixa saem do cronograma
+// (ficam no histórico do contrato e na auditoria); a linha com baixa parcial fica só com o que já foi pago. Entra uma
+// linha nova "Liquidação antecipada" na data da liquidação, com o principal que faltava e o rendimento final, e ela é
+// paga na hora pelo mesmo caminho das baixas de Contas a Pagar (uma saída de capital por tipo).
+export const EARLY_SETTLEMENT_DESCRIPTION = "Liquidação antecipada";
+export type EarlySettlementPlan = {
+  principalPaidCents: number; principalRemainingCents: number;
+  // Rendimentos do cronograma ainda não pagos: vencidos até a data da liquidação (sugestão do rendimento final) e os
+  // posteriores (deixam de existir com a liquidação).
+  overdueYieldCents: number; futureYieldCents: number; openScheduleCents: number;
+  removeItemIds: string[]; trimItems: { id: string; yieldCents: number; principalCents: number }[]; closedCount: number;
+};
+export function earlySettlementPlan({ amountCents, items, payments, settledOn }: { amountCents: number; items: Pick<PayableItem, "id" | "dueDate" | "yieldCents" | "principalCents">[]; payments: Pick<PayablePayment, "scheduleItemId" | "kind" | "amountCents">[]; settledOn: string }): EarlySettlementPlan {
+  const paid = (itemId: string, kind: ObligationKind) => payments.filter((payment) => payment.scheduleItemId === itemId && payment.kind === kind).reduce((total, payment) => total + payment.amountCents, 0);
+  const principalPaidCents = payments.filter((payment) => payment.kind === "PRINCIPAL").reduce((total, payment) => total + payment.amountCents, 0);
+  const plan: EarlySettlementPlan = { principalPaidCents, principalRemainingCents: Math.max(amountCents - principalPaidCents, 0), overdueYieldCents: 0, futureYieldCents: 0, openScheduleCents: 0, removeItemIds: [], trimItems: [], closedCount: 0 };
+  for (const item of items) {
+    const paidYield = paid(item.id, "YIELD");
+    const paidPrincipal = paid(item.id, "PRINCIPAL");
+    const openYield = Math.max(item.yieldCents - paidYield, 0);
+    const openPrincipal = Math.max(item.principalCents - paidPrincipal, 0);
+    if (openYield + openPrincipal === 0) continue;
+    plan.openScheduleCents += openYield + openPrincipal;
+    if (item.dueDate <= settledOn) plan.overdueYieldCents += openYield; else plan.futureYieldCents += openYield;
+    plan.closedCount += 1;
+    if (paidYield + paidPrincipal === 0) plan.removeItemIds.push(item.id);
+    else plan.trimItems.push({ id: item.id, yieldCents: paidYield, principalCents: paidPrincipal });
+  }
+  return plan;
+}
+
+// Confere a liquidação antes de gravar (o servidor chama com o contrato travado). Só contrato ativo, da própria carteira,
+// com o dinheiro registrado no capital; data entre o início do contrato (e do ciclo) e hoje; alguma coisa a pagar.
+export function checkEarlySettlement({ status, renewed, settledOn, today, startDate, cycleStartedOn, principalRemainingCents, yieldCents }: {
+  status: string; renewed: boolean; settledOn: string; today: string; startDate: string; cycleStartedOn: string | null; principalRemainingCents: number; yieldCents: number;
+}): { ok: true } | { ok: false; error: string } {
+  if (status !== "ACTIVE") return { ok: false, error: status === "CLOSED" ? "Este contrato já está encerrado (liquidado ou renovado). Nada foi registrado." : "Só um contrato ativo pode ser liquidado antecipadamente. Nada foi registrado." };
+  if (renewed) return { ok: false, error: "Este contrato já foi renovado: a liquidação é feita no contrato novo. Nada foi registrado." };
+  if (!isIsoDate(settledOn)) return { ok: false, error: "Informe a data da liquidação." };
+  if (settledOn > today) return { ok: false, error: "A data da liquidação não pode ser depois de hoje." };
+  if (settledOn < startDate) return { ok: false, error: `A data da liquidação não pode ser anterior ao início do contrato (${formatDate(startDate)}).` };
+  if (cycleStartedOn && settledOn < cycleStartedOn) return { ok: false, error: `A data da liquidação não pode ser anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}).` };
+  if (!Number.isSafeInteger(yieldCents) || yieldCents < 0) return { ok: false, error: "O rendimento final precisa ser zero ou um valor positivo." };
+  if (principalRemainingCents + yieldCents <= 0) return { ok: false, error: "Não há principal a devolver nem rendimento final: nada a liquidar." };
+  return { ok: true };
+}

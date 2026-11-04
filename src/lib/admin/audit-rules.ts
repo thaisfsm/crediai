@@ -45,6 +45,7 @@ export const AUDIT_ACTIONS = {
   INVESTOR_DOCUMENT_UPLOADED: "Documento do investidor enviado",
   INVESTOR_DOCUMENT_REMOVED: "Documento do investidor retirado",
   INVESTMENT_RENEWED: "Contrato de investimento renovado",
+  INVESTMENT_SETTLED_EARLY: "Contrato de investimento liquidado antecipadamente",
   MANAGER_CREATED: "Gerente de contas cadastrado",
   MANAGER_UPDATED: "Gerente de contas alterado",
   MANAGER_CLIENT_LINKED: "Cliente indicado vinculado a gerente de contas",

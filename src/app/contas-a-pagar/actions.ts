@@ -7,11 +7,12 @@ import { recordAdminAudit } from "@/lib/admin/audit";
 import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, investmentCapitalEntries, investmentPayments, investmentPriorContributions, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
 import { checkOutflow } from "@/lib/finance/cashflow";
+import { insertCapitalPayment } from "@/lib/investors/payment-write";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { formatDate, formatMoney, todayIso } from "@/lib/finance/format";
 import {
   INVESTOR_CATEGORIES, OBLIGATION_KINDS, PAYMENT_METHODS, checkCapitalEntry, checkPayment, checkPriorContribution, contractLabel, entryDateOf, entryDuplicateConflict, entryEvidence, isBeforeCycle, maskReference,
-  parsePaymentFields, paymentCategory, type PaymentFields,
+  parsePaymentFields, type PaymentFields,
 } from "@/lib/investors/payables";
 import { loadEntryEvidence, priorContributionCandidates } from "@/lib/investors/payables-queries";
 import type { ActionResult } from "../actions";
@@ -200,31 +201,8 @@ export async function registerInvestmentPaymentAction(data: FormData): Promise<A
       const allowed = entryEvidence({ capitalEntryRule: investment.capitalEntryRule, hasEntry: evidence.entries.has(investment.id), hasPriorContribution: evidence.priors.has(investment.id),
         renewedFrom: investment.renewedFromInvestmentId, originHasCapital: chain.originHasCapital });
       if (!allowed.ok) return { ok: false, error: `${allowed.error} Nada foi registrado.` };
-      const label = contractLabel(investment);
-      const category = paymentCategory(payment.kind);
-      const movementId = id("cap");
-      await tx.insert(capitalMovements).values({
-        id: movementId, tenantId, kind: "WITHDRAWAL", category, source: "INVESTOR", amountCents: payment.amountCents, occurredAt: payment.paidOn, cycleNumber: wallet.cycleNumber,
-        description: `${INVESTOR_CATEGORIES[category]} · ${row.investorName} · ${label} · parcela ${item.number}`, notes: payment.notes, createdByUserId: session.user.id,
-        idempotencyKey: `ivp-${payment.requestId}`,
-      });
-      const paymentId = id("ivp");
-      await tx.insert(investmentPayments).values({
-        id: paymentId, tenantId, investmentId: investment.id, scheduleItemId: item.id, kind: payment.kind, amountCents: payment.amountCents, paidOn: payment.paidOn,
-        method: payment.method, reference: payment.reference, notes: payment.notes, capitalMovementId: movementId, idempotencyKey: payment.requestId, createdByUserId: session.user.id,
-      });
+      await insertCapitalPayment({ tx, tenantId, session, payment, item, investment, investorName: row.investorName, balanceCents, cycleNumber: wallet.cycleNumber });
       const remaining = balanceCents - payment.amountCents;
-      // Auditoria na mesma transação. Sem observações (texto livre) e com a referência mascarada (sem conta, chave ou
-      // documento completos); nenhum dado bancário do investidor entra aqui.
-      await recordAdminAudit(tx, session, {
-        action: "INVESTMENT_PAYMENT_REGISTERED", entity: "investment_payment", entityId: paymentId, tenantId, tenantName: await tenantName(tx, tenantId),
-        description: `${INVESTOR_CATEGORIES[category]}: baixa registrada para ${row.investorName}`,
-        after: {
-          kind: OBLIGATION_KINDS[payment.kind], amountCents: payment.amountCents, paidOn: payment.paidOn, method: PAYMENT_METHODS[payment.method], reference: maskReference(payment.reference),
-          notes: payment.notes ? "preenchidas" : null, investmentId: investment.id, investorId: investment.investorId, contract: label, scheduleItemId: item.id, installment: item.number,
-          dueDate: item.dueDate, capitalMovementId: movementId, balanceAfterCents: remaining, cycleNumber: wallet.cycleNumber,
-        },
-      });
       return { ok: true, message: `Baixa de ${formatMoney(payment.amountCents)} registrada (${OBLIGATION_KINDS[payment.kind]}). ${remaining > 0 ? `Saldo da obrigação: ${formatMoney(remaining)}.` : "Obrigação paga."}` };
     });
     if (result.ok) refresh();
@@ -296,3 +274,4 @@ export async function declarePriorContributionAction(data: FormData): Promise<Ac
     throw error;
   }
 }
+
