@@ -19,6 +19,9 @@ export const guarantorPartLabels = { Name: "Nome do avalista", Document: "CPF do
 // Contatos e redes sociais (opcionais): WhatsApp, e-mail, Instagram, Facebook e TikTok.
 export const contactKeys = ["whatsapp", "email", "instagram", "facebook", "tiktok"] as const;
 export type ContactKey = (typeof contactKeys)[number];
+// Dados pessoais além de nome/CPF: data de nascimento (AAAA-MM-DD, opcional, não futura).
+export const personalKeys = ["birthDate"] as const;
+export type PersonalKey = (typeof personalKeys)[number];
 
 type AddressKey = `${AddressKind}${AddressPart}`;
 type ReferenceKey = `reference${(typeof referenceSlots)[number]}${(typeof referenceParts)[number]}`;
@@ -26,7 +29,7 @@ type GuarantorKey = `guarantor${(typeof guarantorParts)[number]}`;
 // Empresa onde o cliente trabalha (junto do endereço comercial): nome, CNPJ (só dígitos, conferido) e data de admissão (AAAA-MM-DD).
 export const companyKeys = ["businessCompanyName", "businessCnpj", "businessAdmissionDate"] as const;
 export type CompanyKey = (typeof companyKeys)[number];
-export type ClientProfileKey = ContactKey | AddressKey | ReferenceKey | GuarantorKey | CompanyKey | BankKey;
+export type ClientProfileKey = PersonalKey | ContactKey | AddressKey | ReferenceKey | GuarantorKey | CompanyKey | BankKey;
 export type ClientProfile = Record<ClientProfileKey, string | null>;
 
 export const addressKey = (kind: AddressKind, part: AddressPart) => `${kind}${part}` as AddressKey;
@@ -34,6 +37,7 @@ export const referenceKey = (slot: (typeof referenceSlots)[number], part: (typeo
 export const guarantorKey = (part: (typeof guarantorParts)[number]) => `guarantor${part}` as GuarantorKey;
 
 export const clientProfileKeys: ClientProfileKey[] = [
+  ...personalKeys,
   ...contactKeys,
   ...(Object.keys(addressKinds) as AddressKind[]).flatMap((kind) => addressParts.map((part) => addressKey(kind, part))),
   ...referenceSlots.flatMap((slot) => referenceParts.map((part) => referenceKey(slot, part))),

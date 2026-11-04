@@ -154,6 +154,24 @@ test("CE5b. data de admissão na empresa: opcional, data real e não futura; edi
   assert.equal(await one(`select business_admission_date is null from client where id = '${client.id}'`), true);
 });
 
+test("CE5d. data de nascimento: opcional, data real e não futura; edição e remoção", async () => {
+  const future = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+  for (const bad of ["1985-02-30", "20/05/1985", "abc", future, "1899-12-31"]) {
+    const result = await create(robério, { name: "Nascimento Inválido", birthDate: bad });
+    assert.equal(result.ok, false, bad);
+    assert.match(result.error, /nascimento/i, bad);
+  }
+  assert.equal(await one(`select count(*)::int from client where name = 'Nascimento Inválido'`), 0);
+  const ok = await create(robério, { name: "Nascimento Teste", birthDate: "1985-05-20" });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  const client = await clientOf("ten_roberio", "Nascimento Teste");
+  assert.equal(await one(`select to_char(birth_date, 'YYYY-MM-DD') from client where id = '${client.id}'`), "1985-05-20");
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Nascimento Teste", birthDate: "1986-01-10" })).ok, true);
+  assert.equal(await one(`select to_char(birth_date, 'YYYY-MM-DD') from client where id = '${client.id}'`), "1986-01-10");
+  assert.equal((await action(robério, "updateClientAction", { clientId: client.id, name: "Nascimento Teste", birthDate: "" })).ok, true);
+  assert.equal(await one(`select birth_date is null from client where id = '${client.id}'`), true);
+});
+
 test("CE5c. observações longas e marca de apostadora de cassino online: grava, edita, desmarca e fica só na própria carteira", async () => {
   const long = "Observação livre. ".repeat(100).trim();
   const ok = await create(robério, { name: "Cassino Teste", notes: long, onlineCasinoBettor: "on" });
@@ -340,12 +358,15 @@ test("CE8c. tela: campo Data de admissão na seção Empresa (cadastro e ficha)"
   await company.scrollIntoViewIfNeeded();
   if (SHOTS) await company.screenshot({ path: `${SHOTS}/clientes-empresa-admissao.png` });
   await form.getByLabel("Nome completo").fill("Admissão Tela");
+  await form.getByLabel("Data de nascimento").fill("03/02/1990");
   await form.getByRole("button", { name: "Cadastrar cliente" }).click();
   await page.getByText(/Admissão Tela cadastrado/).waitFor({ timeout: 20_000 });
   assert.equal(await one(`select to_char(business_admission_date, 'DD/MM/YYYY') from client where name = 'Admissão Tela'`), "12/08/2019");
   await page.getByRole("searchbox", { name: /Buscar cliente/ }).fill("Admissão Tela");
   await page.getByRole("table", { name: "Resultado da busca" }).getByRole("button", { name: "Abrir" }).click();
   await page.getByText(/admitido em 12\/08\/2019/).waitFor();
+  assert.equal(await one(`select to_char(birth_date, 'DD/MM/YYYY') from client where name = 'Admissão Tela'`), "03/02/1990");
+  await page.getByText("03/02/1990").first().waitFor();
   await context.close();
 });
 
