@@ -14,7 +14,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, periodStatusLabels, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
@@ -1405,21 +1405,23 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
   const [mode, setMode] = useState<PaymentMode>("MANUAL");
   const [paidAt, setPaidAt] = useState(today);
   const [newDueDate, setNewDueDate] = useState<string | null>(null);
-  const reset = () => { setAmount(""); setMode("MANUAL"); setNewDueDate(null); };
+  // Período escolhido na lista "Períodos de juros" para "Receber juros e renovar".
+  const [period, setPeriod] = useState<number | null>(null);
+  const reset = () => { setAmount(""); setMode("MANUAL"); setNewDueDate(null); setPeriod(null); };
   const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { reset(); onChanged(); });
   const isOpen = operation.status === "OPEN" && !readOnly;
   const amountCents = parseMoneyToCents(amount);
   const recurringOp = !amortized(operation);
   const next = operation.nextInstallment;
   // Prévia: a MESMA função que o servidor usa para gravar (planPayment), com a modalidade, o valor e a data escolhidos.
-  const plan = amountCents !== null && amountCents > 0 ? planPayment(operation.ledgerTerms, operation.payments, { mode, amountCents, paidAt, newDueDate }, today, "preview", formatMoney) : null;
+  const plan = amountCents !== null && amountCents > 0 ? planPayment(operation.ledgerTerms, operation.payments, { mode, amountCents, paidAt, newDueDate, period: mode === "INTEREST_ONLY_RENEWAL" ? period : null }, today, "preview", formatMoney) : null;
   // "Só os juros e renovar" só fica habilitado quando a operação pode fazer isso agora (mesmas condições do servidor).
-  const renewCheck = recurringOp ? planPayment(operation.ledgerTerms, operation.payments, { mode: "INTEREST_ONLY_RENEWAL", amountCents: operation.interestRemainingCents, paidAt: today }, today, "preview", formatMoney) : null;
-  const canRenew = renewCheck?.ok === true;
   const canAmortize = recurringOp && operation.principalRemainingCents > 0;
   const renewal = plan?.ok ? plan.renewal : null;
-  const choose = (next: PaymentMode, cents: number | null) => { setMode(next); setNewDueDate(null); if (cents !== null) setAmount(centsToInput(cents)); };
+  const choose = (next: PaymentMode, cents: number | null) => { setMode(next); setNewDueDate(null); setPeriod(null); if (cents !== null) setAmount(centsToInput(cents)); };
   const fixedAmount = mode === "INTEREST_ONLY_RENEWAL" || mode === "FULL_SETTLEMENT";
+  const pickPeriod = (item: { number: number; remainingCents: number }) => { setMode("INTEREST_ONLY_RENEWAL"); setNewDueDate(null); setPeriod(item.number); setAmount(centsToInput(item.remainingCents)); };
+  const chosenPeriod = period !== null ? operation.periodViews.find((item) => item.number === period) : undefined;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
   const [deferring, setDeferring] = useState<number | null>(null);
@@ -1472,19 +1474,43 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
         {operation.settlementPaymentId && (
           <p className="capital-note">Liquidada antecipadamente em {operation.settledAt ? formatDate(operation.settledAt) : "—"}: saldo do contrato de {formatMoney(operation.settlementBalanceCents ?? 0)} encerrado com desconto de {formatMoney(operation.settlementDiscountCents ?? 0)}. O desconto não é lucro nem pendência.</p>
         )}
+        {recurringOp && operation.periodViews.length > 0 && (
+          <div className="payment-history interest-periods">
+            <h3>Períodos de juros</h3>
+            <div className="table-scroll">
+              <table>
+                <thead><tr><th>Período</th><th>Vencimento</th><th>Juros</th><th>Recebido</th><th>Situação</th><th>Ação</th></tr></thead>
+                <tbody>{operation.periodViews.map((item) => (
+                  <tr key={item.number} data-period={item.number} data-status={item.status} className={period === item.number ? "row-selected" : undefined}>
+                    <td>{item.number}º período</td><td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.interestCents)}</td><td>{formatMoney(item.paidCents)}</td>
+                    <td><span className={`status-chip ${item.status === "OVERDUE" ? "status-late" : item.status === "DUE_TODAY" ? "status-due" : item.status === "PAID_RENEWED" ? "status-renewal" : item.status === "PAID" ? "status-paid" : "status-active"}`}><i />{periodStatusLabels[item.status]}</span></td>
+                    <td>{isOpen && item.remainingCents > 0 && operation.principalRemainingCents > 0
+                      ? <button type="button" className={period === item.number ? "primary-button" : "outline-button"} data-action="receive-period" aria-pressed={period === item.number} onClick={() => pickPeriod(item)}>Receber juros e renovar ({formatMoney(item.remainingCents)})</button>
+                      : <span className="muted-cell">—</span>}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {isOpen && settling && <EarlySettlementForm operation={operation} today={today} onClose={() => setSettling(false)} onChanged={onChanged} />}
         {isOpen && !settling && (
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
             <input type="hidden" name="paymentMode" value={mode} />
-            {mode === "INTEREST_ONLY_RENEWAL" && <input type="hidden" name="expectedPeriod" value={operation.periodNumber} />}
+            {mode === "INTEREST_ONLY_RENEWAL" && period === null && <input type="hidden" name="expectedPeriod" value={operation.periodNumber} />}
+            {mode === "INTEREST_ONLY_RENEWAL" && period !== null && <input type="hidden" name="period" value={period} />}
             <div className="payment-shortcuts payment-modes" role="group" aria-label="Modalidade do pagamento">
-              {recurringOp && <button type="button" className={mode === "INTEREST_ONLY_RENEWAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "INTEREST_ONLY_RENEWAL"} disabled={!canRenew} title={renewCheck && !renewCheck.ok ? renewCheck.error : undefined} onClick={() => choose("INTEREST_ONLY_RENEWAL", operation.interestRemainingCents)}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
               {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => choose("MANUAL", next.remainingCents)}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
               <button type="button" className={mode === "MANUAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "MANUAL"} onClick={() => choose("MANUAL", null)}>Pagamento manual</button>
               {canAmortize && <button type="button" className={mode === "PRINCIPAL_AMORTIZATION" ? "primary-button" : "outline-button"} aria-pressed={mode === "PRINCIPAL_AMORTIZATION"} onClick={() => choose("PRINCIPAL_AMORTIZATION", null)}>Amortizar principal</button>}
               <button type="button" className={mode === "FULL_SETTLEMENT" ? "primary-button" : "outline-button"} aria-pressed={mode === "FULL_SETTLEMENT"} onClick={() => choose("FULL_SETTLEMENT", operation.balanceCents)}>Saldo total ({formatMoney(operation.balanceCents)})</button>
             </div>
+            {chosenPeriod && (
+              <div className="renewal-box field-wide" data-testid="period-confirm" aria-live="polite">
+                <p><strong>Receber juros do {chosenPeriod.number}º período.</strong> Vencimento {formatDate(chosenPeriod.dueDate)} · juros do período {formatMoney(chosenPeriod.remainingCents)}. Só este período é pago; os outros continuam como estão.</p>
+              </div>
+            )}
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required onChange={setPaidAt} />
             <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
@@ -1516,7 +1542,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             )}
             <div className="form-actions">
               <button type="button" className="outline-button" onClick={() => setSettling(true)}>Liquidação antecipada</button>
-              <button className="primary-button" disabled={pending || plan === null || !plan.ok}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
+              <button className="primary-button" disabled={pending || plan === null || !plan.ok}><Icon name="check" size={16} /> {pending ? "Registrando…" : chosenPeriod ? "Confirmar recebimento e renovar" : "Registrar pagamento"}</button>
             </div>
           </form>
         )}

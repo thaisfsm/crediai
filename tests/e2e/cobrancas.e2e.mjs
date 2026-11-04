@@ -179,8 +179,8 @@ test("K2b. Dashboard: Contas a receber mostra atraso, hoje, próximos 7 dias e t
 async function pay(page, client, shortcut) {
   await charges(page).locator("table.data-table > tbody > tr", { hasText: client }).getByRole("button", { name: "Registrar pagamento" }).click();
   const panel = page.getByRole("dialog", { name: `Pagamentos de ${client}` });
-  await panel.getByRole("button", { name: shortcut }).click();
-  await panel.locator("form").getByRole("button", { name: "Registrar pagamento" }).click();
+  await panel.getByRole("button", { name: shortcut }).first().click();
+  await panel.locator("form").getByRole("button", { name: /^(Registrar pagamento|Confirmar recebimento e renovar)$/ }).click();
   // A quitada sai da lista (e o painel junto, com a linha); a renovada continua com o painel aberto.
   await Promise.race([panel.getByText(/registrado/).first().waitFor({ timeout: 15_000 }), panel.waitFor({ state: "detached", timeout: 15_000 })]);
   // Espera a atualização da lista: se a linha saiu, o painel some sozinho; senão, fecha.
@@ -195,7 +195,7 @@ test("K3. depois de registrar pagamentos a lista se reordena sozinha (quitada sa
   await pay(robério, "Zélia Antiga", /^Saldo total/);
   await robério.waitForFunction(() => !document.querySelector("main .table-panel")?.textContent?.includes("Zélia Antiga"), null, { timeout: 15_000 });
   // Só os juros da atrasada: renova para o mês seguinte (motor) e passa para depois das próximas, antes da de 40 dias.
-  await pay(robério, "Bia Atrasada", /^Só os juros e renovar/);
+  await pay(robério, "Bia Atrasada", /^Receber juros e renovar/);
   const expected = ["Igor Parcelado", "Paula Parcial", "Ana Hoje", "Bruno Hoje", "Tiago Amanhã", "Nina Próxima", "Bia Atrasada", "Fábio Longe"];
   await robério.waitForFunction((first) => document.querySelector("main .table-panel tbody tr td:nth-child(1) > strong")?.textContent === first, expected[0], { timeout: 15_000 });
   assert.deepEqual(await rows(robério), expected);

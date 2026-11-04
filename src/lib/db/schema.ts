@@ -606,16 +606,50 @@ export const payments = pgTable("payment", {
   // Ordem de apropriação usada no registro (a do contrato naquele momento). Congela a divisão do pagamento manual:
   // mudar a regra do contrato depois não reclassifica este pagamento. null = pagamento anterior à 0054.
   allocationOrder: text("allocation_order"),
+  // "Receber juros e renovar" de um período escolhido (migration 0055): o número do período cujos juros este pagamento
+  // pagou. null = pagamentos anteriores e as demais modalidades (juros do período mais antigo para o atual). Gravado uma
+  // vez, nunca alterado (mesmo gatilho da modalidade); um período só recebe um pagamento assim.
+  interestPeriodNumber: integer("interest_period_number"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("payment_tenant_id_idx").on(table.tenantId),
+  uniqueIndex("payment_interest_period_unique").on(table.operationId, table.interestPeriodNumber).where(sql`${table.interestPeriodNumber} is not null`),
   index("payment_operation_id_idx").on(table.operationId),
   unique("payment_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "payment_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
   check("payment_amount_positive", sql`${table.amountCents} > 0`),
   check("payment_mode_valid", sql`${table.paymentMode} is null or ${table.paymentMode} in ('INTEREST_ONLY_RENEWAL', 'MANUAL', 'PRINCIPAL_AMORTIZATION', 'FULL_SETTLEMENT', 'EARLY_SETTLEMENT')`),
   check("payment_allocation_order_valid", sql`${table.allocationOrder} is null or ${table.allocationOrder} in ('INTEREST_FIRST', 'PRINCIPAL_FIRST')`),
+  check("payment_interest_period_valid", sql`${table.interestPeriodNumber} is null or (${table.interestPeriodNumber} >= 1 and ${table.paymentMode} = 'INTEREST_ONLY_RENEWAL')`),
   ...tenantPolicies("payment", table.tenantId),
+]).enableRLS();
+
+// Reclassificação autorizada de um pagamento (migration 0055): a única forma de trocar a modalidade, a ordem de
+// apropriação ou o período de um pagamento já gravado. Guarda o antes e o depois, o motivo e quem autorizou; o gatilho
+// payment_mode_locked só aceita a troca na mesma transação em que esta linha foi gravada (txid) e com os mesmos valores.
+// Valor, data, id e observação do pagamento nunca mudam por aqui. Não se edita nem se apaga pelo tenant.
+export const paymentReclassifications = pgTable("payment_reclassification", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  paymentId: text("payment_id").notNull(),
+  previousMode: text("previous_mode"),
+  previousAllocationOrder: text("previous_allocation_order"),
+  previousPeriodNumber: integer("previous_period_number"),
+  newMode: text("new_mode").notNull(),
+  newAllocationOrder: text("new_allocation_order"),
+  newPeriodNumber: integer("new_period_number"),
+  reason: text("reason").notNull(),
+  authorizedBy: text("authorized_by").notNull(),
+  txid: bigint("txid", { mode: "number" }).notNull().default(sql`txid_current()`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("payment_reclassification_payment_idx").on(table.paymentId),
+  foreignKey({ name: "payment_reclassification_payment_same_tenant_fk", columns: [table.tenantId, table.paymentId], foreignColumns: [payments.tenantId, payments.id] }).onDelete("restrict"),
+  check("payment_reclassification_reason_not_blank", sql`length(trim(${table.reason})) >= 10`),
+  pgPolicy("payment_reclassification_select_tenant_or_admin", { for: "select", using: tenantScope(table.tenantId) }),
+  pgPolicy("payment_reclassification_insert_admin_only", { for: "insert", withCheck: adminScope }),
+  pgPolicy("payment_reclassification_update_admin_only", { for: "update", using: sql`false`, withCheck: sql`false` }),
+  pgPolicy("payment_reclassification_delete_admin_only", { for: "delete", using: sql`false` }),
 ]).enableRLS();
 
 // Histórico de edições de pagamento: guarda valor, data e observação de antes e de depois de cada correção.

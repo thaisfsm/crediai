@@ -379,6 +379,13 @@
       "when": 1793733804503,
       "tag": "0054_modalidade_pagamento",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1793759088120,
+      "tag": "0055_receber_juros_por_periodo",
+      "breakpoints": true
     }
   ]
 }

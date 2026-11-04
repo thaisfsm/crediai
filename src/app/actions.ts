@@ -837,7 +837,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
 }
 
 async function operationPayments(tx: TenantTransaction, tenantId: string, operationId: string) {
-  const rows = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt, paymentMode: payments.paymentMode, allocationOrder: payments.allocationOrder }).from(payments)
+  const rows = await tx.select({ id: payments.id, amountCents: payments.amountCents, paidAt: payments.paidAt, createdAt: payments.createdAt, paymentMode: payments.paymentMode, allocationOrder: payments.allocationOrder, period: payments.interestPeriodNumber }).from(payments)
     .where(and(eq(payments.operationId, operationId), eq(payments.tenantId, tenantId)));
   return rows.map(({ paymentMode, allocationOrder, ...row }) => ({
     ...row, createdAt: row.createdAt.toISOString(),
@@ -868,10 +868,13 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   const chosenMode = modeInput === "INTEREST_ONLY" ? "INTEREST_ONLY_RENEWAL" : modeInput;
   if (chosenMode && !isPaymentMode(chosenMode)) return { ok: false, error: "Modalidade de pagamento inválida." };
   if (chosenMode === "EARLY_SETTLEMENT") return { ok: false, error: "A liquidação antecipada tem formulário próprio, com confirmação." };
+  const periodInput = text(data, "period", 6);
+  const period = periodInput ? Number(periodInput) : null;
+  if (period !== null && (!Number.isInteger(period) || period < 1 || chosenMode !== "INTEREST_ONLY_RENEWAL")) return { ok: false, error: "Período inválido." };
   const expectedInput = text(data, "expectedPeriod", 6);
   const expectedPeriod = expectedInput ? Number(expectedInput) : null;
   if (expectedPeriod !== null && (!Number.isInteger(expectedPeriod) || expectedPeriod < 1)) return { ok: false, error: "Período inválido." };
-  if (chosenMode === "INTEREST_ONLY_RENEWAL" && expectedPeriod === null && modeInput !== "INTEREST_ONLY") return { ok: false, error: "Atualize a tela e escolha de novo \"Só os juros e renovar\"." };
+  if (chosenMode === "INTEREST_ONLY_RENEWAL" && period === null && expectedPeriod === null && modeInput !== "INTEREST_ONLY") return { ok: false, error: "Atualize a tela e escolha de novo \"Só os juros e renovar\"." };
   if (newDueDateInput && !isIsoDate(newDueDateInput)) return { ok: false, error: "Informe o novo vencimento." };
   if (!operationId) return { ok: false, error: "Operação inválida." };
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
@@ -896,9 +899,9 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
       return { ok: false, error: "Novo vencimento só vale para \"Só os juros e renovar\"." };
     }
     const paymentId = id("pay");
-    const plan = planPayment(terms, previous, { mode, amountCents, paidAt, newDueDate: newDueDateInput || null, expectedPeriod }, today, paymentId, formatMoney);
+    const plan = planPayment(terms, previous, { mode, amountCents, paidAt, newDueDate: newDueDateInput || null, expectedPeriod, period }, today, paymentId, formatMoney);
     if (!plan.ok) return plan;
-    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes, paymentMode: plan.mode, allocationOrder: plan.allocationOrder });
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes, paymentMode: plan.mode, allocationOrder: plan.allocationOrder, interestPeriodNumber: plan.period });
     if (plan.renewal) {
       await tx.insert(loanRenewals).values({
         id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: plan.renewal.periodNumber, previousDueDate: plan.renewal.previousDueDate, newDueDate: plan.renewal.newDueDate,
@@ -909,7 +912,7 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return {
         ok: true,
-        message: `Juros / Renovação: ${formatMoney(amountCents)} recebidos como juros. Principal mantido em ${formatMoney(plan.principalAfterCents)}. Período renovado até ${formatDate(plan.renewal.newDueDate)}, com juros de ${formatMoney(plan.renewal.interestCents)}. Valor para quitação: ${formatMoney(plan.renewal.principalBaseCents + plan.renewal.interestCents)}.`,
+        message: `${plan.period ? `${plan.period}º período: ` : ""}Juros / Renovação: ${formatMoney(amountCents)} recebidos como juros. Principal mantido em ${formatMoney(plan.principalAfterCents)}. Período renovado até ${formatDate(plan.renewal.newDueDate)}, com juros de ${formatMoney(plan.renewal.interestCents)}. Valor para quitação: ${formatMoney(plan.renewal.principalBaseCents + plan.renewal.interestCents)}.`,
       };
     }
     if (plan.settles) {
@@ -917,6 +920,10 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
       await tx.update(loanOperations).set({ status: "PAID", settledAt, updatedAt: sql`now()` })
         .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
       return { ok: true, message: `Pagamento de ${formatMoney(amountCents)} registrado. Operação quitada.` };
+    }
+    if (plan.period) {
+      const others = plan.after.pendingPeriods.length;
+      return { ok: true, message: `${plan.period}º período: ${formatMoney(amountCents)} recebidos como juros. Principal mantido em ${formatMoney(plan.principalAfterCents)}. Período pago e renovado.${others > 0 ? ` Continuam pendentes ${others} período${others === 1 ? "" : "s"}, cada um com a sua situação.` : ""}` };
     }
     return { ok: true, message: `${paymentModeLabels[plan.mode]}: ${formatMoney(amountCents)} registrado (juros ${formatMoney(plan.interestCents)}, principal ${formatMoney(plan.principalCents)}). Saldo em aberto: ${formatMoney(plan.after.balanceCents)}. Próximo vencimento: ${formatDate(plan.after.nextDueDate)}.` };
   });
@@ -1062,9 +1069,13 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     }
     const all = await operationPayments(tx, tenantId, operation.id);
     const others = all.filter((item) => item.id !== payment.id);
-    const list = [...others, { id: payment.id, amountCents, paidAt, createdAt: payment.createdAt.toISOString(), mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null }];
+    const list = [...others, { id: payment.id, amountCents, paidAt, createdAt: payment.createdAt.toISOString(), mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null, period: payment.interestPeriodNumber ?? null }];
     const after = operationLedger(terms, list, todayIso());
     const edited = after.items.find((item) => item.id === payment.id)!;
+    // Recebimento dos juros de um período escolhido: com a nova data, ele precisa continuar pagando só aquele período.
+    if (payment.interestPeriodNumber != null && (edited.principalCents !== 0 || !after.periodViews.find((entry) => entry.number === payment.interestPeriodNumber)?.paymentIds.includes(payment.id))) {
+      return { ok: false, error: `Este recebimento pagou os juros do ${payment.interestPeriodNumber}º período; com esta data ele deixaria de pagar esse período. Confira a data.` };
+    }
     if (amountCents > edited.balanceBeforeCents || !fitsLedger(terms, list, after)) {
       return { ok: false, error: `O pagamento não pode ser maior que ${formatMoney(edited.balanceBeforeCents)}, o saldo da operação nessa data sem este pagamento.` };
     }

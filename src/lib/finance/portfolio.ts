@@ -2,7 +2,7 @@
 import { addDays, daysBetween, formatDate, initialsOf, shortDate, todayIso } from "./format";
 import type { ClientProfile } from "./client-profile";
 import type { ChartSeries } from "./chart";
-import { interestModeOf, operationLedger, paymentLabel, type AllocationOrder, type Frequency, type PaymentMode, type PendingPeriod, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
+import { interestModeOf, operationLedger, paymentLabel, type AllocationOrder, type Frequency, type PaymentMode, type PendingPeriod, type PeriodView, type LedgerPeriod, type LedgerTerms, type PaymentKind, type ScheduleItem } from "./rules";
 
 export type OperationStatus = "OPEN" | "PAID" | "CANCELED" | "RENEGOTIATED";
 
@@ -39,7 +39,7 @@ export type RenewalRecord = { id: string; paymentId: string; periodNumber: numbe
 // Correção feita em um pagamento: valores de antes e de depois.
 export type PaymentRevisionRecord = { id: string; previousAmountCents: number; previousPaidAt: string; amountCents: number; paidAt: string; editedAt: string; editedBy: string | null };
 // mode/allocationOrder: modalidade e ordem de apropriação gravadas no pagamento (0054); null nos pagamentos anteriores.
-export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[]; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null };
+export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[]; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null; period?: number | null };
 // renewedPeriod: o período que este pagamento renovou (pagamento somente de juros), com o novo vencimento.
 export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind; renewedPeriod: LedgerPeriod | null };
 export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_REVERSAL" | "OTHER_INCOME";
@@ -70,7 +70,7 @@ export type OperationView = Omit<OperationRecord, "renewals" | "deferrals"> & {
   // Período atual (1 = original), seus juros e o primeiro vencimento combinado.
   periodNumber: number; periodInterestCents: number; originalDueDate: string;
   // Vencimento do período atual e os juros pendentes período a período (mais antigo primeiro; vazio sem pendência).
-  periodDueDate: string; pendingPeriods: PendingPeriod[];
+  periodDueDate: string; pendingPeriods: PendingPeriod[]; periodViews: PeriodView[];
   modality: OperationModality; frequency: Frequency;
   // Parcelado e diário: as parcelas com o que já foi pago em cada uma e a próxima em aberto (null quando tudo foi pago).
   installments: ScheduleItem[]; nextInstallment: ScheduleItem | null;
@@ -216,7 +216,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       renewals, renewalCount: ledger.renewalCount, periodNumber: ledger.periodNumber, modality, frequency, periods: ledger.periods,
       installments: ledger.schedule, installmentTotal: ledger.schedule.filter((item) => item.state !== "DEFERRED").length, deferrals: deferralRows, nextInstallment: ledger.nextItem, nextDueDate: ledger.nextDueDate,
       nextOpenDueDate: open && ledger.balanceCents > 0 ? ledger.nextItem?.dueDate ?? ledger.nextDueDate : null,
-      periodInterestCents: ledger.periodInterestCents, periodDueDate: ledger.periodDueDate, pendingPeriods: open ? ledger.pendingPeriods : [], originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
+      periodInterestCents: ledger.periodInterestCents, periodDueDate: ledger.periodDueDate, pendingPeriods: open ? ledger.pendingPeriods : [], periodViews: ledger.periodViews, originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
       paidCents: ledger.paidCents, interestPaidCents: ledger.interestPaidCents, principalPaidCents: ledger.principalPaidCents,
       interestRemainingCents: open ? ledger.interestRemainingCents : 0,
       principalRemainingCents: open ? ledger.principalRemainingCents : 0,
