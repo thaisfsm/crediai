@@ -18,7 +18,7 @@ import { Icon } from "../ui-icon";
 import { MoneyInput } from "../money-input";
 import { declarePriorContributionAction, registerInvestmentEntryAction } from "../contas-a-pagar/actions";
 import { settleInvestmentEarlyAction } from "./settlement-actions";
-import { PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, earlySettlementPlan, type PaymentMethod } from "@/lib/investors/payables";
+import { PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, SETTLEMENT_KINDS, earlySettlementPlan, isSettlementKind, proRataYield, settlementTotals, type PaymentMethod, type SettlementKind } from "@/lib/investors/payables";
 import { ObligationsTable } from "../contas-a-pagar/payables-ui";
 import {
   createInvestmentAction, createInvestorAction, generateContractAction, markContractSentAction, renewInvestmentAction, replaceInvestmentDocumentAction, saveContractorAction,
@@ -837,13 +837,27 @@ function EarlySettlementSection({ data, onDone }: { data: InvestmentDetail; onDo
   const [settledOn, setSettledOn] = useState(cash.today);
   const [yieldText, setYieldText] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [kind, setKind] = useState<SettlementKind | "">("");
+  const [feeText, setFeeText] = useState("0,00");
+  const [allowAbove, setAllowAbove] = useState(false);
   const requestId = useRef<string | null>(null);
-  const settle = useFormAction(settleInvestmentEarlyAction, () => { requestId.current = null; setOpen(false); setConfirmed(false); onDone(); });
+  const settle = useFormAction(settleInvestmentEarlyAction, () => { requestId.current = null; setOpen(false); setConfirmed(false); setKind(""); setFeeText("0,00"); setAllowAbove(false); onDone(); });
   const plan = earlySettlementPlan({ amountCents: investment.amountCents, items: data.schedule.items, payments: cash.payments, settledOn });
   const yieldValue = yieldText ?? centsToInput(plan.overdueYieldCents);
   const yieldCents = yieldValue.trim() ? parseMoneyToCents(yieldValue) : 0;
   const yieldInvalid = yieldCents === null || yieldCents < 0;
-  const totalCents = plan.principalRemainingCents + (yieldCents ?? 0);
+  const proRata = proRataYield({ items: data.schedule.items, payments: cash.payments, startDate: investment.startDate, settledOn });
+  const investorRequest = kind === "INVESTOR_REQUEST";
+  const feeCents = investorRequest ? (feeText.trim() ? parseMoneyToCents(feeText) : 0) : 0;
+  const totals = settlementTotals({ principalCents: plan.principalRemainingCents, yieldCents: yieldCents ?? 0, proRataCents: proRata.cents, feeCents: feeCents ?? 0 });
+  const feeInvalid = feeCents === null || feeCents < 0 || totals.netCents < 0;
+  const above = !yieldInvalid && (yieldCents ?? 0) > plan.overdueYieldCents;
+  const yieldsPaidCents = cash.payments.filter((payment) => payment.kind === "YIELD").reduce((total, payment) => total + payment.amountCents, 0);
+  const lastPaidOn = cash.payments.map((payment) => payment.paidOn).sort().at(-1) ?? null;
+  const beforeLastPayment = Boolean(lastPaidOn && settledOn < lastPaidOn);
+  const invalid = yieldInvalid || feeInvalid;
+  const totalCents = totals.netCents;
+  const money = (cents: number) => (invalid ? "—" : formatMoney(cents));
   const blocked = cash.obligations.find((obligation) => obligation.paymentBlock)?.paymentBlock ?? null;
   const beforeCycle = Boolean(cash.cycleStartedOn && settledOn < cash.cycleStartedOn);
   if (renewal.child || (investment.status !== "ACTIVE" && !data.schedule.items.some((item) => item.description === "Liquidação antecipada"))) return null;
@@ -867,29 +881,52 @@ function EarlySettlementSection({ data, onDone }: { data: InvestmentDetail; onDo
           <input type="hidden" name="investmentId" value={investment.id} />
           <input type="hidden" name="principalCents" value={plan.principalRemainingCents} />
           <input type="hidden" name="requestId" defaultValue="" />
+          <input type="hidden" name="proRataCents" value={proRata.cents} />
           <DateField label="Data da liquidação" name="settledOn" defaultValue={cash.today} min={investment.startDate} max={cash.today} required onChange={setSettledOn} />
-          <label className="field"><span>Rendimento final negociado (R$)</span><MoneyInput name="yieldAmount" inputMode="decimal" value={yieldValue} onChange={(event) => setYieldText(event.target.value)} aria-invalid={yieldInvalid} /></label>
+          <label className="field"><span>Tipo da liquidação</span><select name="settlementKind" value={kind} required onChange={(event) => setKind(isSettlementKind(event.target.value) ? event.target.value : "")} aria-invalid={!kind}>
+            <option value="">Escolha…</option>
+            <option value="COMPANY_DECISION">Por decisão da empresa</option>
+            <option value="INVESTOR_REQUEST">Resgate solicitado pelo investidor</option>
+          </select></label>
           <label className="field"><span>Forma de pagamento</span><select name="method" defaultValue={investment.paymentMethod ?? "OTHER"} required>
             {(Object.keys(PAYMENT_METHODS) as PaymentMethod[]).map((method) => <option key={method} value={method}>{PAYMENT_METHODS[method]}</option>)}
           </select></label>
           <label className="field"><span>Referência ou comprovante</span><input name="reference" maxLength={REFERENCE_MAX} placeholder="Ex.: ID da transação Pix (opcional)" /></label>
-          <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
+          <label className="field"><span>Rendimento final negociado (R$)</span><MoneyInput name="yieldAmount" inputMode="decimal" value={yieldValue} onChange={(event) => setYieldText(event.target.value)} aria-invalid={yieldInvalid} /></label>
+          <label className="field"><span>Rendimento Pro-Rata Temporis (R$)</span><input value={centsToInput(proRata.cents)} readOnly aria-readonly="true" title="Calculado automaticamente pela data da liquidação" /></label>
+          <label className="field"><span>Taxa de Liquidação Antecipada (R$)</span>{investorRequest
+            ? <MoneyInput name="feeAmount" inputMode="decimal" value={feeText} onChange={(event) => setFeeText(event.target.value)} aria-invalid={feeInvalid} />
+            : <input name="feeAmount" value="0,00" readOnly aria-readonly="true" title="Só no resgate solicitado pelo investidor" />}</label>
+          <label className="field"><span>Observação</span><input name="notes" maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
           <dl className="payment-summary field-wide">
+            <div><dt>Principal originalmente investido</dt><dd>{formatMoney(investment.amountCents)}</dd></div>
             <div><dt>Principal já devolvido</dt><dd>{formatMoney(plan.principalPaidCents)}</dd></div>
             <div><dt>Principal a devolver agora</dt><dd>{formatMoney(plan.principalRemainingCents)}</dd></div>
-            <div><dt>Rendimento final</dt><dd>{yieldInvalid ? "—" : formatMoney(yieldCents ?? 0)}</dd></div>
-            <div><dt>Total que sai do capital</dt><dd><strong>{yieldInvalid ? "—" : formatMoney(totalCents)}</strong></dd></div>
-            <div><dt>Em aberto no cronograma hoje</dt><dd>{formatMoney(plan.openScheduleCents)} ({plan.closedCount} {plan.closedCount === 1 ? "parcela" : "parcelas"})</dd></div>
+            <div><dt>Rendimentos já pagos</dt><dd>{formatMoney(yieldsPaidCents)}</dd></div>
             <div><dt>Rendimentos vencidos não pagos até a data</dt><dd>{formatMoney(plan.overdueYieldCents)}</dd></div>
+            <div><dt>Rendimento final negociado</dt><dd>{yieldInvalid ? "—" : formatMoney(yieldCents ?? 0)}</dd></div>
+            <div><dt>Rendimento pro-rata temporis</dt><dd>{formatMoney(proRata.cents)}</dd></div>
+            <div><dt>Total bruto</dt><dd>{money(totals.grossCents)}</dd></div>
+            <div><dt>Taxa de liquidação antecipada (desconto)</dt><dd>{investorRequest ? (feeCents === null ? "—" : `− ${formatMoney(feeCents)}`) : "Não se aplica"}</dd></div>
+            <div><dt>Valor líquido a pagar</dt><dd><strong>{money(totals.netCents)}</strong></dd></div>
+            <div><dt>Valor que sai do capital</dt><dd><strong>{money(totals.netCents)}</strong></dd></div>
+            <div><dt>Em aberto no cronograma hoje</dt><dd>{formatMoney(plan.openScheduleCents)} ({plan.closedCount} {plan.closedCount === 1 ? "parcela" : "parcelas"})</dd></div>
             <div><dt>Rendimentos futuros que deixam de existir</dt><dd>{formatMoney(plan.futureYieldCents)}</dd></div>
           </dl>
-          <p className="capital-note field-wide">O rendimento final vem preenchido com os rendimentos vencidos e não pagos até a data; troque pelo valor combinado (pode ser zero). As {plan.closedCount} {plan.closedCount === 1 ? "parcela em aberto é encerrada" : "parcelas em aberto são encerradas"} e entra uma linha &ldquo;Liquidação antecipada&rdquo; já paga.</p>
+          <div className="capital-note field-wide" aria-label="Memória de cálculo">
+            <p><strong>Pro-rata temporis:</strong> {proRata.formula}</p>
+            <p><strong>Destino do valor:</strong> {formatMoney(plan.principalRemainingCents)} de principal devolvido{yieldCents ? `, ${formatMoney(yieldCents)} de rendimento final` : ""}{proRata.cents ? `, ${formatMoney(proRata.cents)} de rendimento pro-rata` : ""}{investorRequest && feeCents ? `; ${formatMoney(feeCents)} de taxa retida, que entra no capital como "Outras entradas" (não é principal nem rendimento)` : ""}. {invalid ? "" : `Total bruto ${formatMoney(totals.grossCents)}${investorRequest && feeCents ? ` − taxa ${formatMoney(feeCents)}` : ""} = ${formatMoney(totals.netCents)} pagos ao investidor; o capital diminui ${formatMoney(totals.netCents)}.`}</p>
+            <p>O rendimento final vem preenchido com os rendimentos vencidos e não pagos até a data; troque pelo valor combinado (pode ser zero). O pro-rata é calculado à parte e somado. {kind === "INVESTOR_REQUEST" ? "Se o resgate não for aceito, cancele: o contrato continua vigente." : ""} As {plan.closedCount} {plan.closedCount === 1 ? "parcela em aberto é encerrada" : "parcelas em aberto são encerradas"} e entra uma linha &ldquo;Liquidação antecipada&rdquo; já paga.</p>
+          </div>
           {beforeCycle && <p className="form-feedback form-feedback-error field-wide" role="alert">A data é anterior ao início do ciclo atual da carteira ({formatDate(cash.cycleStartedOn as string)}).</p>}
+          {beforeLastPayment && <p className="form-feedback form-feedback-error field-wide" role="alert">A data é anterior à última baixa deste contrato ({formatDate(lastPaidOn as string)}).</p>}
           {yieldInvalid && <p className="form-feedback form-feedback-error field-wide" role="alert">O rendimento final precisa ser zero ou um valor positivo.</p>}
-          <label className="check-field field-wide"><input type="checkbox" name="confirm" value="1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} required /><span>Confirmo a liquidação antecipada: {yieldInvalid ? "o valor" : formatMoney(totalCents)} sai do capital em {formatDate(settledOn)}, as parcelas em aberto são encerradas e o contrato fica encerrado. Isso não pode ser desfeito por aqui.</span></label>
+          {feeInvalid && <p className="form-feedback form-feedback-error field-wide" role="alert">A taxa precisa ser zero ou um valor positivo e não pode passar do total bruto.</p>}
+          {above && <label className="check-field field-wide"><input type="checkbox" name="allowAbove" value="1" checked={allowAbove} onChange={(event) => setAllowAbove(event.target.checked)} /><span>Confirmo pagar rendimento final acima dos rendimentos vencidos e não pagos ({formatMoney(plan.overdueYieldCents)}), conforme combinado.</span></label>}
+          <label className="check-field field-wide"><input type="checkbox" name="confirm" value="1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} required /><span>Confirmo {kind ? SETTLEMENT_KINDS[kind].toLowerCase().replace(/^liquidação/, "a liquidação").replace(/^resgate/, "o resgate") : "a liquidação antecipada"}: {invalid ? "o valor" : formatMoney(totalCents)} sai do capital em {formatDate(settledOn)}{investorRequest && feeCents ? ` (${formatMoney(totals.grossCents)} bruto − ${formatMoney(feeCents)} de taxa)` : ""}, as parcelas em aberto são encerradas e o contrato fica encerrado. Isso não pode ser desfeito por aqui.</span></label>
           <div className="form-actions">
             <button type="button" className="outline-button" onClick={() => { setOpen(false); setConfirmed(false); }}>Cancelar</button>
-            <button className="primary-button" disabled={settle.pending || !confirmed || yieldInvalid || beforeCycle || totalCents <= 0}><Icon name="check" size={16} /> {settle.pending ? "Liquidando…" : "Confirmar liquidação"}</button>
+            <button className="primary-button" disabled={settle.pending || !confirmed || !kind || invalid || beforeCycle || beforeLastPayment || (above && !allowAbove) || totals.grossCents <= 0}><Icon name="check" size={16} /> {settle.pending ? "Liquidando…" : "Confirmar liquidação"}</button>
           </div>
         </form>
       )}

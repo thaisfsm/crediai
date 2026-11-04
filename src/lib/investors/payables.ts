@@ -6,6 +6,7 @@
 // obrigação prevista não mexe no capital; só a baixa confirmada grava UMA saída em capital_movement.
 import { normalizeName } from "../finance/client-search";
 import { formatDate, formatMoney, isIsoDate, parseMoneyToCents } from "../finance/format";
+import { COMMERCIAL_MONTH_DAYS, commercialDaysBetween } from "../finance/rules";
 
 export const OBLIGATION_KINDS = { YIELD: "Rendimento", PRINCIPAL: "Devolução de principal" } as const;
 export type ObligationKind = keyof typeof OBLIGATION_KINDS;
@@ -373,5 +374,71 @@ export function checkEarlySettlement({ status, renewed, settledOn, today, startD
   if (cycleStartedOn && settledOn < cycleStartedOn) return { ok: false, error: `A data da liquidação não pode ser anterior ao início do ciclo atual da carteira (${formatDate(cycleStartedOn)}).` };
   if (!Number.isSafeInteger(yieldCents) || yieldCents < 0) return { ok: false, error: "O rendimento final precisa ser zero ou um valor positivo." };
   if (principalRemainingCents + yieldCents <= 0) return { ok: false, error: "Não há principal a devolver nem rendimento final: nada a liquidar." };
+  return { ok: true };
+}
+
+// ── Liquidação antecipada: tipo, rendimento pro-rata temporis e taxa de resgate ──────────────────────────────────────
+// Dois tipos, sempre escolhidos de forma expressa: a empresa decide devolver (sem taxa) ou o investidor pede o resgate e
+// a empresa aceita com uma taxa informada caso a caso (pode ser zero; nunca calculada nem presumida).
+export const SETTLEMENT_KINDS = { COMPANY_DECISION: "Liquidação antecipada por decisão da empresa", INVESTOR_REQUEST: "Resgate antecipado solicitado pelo investidor" } as const;
+export type SettlementKind = keyof typeof SETTLEMENT_KINDS;
+export const isSettlementKind = (value: string): value is SettlementKind => Object.hasOwn(SETTLEMENT_KINDS, value);
+export const EARLY_SETTLEMENT_FEE_DESCRIPTION = "Taxa de liquidação antecipada";
+export const PRORATA_NOTE = "Liquidação antecipada · rendimento pro-rata temporis";
+
+// Rendimento pro-rata temporis: juros simples do período em curso, do último vencimento de rendimento até a data da
+// liquidação (ou do início do contrato, se nenhum venceu ainda), na convenção comercial do CrediAI (30E/360: mês de 30
+// dias, dia inicial excluído e dia final incluído, dia 31 conta como 30). Base = rendimento contratado do próximo
+// vencimento, proporcional aos dias do período dele (mês comercial = 30): R$ 600 ÷ 30 × 28 = R$ 560.
+// Liquidação no dia do vencimento: 0 dias (o rendimento daquele dia já está nos vencidos). Nunca juros sobre juros
+// (base é só o rendimento contratado) e o que já foi pago do próximo rendimento é descontado (nada é pago duas vezes).
+// Sem rendimento futuro no cronograma: nada a calcular.
+export type ProRata = {
+  cents: number; grossCents: number; baseYieldCents: number; periodStart: string | null; nextDueDate: string | null;
+  elapsedDays: number; periodDays: number; paidOnNextCents: number; formula: string;
+};
+export function proRataYield({ items, payments, startDate, settledOn }: {
+  items: Pick<PayableItem, "id" | "dueDate" | "yieldCents">[]; payments: Pick<PayablePayment, "scheduleItemId" | "kind" | "amountCents">[]; startDate: string; settledOn: string;
+}): ProRata {
+  const none = (formula: string): ProRata => ({ cents: 0, grossCents: 0, baseYieldCents: 0, periodStart: null, nextDueDate: null, elapsedDays: 0, periodDays: 0, paidOnNextCents: 0, formula });
+  if (!isIsoDate(settledOn) || !isIsoDate(startDate)) return none("Informe a data da liquidação.");
+  const yieldItems = items.filter((item) => item.yieldCents > 0);
+  const nextDueDate = yieldItems.map((item) => item.dueDate).filter((date) => date > settledOn).sort()[0] ?? null;
+  if (!nextDueDate) return none("Não há rendimento a vencer depois desta data: nada proporcional a pagar.");
+  const previous = yieldItems.map((item) => item.dueDate).filter((date) => date <= settledOn).sort().at(-1) ?? null;
+  const periodStart = previous ?? startDate;
+  const next = yieldItems.filter((item) => item.dueDate === nextDueDate);
+  const baseYieldCents = next.reduce((total, item) => total + item.yieldCents, 0);
+  const paidOnNextCents = payments.filter((payment) => payment.kind === "YIELD" && next.some((item) => item.id === payment.scheduleItemId)).reduce((total, payment) => total + payment.amountCents, 0);
+  const periodDays = commercialDaysBetween(periodStart, nextDueDate);
+  const elapsedDays = Math.max(commercialDaysBetween(periodStart, settledOn), 0);
+  if (periodDays <= 0) return none("Período do rendimento inválido no cronograma: nada proporcional calculado.");
+  const days = Math.min(elapsedDays, periodDays);
+  const grossCents = Math.round((baseYieldCents * days) / periodDays);
+  const cents = Math.max(grossCents - paidOnNextCents, 0);
+  const base = periodDays === COMMERCIAL_MONTH_DAYS ? `${formatMoney(baseYieldCents)} ÷ ${COMMERCIAL_MONTH_DAYS} × ${days} dias` : `${formatMoney(baseYieldCents)} ÷ ${periodDays} × ${days} dias`;
+  const paidText = paidOnNextCents > 0 ? ` − ${formatMoney(paidOnNextCents)} já pagos do rendimento de ${formatDate(nextDueDate)}` : "";
+  const formula = `${base} = ${formatMoney(grossCents)}${paidText}${paidText ? ` = ${formatMoney(cents)}` : ""} (de ${formatDate(periodStart)}${previous ? ", último vencimento" : ", início do contrato"} a ${formatDate(settledOn)}, mês comercial de 30 dias; próximo vencimento ${formatDate(nextDueDate)})`;
+  return { cents, grossCents, baseYieldCents, periodStart, nextDueDate, elapsedDays: days, periodDays, paidOnNextCents, formula };
+}
+
+// Valores da liquidação: bruto = principal que falta + rendimento final (vencidos) + pro-rata; líquido = bruto − taxa.
+// O capital tem uma saída por tipo (principal, rendimento, pro-rata) e, se houver taxa, uma entrada separada da taxa
+// retida (Outras entradas): o saldo do capital muda exatamente pelo valor líquido pago ao investidor.
+export function settlementTotals({ principalCents, yieldCents, proRataCents, feeCents }: { principalCents: number; yieldCents: number; proRataCents: number; feeCents: number }) {
+  const grossCents = principalCents + yieldCents + proRataCents;
+  return { grossCents, feeCents, netCents: grossCents - feeCents };
+}
+
+// Conferências dos campos novos (o servidor chama com o contrato travado, depois de checkEarlySettlement).
+export function checkSettlementTerms({ kind, feeCents, grossCents, yieldCents, overdueYieldCents, allowAbove, settledOn, lastPaidOn }: {
+  kind: string; feeCents: number | null; grossCents: number; yieldCents: number; overdueYieldCents: number; allowAbove: boolean; settledOn: string; lastPaidOn: string | null;
+}): { ok: true } | { ok: false; error: string } {
+  if (!isSettlementKind(kind)) return { ok: false, error: "Escolha o tipo da liquidação: por decisão da empresa ou resgate solicitado pelo investidor." };
+  if (feeCents === null || !Number.isSafeInteger(feeCents) || feeCents < 0) return { ok: false, error: "A taxa de liquidação antecipada precisa ser zero ou um valor positivo." };
+  if (kind === "COMPANY_DECISION" && feeCents > 0) return { ok: false, error: "A taxa de liquidação antecipada só se aplica ao resgate solicitado pelo investidor. Nada foi registrado." };
+  if (feeCents > grossCents) return { ok: false, error: `A taxa (${formatMoney(feeCents)}) não pode ser maior que o total bruto (${formatMoney(grossCents)}): o valor líquido ficaria negativo. Nada foi registrado.` };
+  if (yieldCents > overdueYieldCents && !allowAbove) return { ok: false, error: `O rendimento final (${formatMoney(yieldCents)}) é maior que os rendimentos vencidos e não pagos (${formatMoney(overdueYieldCents)}). Marque a confirmação de valor acima do devido para continuar. Nada foi registrado.` };
+  if (lastPaidOn && settledOn < lastPaidOn) return { ok: false, error: `A data da liquidação não pode ser anterior à última baixa deste contrato (${formatDate(lastPaidOn)}). Nada foi registrado.` };
   return { ok: true };
 }
