@@ -10,7 +10,7 @@ import { respondToOffer } from "@/lib/credit/acceptance";
 import { evaluateProposal, type EnginePolicy } from "@/lib/credit/engine";
 import { cpfsWithOperations, openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
-import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentReclassifications, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -26,7 +26,7 @@ import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
+import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planInterestReclassification, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -1103,6 +1103,55 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
       .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
     const reopened = operation.status === "PAID" && !settles;
     return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(after.balanceCents)}.`}` };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Troca do tipo de um recebimento para "Juros / Renovação" (lançado por engano como pagamento manual ou amortização). O
+// pagamento continua o mesmo (id, valor, data e observação); muda só a classificação, com o registro em
+// payment_reclassification (o gatilho do banco só deixa a modalidade mudar com esse registro na mesma transação), a
+// renovação do período pago e a auditoria. O plano é o mesmo da prévia (planInterestReclassification, rules.ts).
+export async function reclassifyPaymentAsInterestAction(data: FormData): Promise<ActionResult> {
+  const paymentId = text(data, "paymentId", 80);
+  if (!paymentId) return { ok: false, error: "Pagamento inválido." };
+  if (text(data, "confirm", 3) !== "yes") return { ok: false, error: "Confirme a troca para juros para continuar." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [wallet] = await tx.select({ cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
+    const [payment] = await tx.select().from(payments).where(and(eq(payments.id, paymentId), eq(payments.tenantId, tenantId)));
+    if (!wallet || !payment) return { ok: false, error: "Pagamento não encontrado nesta carteira." };
+    const [operation] = await tx.select().from(loanOperations)
+      .where(and(eq(loanOperations.id, payment.operationId), eq(loanOperations.tenantId, tenantId), eq(loanOperations.cycleNumber, wallet.cycleNumber)))
+      .for("update");
+    if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
+    if (operation.status !== "OPEN") return { ok: false, error: "Esta operação não está em aberto; o tipo dos recebimentos dela não pode ser trocado." };
+    const terms = await ledgerTermsOf(tx, tenantId, operation);
+    const all = await operationPayments(tx, tenantId, operation.id);
+    const plan = planInterestReclassification(terms, all, payment.id, todayIso(), formatMoney);
+    if (!plan.ok) return plan;
+    const tenant = await tx.query.tenants.findFirst({ where: eq(tenants.id, tenantId), columns: { name: true } });
+    await tx.insert(paymentReclassifications).values({
+      id: id("rec"), tenantId, paymentId: payment.id, previousMode: payment.paymentMode, previousAllocationOrder: payment.allocationOrder, previousPeriodNumber: payment.interestPeriodNumber,
+      newMode: plan.mode, newAllocationOrder: plan.allocationOrder, newPeriodNumber: plan.period,
+      reason: `Recebimento de ${formatMoney(payment.amountCents)} em ${formatDate(payment.paidAt)} trocado para Juros / Renovação do ${plan.period}º período pela tela Editar pagamento.`,
+      authorizedBy: session.user.name,
+    });
+    await tx.update(payments).set({ paymentMode: plan.mode, allocationOrder: plan.allocationOrder, interestPeriodNumber: plan.period })
+      .where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)));
+    if (plan.renewal) {
+      await tx.insert(loanRenewals).values({
+        id: id("ren"), tenantId, operationId: operation.id, paymentId: payment.id, periodNumber: plan.renewal.periodNumber, previousDueDate: plan.renewal.previousDueDate, newDueDate: plan.renewal.newDueDate,
+        principalBaseCents: plan.renewal.principalBaseCents, interestCents: plan.renewal.interestCents, createdByUserId: session.user.id,
+      });
+      await tx.update(loanOperations).set({ dueDate: plan.renewal.newDueDate, firstDueDate: terms.firstDueDate, updatedAt: sql`now()` })
+        .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
+    }
+    await recordAdminAudit(tx, session, {
+      action: "PAYMENT_RECLASSIFIED_AS_INTEREST", entity: "loan_operation", entityId: operation.id, tenantId, tenantName: tenant?.name ?? null,
+      before: { paymentId: payment.id, mode: payment.paymentMode, interestPaidCents: plan.current.interestPaidCents, principalPaidCents: plan.current.principalPaidCents, principalRemainingCents: plan.current.principalRemainingCents, balanceCents: plan.current.balanceCents },
+      after: { paymentId: payment.id, mode: plan.mode, period: plan.period, interestPaidCents: plan.after.interestPaidCents, principalPaidCents: plan.after.principalPaidCents, principalRemainingCents: plan.after.principalRemainingCents, balanceCents: plan.after.balanceCents },
+    });
+    return { ok: true, message: `Recebimento de ${formatDate(payment.paidAt)} trocado para Juros / Renovação do ${plan.period}º período. Principal em aberto: ${formatMoney(plan.after.principalRemainingCents)}. Saldo em aberto: ${formatMoney(plan.after.balanceCents)}.` };
   });
   if (result.ok) revalidatePath("/");
   return result;

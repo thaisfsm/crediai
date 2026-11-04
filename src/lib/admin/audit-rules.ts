@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = {
   INVESTMENT_SCHEDULE_UPDATED: "Cronograma de pagamentos ao investidor alterado",
   OPERATION_UPDATED: "Operação corrigida (sem pagamentos)",
   OPERATION_SETTLED_EARLY: "Empréstimo liquidado antecipadamente",
+  PAYMENT_RECLASSIFIED_AS_INTEREST: "Recebimento trocado para Juros / Renovação",
   OPERATION_INSTALLMENT_DEFERRED: "Parcela renegociada para o final do contrato",
   OPERATION_RENEGOTIATED: "Operações renegociadas em um novo contrato",
   FINANCE_MOVEMENT_REGISTERED: "Movimentação financeira registrada",
