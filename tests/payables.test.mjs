@@ -177,7 +177,9 @@ test("CP11. auditoria: referência sem conta/chave/documento completos", () => {
 });
 
 test("CP12. código: isolamento, travas, transação única, sem exclusão e migração só aditiva", () => {
-  const actions = readFileSync("src/app/contas-a-pagar/actions.ts", "utf8");
+  // A gravação da baixa (saída de capital + baixa + auditoria) fica em src/lib/investors/payment-write.ts, usada pela
+  // baixa de Contas a Pagar e pela liquidação antecipada; as ações de Contas a Pagar continuam sem alterar nem apagar.
+  const actions = readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/lib/investors/payment-write.ts", "utf8");
   // Só withTenantContext (a carteira da sessão, também para o MASTER) e tenant_id explícito em toda leitura/trava.
   assert.ok(!actions.includes("withPlatformContext") && !actions.includes("withInvestorContext"));
   assert.ok(actions.includes('eq(investments.tenantId, tenantId)') && actions.includes('eq(investmentScheduleItems.tenantId, tenantId)'));
@@ -185,7 +187,7 @@ test("CP12. código: isolamento, travas, transação única, sem exclusão e mig
   assert.ok(actions.includes('.for("update")') && actions.includes("checkOutflow("));
   assert.equal((actions.match(/tx\.insert\(capitalMovements\)/g) ?? []).length, 2, "uma saída por baixa e uma entrada por contrato");
   assert.ok(!/\.delete\(|\.update\(/.test(actions), "Contas a Pagar não altera nem apaga nada");
-  assert.ok(actions.includes('await recordAdminAudit(tx, session, {\n        action: "INVESTMENT_PAYMENT_REGISTERED"'));
+  assert.match(actions, /await recordAdminAudit\(tx, session, \{\n\s+action: "INVESTMENT_PAYMENT_REGISTERED"/);
   const migration = readFileSync("drizzle/0022_contas_a_pagar.sql", "utf8");
   assert.ok(!/\bDROP TABLE\b|\bDELETE FROM\b|\bUPDATE\s+"?\w+"?\s+SET\b|\bTRUNCATE\s+"?\w/i.test(migration.replace(/BEFORE TRUNCATE/g, "")), "migração sem exclusão nem recálculo de dados");
   assert.deepEqual([...migration.matchAll(/DROP CONSTRAINT "([^"]+)"/g)].map((match) => match[1]).sort(), ["capital_movement_category_matches_kind", "capital_movement_source_valid"]);

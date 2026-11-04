@@ -17,6 +17,8 @@ import { AddressFieldset, EmptyPanel, Feedback, MaskedInput, PageHeading, format
 import { Icon } from "../ui-icon";
 import { MoneyInput } from "../money-input";
 import { declarePriorContributionAction, registerInvestmentEntryAction } from "../contas-a-pagar/actions";
+import { settleInvestmentEarlyAction } from "./settlement-actions";
+import { PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, earlySettlementPlan, type PaymentMethod } from "@/lib/investors/payables";
 import { ObligationsTable } from "../contas-a-pagar/payables-ui";
 import {
   createInvestmentAction, createInvestorAction, generateContractAction, markContractSentAction, renewInvestmentAction, replaceInvestmentDocumentAction, saveContractorAction,
@@ -684,6 +686,8 @@ export function InvestmentDetailView({ data }: { data: InvestmentDetail }) {
 
       <CashSection data={data} onDone={refresh} />
 
+      {data.cash.ownWallet && <EarlySettlementSection data={data} onDone={refresh} />}
+
       {data.cash.ownWallet && <RenewSection data={data} />}
 
       <section className="panel form-panel" aria-label="Documentos do investimento">
@@ -821,6 +825,75 @@ function CashSection({ data, onDone }: { data: InvestmentDetail; onDone: () => v
       {cash.obligations.length > 0 && (
         <ObligationsTable obligations={cash.obligations} today={cash.today} cycleStartedOn={cash.cycleStartedOn} availableCents={null} canPay={cash.ownWallet && cash.hasWallet} showInvestor={false} label="Obrigações deste contrato" onDone={onDone} />
       )}
+    </section>
+  );
+}
+
+// Liquidação antecipada do contrato: devolve agora o principal que falta e um rendimento final negociado, e o contrato
+// fica encerrado. Mostra o resumo antes de confirmar; o servidor confere tudo de novo com o contrato travado.
+function EarlySettlementSection({ data, onDone }: { data: InvestmentDetail; onDone: () => void }) {
+  const { investment, cash, renewal } = data;
+  const [open, setOpen] = useState(false);
+  const [settledOn, setSettledOn] = useState(cash.today);
+  const [yieldText, setYieldText] = useState<string | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
+  const requestId = useRef<string | null>(null);
+  const settle = useFormAction(settleInvestmentEarlyAction, () => { requestId.current = null; setOpen(false); setConfirmed(false); onDone(); });
+  const plan = earlySettlementPlan({ amountCents: investment.amountCents, items: data.schedule.items, payments: cash.payments, settledOn });
+  const yieldValue = yieldText ?? centsToInput(plan.overdueYieldCents);
+  const yieldCents = yieldValue.trim() ? parseMoneyToCents(yieldValue) : 0;
+  const yieldInvalid = yieldCents === null || yieldCents < 0;
+  const totalCents = plan.principalRemainingCents + (yieldCents ?? 0);
+  const blocked = cash.obligations.find((obligation) => obligation.paymentBlock)?.paymentBlock ?? null;
+  const beforeCycle = Boolean(cash.cycleStartedOn && settledOn < cash.cycleStartedOn);
+  if (renewal.child || (investment.status !== "ACTIVE" && !data.schedule.items.some((item) => item.description === "Liquidação antecipada"))) return null;
+  const settled = investment.status === "CLOSED";
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    const input = event.currentTarget.elements.namedItem("requestId") as HTMLInputElement;
+    requestId.current ??= newRequestId();
+    input.value = requestId.current;
+    settle.onSubmit(event);
+  };
+  return (
+    <section className="panel form-panel" aria-label="Liquidação antecipada do contrato">
+      <div className="panel-header"><div><h2>Liquidação antecipada</h2><p>{settled
+        ? "Este contrato foi liquidado antecipadamente: o principal e o rendimento final saíram do capital na data da liquidação e as parcelas que faltavam foram encerradas. O detalhe está no Histórico de alterações."
+        : "Devolve agora ao investidor o principal que falta e um rendimento final combinado com ele. As parcelas que faltam são encerradas, o valor sai do capital como baixa de Contas a Pagar e o contrato fica encerrado. Baixas já feitas não mudam."}</p></div>
+        {!settled && !open && <button type="button" className="primary-button" disabled={Boolean(blocked) || !cash.hasWallet} onClick={() => setOpen(true)}>Liquidar contrato antecipadamente</button>}
+      </div>
+      {!settled && blocked && <p className="capital-note">{blocked}</p>}
+      {!settled && open && (
+        <form className="form-grid" onSubmit={submit} aria-label="Confirmar liquidação antecipada">
+          <input type="hidden" name="investmentId" value={investment.id} />
+          <input type="hidden" name="principalCents" value={plan.principalRemainingCents} />
+          <input type="hidden" name="requestId" defaultValue="" />
+          <DateField label="Data da liquidação" name="settledOn" defaultValue={cash.today} min={investment.startDate} max={cash.today} required onChange={setSettledOn} />
+          <label className="field"><span>Rendimento final negociado (R$)</span><MoneyInput name="yieldAmount" inputMode="decimal" value={yieldValue} onChange={(event) => setYieldText(event.target.value)} aria-invalid={yieldInvalid} /></label>
+          <label className="field"><span>Forma de pagamento</span><select name="method" defaultValue={investment.paymentMethod ?? "OTHER"} required>
+            {(Object.keys(PAYMENT_METHODS) as PaymentMethod[]).map((method) => <option key={method} value={method}>{PAYMENT_METHODS[method]}</option>)}
+          </select></label>
+          <label className="field"><span>Referência ou comprovante</span><input name="reference" maxLength={REFERENCE_MAX} placeholder="Ex.: ID da transação Pix (opcional)" /></label>
+          <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={PAYMENT_NOTES_MAX} placeholder="Opcional" /></label>
+          <dl className="payment-summary field-wide">
+            <div><dt>Principal já devolvido</dt><dd>{formatMoney(plan.principalPaidCents)}</dd></div>
+            <div><dt>Principal a devolver agora</dt><dd>{formatMoney(plan.principalRemainingCents)}</dd></div>
+            <div><dt>Rendimento final</dt><dd>{yieldInvalid ? "—" : formatMoney(yieldCents ?? 0)}</dd></div>
+            <div><dt>Total que sai do capital</dt><dd><strong>{yieldInvalid ? "—" : formatMoney(totalCents)}</strong></dd></div>
+            <div><dt>Em aberto no cronograma hoje</dt><dd>{formatMoney(plan.openScheduleCents)} ({plan.closedCount} {plan.closedCount === 1 ? "parcela" : "parcelas"})</dd></div>
+            <div><dt>Rendimentos vencidos não pagos até a data</dt><dd>{formatMoney(plan.overdueYieldCents)}</dd></div>
+            <div><dt>Rendimentos futuros que deixam de existir</dt><dd>{formatMoney(plan.futureYieldCents)}</dd></div>
+          </dl>
+          <p className="capital-note field-wide">O rendimento final vem preenchido com os rendimentos vencidos e não pagos até a data; troque pelo valor combinado (pode ser zero). As {plan.closedCount} {plan.closedCount === 1 ? "parcela em aberto é encerrada" : "parcelas em aberto são encerradas"} e entra uma linha &ldquo;Liquidação antecipada&rdquo; já paga.</p>
+          {beforeCycle && <p className="form-feedback form-feedback-error field-wide" role="alert">A data é anterior ao início do ciclo atual da carteira ({formatDate(cash.cycleStartedOn as string)}).</p>}
+          {yieldInvalid && <p className="form-feedback form-feedback-error field-wide" role="alert">O rendimento final precisa ser zero ou um valor positivo.</p>}
+          <label className="check-field field-wide"><input type="checkbox" name="confirm" value="1" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} required /><span>Confirmo a liquidação antecipada: {yieldInvalid ? "o valor" : formatMoney(totalCents)} sai do capital em {formatDate(settledOn)}, as parcelas em aberto são encerradas e o contrato fica encerrado. Isso não pode ser desfeito por aqui.</span></label>
+          <div className="form-actions">
+            <button type="button" className="outline-button" onClick={() => { setOpen(false); setConfirmed(false); }}>Cancelar</button>
+            <button className="primary-button" disabled={settle.pending || !confirmed || yieldInvalid || beforeCycle || totalCents <= 0}><Icon name="check" size={16} /> {settle.pending ? "Liquidando…" : "Confirmar liquidação"}</button>
+          </div>
+        </form>
+      )}
+      <Feedback feedback={settle.feedback} />
     </section>
   );
 }

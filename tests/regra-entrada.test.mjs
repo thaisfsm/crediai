@@ -91,7 +91,7 @@ test("RE6. código e migração 0023: aditiva, sem backfill, travas no banco e n
     "investment_prior_contribution_no_truncate", "capital_movement_prior_contribution_not_reversed"]) assert.ok(migration.includes(`CREATE TRIGGER "${name}"`), name);
   assert.match(migration, /NEW\.capital_entry_rule := 'REQUIRED'/, "contrato novo sempre nasce com a regra, mesmo se mandarem NULL");
   assert.match(migration, /registre antes a entrada deste investimento no capital/);
-  const actions = readFileSync("src/app/contas-a-pagar/actions.ts", "utf8");
+  const actions = readFileSync("src/app/contas-a-pagar/actions.ts", "utf8") + readFileSync("src/lib/investors/payment-write.ts", "utf8");
   assert.ok(actions.includes("entryEvidence(") && actions.includes("export async function declarePriorContributionAction"));
   assert.ok(actions.includes('action: "INVESTMENT_PRIOR_CONTRIBUTION_DECLARED"'));
   assert.equal((actions.match(/tx\.insert\(capitalMovements\)/g) ?? []).length, 2, "indicar aporte anterior não lança nada no capital");
