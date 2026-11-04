@@ -14,7 +14,7 @@ import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
-import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, interestOnlyRenewal, monthlyEquivalentRate, operationLedger, paymentKindLabels, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
+import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
@@ -1400,19 +1400,26 @@ function DeferInstallmentForm({ operation, number, today, onClose, onDone }: { o
 // readOnly: operação de ciclo encerrado aberta pelo relatório; só consulta (o servidor também recusa alterações).
 function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }: { operation: OperationView; today: string; onClose: () => void; onChanged: () => void; readOnly?: boolean }) {
   const [amount, setAmount] = useState("");
-  const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { setAmount(""); onChanged(); });
+  // Modalidade escolhida (enviada ao servidor e validada lá). Digitar um valor volta para "Pagamento manual", exceto na
+  // amortização, em que o valor é livre.
+  const [mode, setMode] = useState<PaymentMode>("MANUAL");
+  const [paidAt, setPaidAt] = useState(today);
+  const [newDueDate, setNewDueDate] = useState<string | null>(null);
+  const reset = () => { setAmount(""); setMode("MANUAL"); setNewDueDate(null); };
+  const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { reset(); onChanged(); });
   const isOpen = operation.status === "OPEN" && !readOnly;
   const amountCents = parseMoneyToCents(amount);
-  const check = amountCents !== null ? checkPayment({ amountCents, balanceCents: operation.balanceCents, formatMoney }) : null;
-  // Prévia deste pagamento (hoje) pelo mesmo extrato usado no servidor: juros primeiro, depois principal.
-  const after = check?.ok ? ledgerOf(operation, [...operation.payments, { id: "preview", amountCents: amountCents ?? 0, paidAt: today, createdAt: "9999" }], today) : null;
-  const thisPayment = after?.items.find((item) => item.id === "preview");
   const recurringOp = !amortized(operation);
-  const canRenew = recurringOp && operation.interestRemainingCents > 0 && operation.principalRemainingCents > 0;
   const next = operation.nextInstallment;
-  // Pagamento somente de juros: a mesma regra central que o servidor aplica (interestOnlyRenewal).
-  const renewal = check?.ok === true && amountCents !== null ? interestOnlyRenewal(operation.ledgerTerms, operation, amountCents) : null;
-  const renews = renewal !== null;
+  // Prévia: a MESMA função que o servidor usa para gravar (planPayment), com a modalidade, o valor e a data escolhidos.
+  const plan = amountCents !== null && amountCents > 0 ? planPayment(operation.ledgerTerms, operation.payments, { mode, amountCents, paidAt, newDueDate }, today, "preview", formatMoney) : null;
+  // "Só os juros e renovar" só fica habilitado quando a operação pode fazer isso agora (mesmas condições do servidor).
+  const renewCheck = recurringOp ? planPayment(operation.ledgerTerms, operation.payments, { mode: "INTEREST_ONLY_RENEWAL", amountCents: operation.interestRemainingCents, paidAt: today }, today, "preview", formatMoney) : null;
+  const canRenew = renewCheck?.ok === true;
+  const canAmortize = recurringOp && operation.principalRemainingCents > 0;
+  const renewal = plan?.ok ? plan.renewal : null;
+  const choose = (next: PaymentMode, cents: number | null) => { setMode(next); setNewDueDate(null); if (cents !== null) setAmount(centsToInput(cents)); };
+  const fixedAmount = mode === "INTEREST_ONLY_RENEWAL" || mode === "FULL_SETTLEMENT";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [settling, setSettling] = useState(false);
   const [deferring, setDeferring] = useState<number | null>(null);
@@ -1428,7 +1435,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
     <div className="payment-overlay" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="panel form-panel payment-panel" role="dialog" aria-modal="true" aria-label={`Pagamentos de ${operation.clientName}`}>
         <div className="panel-header">
-          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installmentTotal} vence` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
+          <div><h2>{operation.clientName} — #{operation.code}</h2><p>{modalityLabel(operation)} · {next ? `Parcela ${next.number}/${operation.installmentTotal} vence` : recurringOp && operation.pendingPeriods.length > 1 ? `Juros pendentes de ${operation.pendingPeriods.length} períodos, desde` : recurringOp && operation.periodNumber > 1 ? `${operation.periodNumber}º período vence` : "Vencimento"} {formatDate(operation.nextDueDate)} · <StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></p></div>
           <button type="button" className="more-button" aria-label="Fechar" onClick={onClose}><Icon name="close" size={18} /></button>
         </div>
         <OperationProfitHero operation={operation} />
@@ -1469,42 +1476,47 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
         {isOpen && !settling && (
           <form className="form-grid" onSubmit={onSubmit}>
             <input type="hidden" name="operationId" value={operation.id} />
-            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required />
-            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
-            <div className="payment-shortcuts field-wide">
-              {canRenew && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.interestRemainingCents))}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
-              {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(next.remainingCents))}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
-              <button type="button" className="outline-button" onClick={() => setAmount(centsToInput(operation.balanceCents))}>Saldo total ({formatMoney(operation.balanceCents)})</button>
+            <input type="hidden" name="paymentMode" value={mode} />
+            {mode === "INTEREST_ONLY_RENEWAL" && <input type="hidden" name="expectedPeriod" value={operation.periodNumber} />}
+            <div className="payment-shortcuts payment-modes" role="group" aria-label="Modalidade do pagamento">
+              {recurringOp && <button type="button" className={mode === "INTEREST_ONLY_RENEWAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "INTEREST_ONLY_RENEWAL"} disabled={!canRenew} title={renewCheck && !renewCheck.ok ? renewCheck.error : undefined} onClick={() => choose("INTEREST_ONLY_RENEWAL", operation.interestRemainingCents)}>Só os juros e renovar ({formatMoney(operation.interestRemainingCents)})</button>}
+              {next && next.remainingCents < operation.balanceCents && <button type="button" className="outline-button" onClick={() => choose("MANUAL", next.remainingCents)}>Parcela {next.number} ({formatMoney(next.remainingCents)})</button>}
+              <button type="button" className={mode === "MANUAL" ? "primary-button" : "outline-button"} aria-pressed={mode === "MANUAL"} onClick={() => choose("MANUAL", null)}>Pagamento manual</button>
+              {canAmortize && <button type="button" className={mode === "PRINCIPAL_AMORTIZATION" ? "primary-button" : "outline-button"} aria-pressed={mode === "PRINCIPAL_AMORTIZATION"} onClick={() => choose("PRINCIPAL_AMORTIZATION", null)}>Amortizar principal</button>}
+              <button type="button" className={mode === "FULL_SETTLEMENT" ? "primary-button" : "outline-button"} aria-pressed={mode === "FULL_SETTLEMENT"} onClick={() => choose("FULL_SETTLEMENT", operation.balanceCents)}>Saldo total ({formatMoney(operation.balanceCents)})</button>
             </div>
+            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required onChange={setPaidAt} />
+            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
-            {check && !check.ok && <p className="form-feedback form-feedback-warning">{check.error}</p>}
-            {renews && (
-              <div className="renewal-box field-wide" aria-live="polite">
-                <p><strong>Pagamento somente de juros / Renovação de período.</strong> O principal continua {formatMoney(renewal.principalBaseCents)} e não há juros sobre juros: o próximo período tem juros de {formatMoney(renewal.nextInterestCents)} e o valor para quitação continua {formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}.</p>
-                <DateField key={renewal.previousDueDate} label="Novo vencimento" name="newDueDate" defaultValue={renewal.defaultNewDueDate} min={addDays(renewal.previousDueDate, 1)} required />
-              </div>
-            )}
+            {plan && !plan.ok && <p className="form-feedback form-feedback-warning">{plan.error}</p>}
             {renewal && (
-              <div className="operation-preview" aria-live="polite">
-                <div><span>Para juros</span><strong>{formatMoney(amountCents ?? 0)}</strong></div>
-                <div><span>Para principal</span><strong>{formatMoney(0)}</strong></div>
-                <div><span>Saldo principal</span><strong>{formatMoney(operation.principalRemainingCents)}</strong></div>
-                <div><span>Valor para quitação após</span><strong>{formatMoney(renewal.principalBaseCents + renewal.nextInterestCents)}</strong></div>
-                <div><span>Situação após</span><strong>Renovação / Ativa</strong></div>
+              <div className="renewal-box field-wide" aria-live="polite">
+                <p><strong>Juros / Renovação.</strong> O valor inteiro é juros: o principal continua {formatMoney(renewal.principalBaseCents)} e não há juros sobre juros. O próximo período tem juros de {formatMoney(renewal.interestCents)} e o valor para quitação passa a ser {formatMoney(renewal.principalBaseCents + renewal.interestCents)}.</p>
+                <DateField key={renewal.previousDueDate} label="Novo vencimento" name="newDueDate" defaultValue={renewal.newDueDate} min={addDays(renewal.previousDueDate, 1)} required onChange={(iso) => setNewDueDate(iso || null)} />
               </div>
             )}
-            {!renews && thisPayment && after && (
-              <div className="operation-preview" aria-live="polite">
-                <div><span>Para juros</span><strong>{formatMoney(thisPayment.interestCents)}</strong></div>
-                <div><span>Para principal</span><strong>{formatMoney(thisPayment.principalCents)}</strong></div>
-                <div><span>Saldo principal</span><strong>{formatMoney(after.principalRemainingCents)}</strong></div>
-                <div><span>Saldo após</span><strong>{formatMoney(after.balanceCents)}</strong></div>
-                <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : `${stateLabels[after.state].label} · vence ${formatDate(after.nextDueDate)}`}</strong></div>
+            {plan?.ok && plan.pendingPeriods.length > 1 && (mode === "INTEREST_ONLY_RENEWAL" || plan.interestCents > 0) && (
+              <div className="capital-note field-full" aria-live="polite">
+                <strong>Juros pendentes por período:</strong>{" "}
+                {plan.pendingPeriods.map((item) => `${item.number}º (venc. ${formatDate(item.dueDate)}) ${formatMoney(item.remainingCents)}`).join(" · ")}
+              </div>
+            )}
+            {plan?.ok && (
+              <div className="operation-preview payment-plan-preview" aria-live="polite">
+                <div><span>Para juros</span><strong>{formatMoney(plan.interestCents)}</strong></div>
+                <div><span>Para principal</span><strong>{formatMoney(plan.principalCents)}</strong></div>
+                <div><span>Principal antes</span><strong>{formatMoney(plan.principalBeforeCents)}</strong></div>
+                <div><span>Principal depois</span><strong>{formatMoney(plan.principalAfterCents)}</strong></div>
+                <div><span>Juros pendentes depois</span><strong>{formatMoney(plan.after.interestRemainingCents)}</strong></div>
+                <div><span>Saldo após</span><strong>{formatMoney(plan.after.balanceCents)}</strong></div>
+                <div><span>Próximo vencimento</span><strong>{plan.settles ? "—" : formatDate(plan.nextDueDate)}</strong></div>
+                {recurringOp && !plan.settles && <div><span>Juros do próximo período</span><strong>{formatMoney(plan.nextInterestCents)}</strong></div>}
+                <div><span>Situação após</span><strong>{plan.settles ? "Quitada" : renewal ? "Renovação / Ativa" : `${stateLabels[plan.after.state].label} · vence ${formatDate(plan.after.nextDueDate)}`}</strong></div>
               </div>
             )}
             <div className="form-actions">
               <button type="button" className="outline-button" onClick={() => setSettling(true)}>Liquidação antecipada</button>
-              <button className="primary-button" disabled={pending || (check !== null && !check.ok)}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
+              <button className="primary-button" disabled={pending || plan === null || !plan.ok}><Icon name="check" size={16} /> {pending ? "Registrando…" : "Registrar pagamento"}</button>
             </div>
           </form>
         )}
@@ -1521,7 +1533,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           {operation.payments.length === 0 ? <p className="muted-cell">Nenhum pagamento registrado.</p> : (
             <ul>{operation.payments.map((payment) => (
               <li key={payment.id}>
-                <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentKindLabels[payment.kind]}</span>
+                <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentLabel(payment)}</span>
                 {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !operation.settlementPaymentId && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}

@@ -600,6 +600,12 @@ export const payments = pgTable("payment", {
   amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
   paidAt: date("paid_at", { mode: "string" }).notNull(),
   notes: text("notes"),
+  // Modalidade escolhida na tela e validada no servidor (migration 0054). null = pagamento anterior à 0054, que segue a
+  // regra de sempre (ordem do contrato; linha em loan_renewal = juros). Gravada uma vez e nunca alterada (gatilho do banco).
+  paymentMode: text("payment_mode"),
+  // Ordem de apropriação usada no registro (a do contrato naquele momento). Congela a divisão do pagamento manual:
+  // mudar a regra do contrato depois não reclassifica este pagamento. null = pagamento anterior à 0054.
+  allocationOrder: text("allocation_order"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("payment_tenant_id_idx").on(table.tenantId),
@@ -607,6 +613,8 @@ export const payments = pgTable("payment", {
   unique("payment_tenant_id_id_unique").on(table.tenantId, table.id),
   foreignKey({ name: "payment_operation_same_tenant_fk", columns: [table.tenantId, table.operationId], foreignColumns: [loanOperations.tenantId, loanOperations.id] }).onDelete("restrict"),
   check("payment_amount_positive", sql`${table.amountCents} > 0`),
+  check("payment_mode_valid", sql`${table.paymentMode} is null or ${table.paymentMode} in ('INTEREST_ONLY_RENEWAL', 'MANUAL', 'PRINCIPAL_AMORTIZATION', 'FULL_SETTLEMENT', 'EARLY_SETTLEMENT')`),
+  check("payment_allocation_order_valid", sql`${table.allocationOrder} is null or ${table.allocationOrder} in ('INTEREST_FIRST', 'PRINCIPAL_FIRST')`),
   ...tenantPolicies("payment", table.tenantId),
 ]).enableRLS();
 

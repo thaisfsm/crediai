@@ -39,15 +39,22 @@ const dataHash = () => one(`select md5(string_agg(x, '|' order by x)) from (sele
   union all select 'r'||row(r.*)::text from loan_renewal r union all select 'm'||row(m.*)::text from capital_movement m union all select 'w'||row(w.*)::text from wallet w
   union all select 'c'||row(c.*)::text from client c union all select 'a'||row(a.*)::text from admin_audit_log a) t`);
 
+const now = new Date();
+const ymd = (y, m, d) => new Date(Date.UTC(y, m, d)).toISOString().slice(0, 10);
+const br = (iso) => iso.split("-").reverse().join("/");
+const [Y, M] = [now.getUTCFullYear(), now.getUTCMonth()];
+const LOAN = ymd(Y, M, 1), DUE = ymd(Y, M + 1, 1);
+const FIRST = [1, 2, 3].map((k) => br(ymd(Y, M + k, 15)));
 let robério, before;
 test("preparação: duas operações em aberto do mesmo cliente", async () => {
   await admin(`update wallet set initial_capital_cents = 1000000 where tenant_id = 'ten_roberio'`);
   await admin(`insert into client(id, tenant_id, name) values ('c_e2e_reneg', 'ten_roberio', 'Cliente Renegociação')`);
   robério = await login("roberio@teste.local");
   const create = (fields) => action(robério, "createOperationAction", { clientId: "c_e2e_reneg", modality: "SINGLE", frequency: "MONTHLY", ...fields });
-  // Hoje (fictício) é depois de 13/10/2026: as duas estão em aberto, R$ 1.500 de principal e R$ 400 de juros.
-  assert.equal((await create({ principal: "1.000,00", rate: "30", loanDate: "2026-10-01", dueDate: "2026-11-01" }))?.ok, true);
-  assert.equal((await create({ principal: "500,00", rate: "20", loanDate: "2026-10-05", dueDate: "2026-11-05" }))?.ok, true);
+  // Datas relativas a hoje: as duas estão no primeiro período, ainda sem vencer, com R$ 1.500 de principal e R$ 400 de juros.
+  // (Com datas fixas, a operação vencida passou a gerar os juros do período seguinte, como manda a regra de juros contínuos.)
+  assert.equal((await create({ principal: "1.000,00", rate: "30", loanDate: LOAN, dueDate: DUE }))?.ok, true);
+  assert.equal((await create({ principal: "500,00", rate: "20", loanDate: LOAN, dueDate: DUE }))?.ok, true);
   before = await dataHash();
 });
 
@@ -69,7 +76,7 @@ test("RN1. tela: posição, desconto de R$ 100 com motivo, 3 parcelas mensais a 
     await terms.getByLabel("Valor do desconto (R$)").fill("100,00");
     await terms.getByLabel("Taxa de juros por mês (%)").fill("10");
     await terms.getByLabel("Quantidade de parcelas (meses)").fill("3");
-    await terms.getByLabel("Primeiro vencimento").fill("15/11/2026");
+    await terms.getByLabel("Primeiro vencimento").fill(FIRST[0]);
     await terms.getByLabel("Primeiro vencimento").press("Tab");
     // Sem motivo, o desconto não é simulado.
     await terms.getByText("Informe o motivo para ver a simulação.").waitFor();
@@ -86,12 +93,12 @@ test("RN1. tela: posição, desconto de R$ 100 com motivo, 3 parcelas mensais a 
     assert.match(await line("Principal em aberto"), /R\$ 1\.500,00 R\$ 1\.500,00/);
     assert.match(await line("Juros a receber"), /R\$ 400,00 R\$ 750,00/);
     assert.match(await line("Total a receber"), /R\$ 1\.900,00 R\$ 2\.250,00/);
-    assert.match(await line("Último vencimento"), /05\/11\/2026 15\/01\/2027/);
+    assert.match(await line("Último vencimento"), new RegExp(`${br(DUE)} ${FIRST[2]}`));
     assert.match(await line("Lucro realizado"), /R\$ 0,00 R\$ 0,00/);
     assert.match(await line("Saída de caixa"), /R\$ 0,00/);
     await result.getByText("Motivo: acordo para quitar em 3 meses").waitFor();
     const payments = result.getByLabel("Pagamentos simulados");
-    assert.deepEqual(await payments.locator("li strong").allInnerTexts(), ["15/11/2026", "15/12/2026", "15/01/2027"]);
+    assert.deepEqual(await payments.locator("li strong").allInnerTexts(), FIRST);
     assert.equal((await payments.locator("li").allInnerTexts()).filter((text) => /R\$\s750,00/.test(text)).length, 3);
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/renegociacao-simulacao-${label}.png`, fullPage: true });
     // Desconto maior que os juros em aberto: aviso de que parte do principal não voltaria.

@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clients, installmentDeferrals, loanOperations, loanRenewals, payments, wallets } from "@/lib/db/schema";
 import { todayIso } from "./format";
+import { isAllocationOrder, isPaymentMode } from "./rules";
 import { buildPortfolio, type CapitalMovementRecord, type OperationRecord, type PaymentRecord, type PaymentRevisionRecord, type DeferralRecord, type RenewalRecord } from "./portfolio";
 
 // Conversão das linhas do banco para os registros de buildPortfolio. Usada pelo dashboard do tenant e pela
@@ -52,7 +53,7 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
 export function toPaymentRecord(payment: PaymentRow, clientName: string, revisions: PaymentRevisionRecord[] = []): PaymentRecord {
   return {
     id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes, createdAt: payment.createdAt.toISOString(),
-    revisions,
+    revisions, mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null,
   };
 }
 
