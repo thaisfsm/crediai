@@ -172,18 +172,19 @@ test("V5. vincular documento ao investimento: enviar, visualizar, baixar e subst
   assert.equal(await currentContracts(), 1);
 });
 
-test("V6. editar cliente adicionando WhatsApp, e-mail, Instagram e Facebook (nada financeiro muda)", async () => {
+test("V6. editar cliente adicionando WhatsApp, e-mail, Instagram, Facebook e TikTok (nada financeiro muda)", async () => {
   const response = await fetch(`${BASE}/`, { method: "POST", headers: { cookie: robério, "next-action": actionId("updateClientAction"), accept: "text/x-component", origin: BASE }, body: (() => {
     const form = new FormData();
-    for (const [key, value] of Object.entries({ clientId: "c_rob", name: "Cliente do Robério", whatsapp: "(11) 91234-5678", email: "cliente@teste.local", instagram: "@cliente.rob", facebook: "facebook.com/cliente.rob" })) form.append(`_1_${key}`, value);
+    for (const [key, value] of Object.entries({ clientId: "c_rob", name: "Cliente do Robério", whatsapp: "(11) 91234-5678", email: "cliente@teste.local", instagram: "@cliente.rob", facebook: "facebook.com/cliente.rob", tiktok: "tiktok.com/@cliente.rob" })) form.append(`_1_${key}`, value);
     form.append("0", '["$K1"]');
     return form;
   })() });
   assert.match(await response.text(), /"ok":true/);
-  const [row] = await admin(`select whatsapp, email, instagram, facebook from client where id = 'c_rob'`);
-  assert.deepEqual(row, { whatsapp: "11912345678", email: "cliente@teste.local", instagram: "@cliente.rob", facebook: "facebook.com/cliente.rob" });
+  const [row] = await admin(`select whatsapp, email, instagram, facebook, tiktok from client where id = 'c_rob'`);
+  assert.deepEqual(row, { whatsapp: "11912345678", email: "cliente@teste.local", instagram: "@cliente.rob", facebook: "facebook.com/cliente.rob", tiktok: "tiktok.com/@cliente.rob" });
   const clients = await page(robério, "/?tela=clientes");
   assert.ok(clients.html.includes("WhatsApp (11) 91234-5678"));
+  assert.ok(clients.html.includes("tiktok.com/@cliente.rob"));
 });
 
 test("V7. TENANT_USER não acessa investidores, investimentos nem documentos de outro tenant", async () => {

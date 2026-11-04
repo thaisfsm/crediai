@@ -21,7 +21,7 @@ import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
 import { impliedRateBps, offerSummary } from "@/lib/credit/engine";
 import { capacityIndicator, reviewOf } from "@/lib/credit/reviews";
 import { DateField } from "./date-field";
-import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
+import { CLIENT_SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type ClientSocialNetwork } from "@/lib/contacts";
 
 export function useFormAction(action: (data: FormData) => Promise<ActionResult>, onDone?: (message: string) => void, resetOnSuccess = true) {
   // O estado "enviando" é próprio (não de uma transição do React): termina assim que a ação responde, mesmo que a tela
@@ -421,7 +421,7 @@ export function usePersonPrefill(target: "client" | "investor") {
       if (!other) return setNotice(null);
       const addressName = (part: string) => (target === "client" ? `residential${part}` : `address${part}`);
       for (const [key, value] of Object.entries(other.values)) {
-        if (["name", "phone", "whatsapp", "email", "instagram", "facebook"].includes(key)) setEmptyField(form, key, value);
+        if (["name", "phone", "whatsapp", "email", "instagram", "facebook", "tiktok"].includes(key)) setEmptyField(form, key, value);
         else if (key !== "Cep") setEmptyField(form, addressName(key), value);
       }
       if (other.values.Cep) setEmptyField(form, addressName("Cep"), other.values.Cep);
@@ -538,6 +538,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
         <label className="field"><span>E-mail</span><input name="email" type="email" maxLength={160} defaultValue={editing?.email ?? ""} placeholder="nome@exemplo.com" /></label>
         <label className="field"><span>Instagram</span><input name="instagram" maxLength={200} defaultValue={editing?.instagram ?? ""} placeholder="@usuario ou instagram.com/usuario" /></label>
         <label className="field"><span>Facebook</span><input name="facebook" maxLength={200} defaultValue={editing?.facebook ?? ""} placeholder="@usuario ou facebook.com/usuario" /></label>
+        <label className="field"><span>TikTok</span><input name="tiktok" maxLength={200} defaultValue={editing?.tiktok ?? ""} placeholder="@usuario ou tiktok.com/@usuario" /></label>
         <AddressFields kind="residential" client={editing} />
         <fieldset className="form-section field-wide">
           <legend>Empresa</legend>
@@ -768,9 +769,9 @@ function ClientProfilePanel({ client, readOnly = false }: { client: ClientRow; r
         <div><dt>Telefone</dt><dd>{formatPhone(client.phone) ?? "—"}</dd></div>
         <div><dt>WhatsApp</dt><dd>{client.whatsapp ? (whatsappHref(client.whatsapp) ? <a className="text-link inline-link" href={whatsappHref(client.whatsapp) ?? undefined} target="_blank" rel="noreferrer noopener">{formatPhone(client.whatsapp)}</a> : formatPhone(client.whatsapp)) : "—"}</dd></div>
         <div><dt>E-mail</dt><dd>{client.email ? <a className="text-link inline-link" href={`mailto:${client.email}`}>{client.email}</a> : "—"}</dd></div>
-        {(Object.keys(SOCIAL_NETWORKS) as SocialNetwork[]).map((network) => {
+        {(Object.keys(CLIENT_SOCIAL_NETWORKS) as ClientSocialNetwork[]).map((network) => {
           const href = socialHref(network, client[network]);
-          return <div key={network}><dt>{SOCIAL_NETWORKS[network]}</dt><dd>{!client[network] ? "—" : href ? <a className="text-link inline-link" href={href} target="_blank" rel="noreferrer noopener">{socialLabel(client[network])}</a> : client[network]}</dd></div>;
+          return <div key={network}><dt>{CLIENT_SOCIAL_NETWORKS[network]}</dt><dd>{!client[network] ? "—" : href ? <a className="text-link inline-link" href={href} target="_blank" rel="noreferrer noopener">{socialLabel(client[network])}</a> : client[network]}</dd></div>;
         })}
         {(Object.keys(addressKinds) as AddressKind[]).map((kind) => <div key={kind}><dt>{addressKinds[kind]}</dt><dd>{formatAddress(client, kind) ?? "Não informado"}</dd></div>)}
         <div><dt>Empresa</dt><dd>{[client.businessCompanyName, client.businessCnpj && `CNPJ ${formatCnpj(client.businessCnpj)}`, client.businessAdmissionDate && `admitido em ${formatDate(client.businessAdmissionDate)}`].filter(Boolean).join(" · ") || "Não informada"}</dd></div>

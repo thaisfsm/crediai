@@ -1,7 +1,7 @@
 import { and, eq, ne } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { clients } from "@/lib/db/schema";
-import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
+import { CLIENT_SOCIAL_NETWORKS, normalizeEmail, normalizeSocial, type ClientSocialNetwork } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
 import { formatCpf, normalizeCnpj, normalizeCpf, normalizePhone, onlyDigits, todayIso } from "@/lib/finance/format";
@@ -26,7 +26,7 @@ export function clientFields(data: FormData, previous?: { document: string | nul
   // Cadastro completo (endereços, referências, avalista): texto livre, CEP e UF conferidos; telefones e CPF do avalista
   // com a mesma regra do cliente.
   const profile = {} as ClientProfile;
-  for (const key of clientProfileKeys) profile[key] = optional(text(data, key, key === "guarantorNotes" ? 500 : key === "instagram" || key === "facebook" ? 250 : 160));
+  for (const key of clientProfileKeys) profile[key] = optional(text(data, key, key === "guarantorNotes" ? 500 : key === "instagram" || key === "facebook" || key === "tiktok" ? 250 : 160));
   for (const key of ["residentialCep", "businessCep"] as const) {
     const cep = onlyDigits(profile[key] ?? "");
     if (profile[key] && cep.length !== 8) return { ok: false as const, error: "O CEP precisa ter 8 dígitos, por exemplo 01310-100." };
@@ -49,9 +49,9 @@ export function clientFields(data: FormData, previous?: { document: string | nul
   const email = normalizeEmail(profile.email ?? "");
   if (!email.ok) return email;
   profile.email = email.value;
-  for (const key of ["instagram", "facebook"] as const) {
+  for (const key of Object.keys(CLIENT_SOCIAL_NETWORKS) as ClientSocialNetwork[]) {
     const social = normalizeSocial(profile[key] ?? "");
-    if (!social.ok) return { ok: false as const, error: `${key === "instagram" ? "Instagram" : "Facebook"}: ${social.error}` };
+    if (!social.ok) return { ok: false as const, error: `${CLIENT_SOCIAL_NETWORKS[key]}: ${social.error}` };
     profile[key] = social.value;
   }
   const guarantorDocument = keepLegacy(normalizeCpf(profile.guarantorDocument ?? ""), profile.guarantorDocument ?? "", previous?.guarantorDocument);

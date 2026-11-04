@@ -444,11 +444,12 @@ export const clients = pgTable("client", {
   document: text("document"),
   phone: text("phone"),
   notes: text("notes"),
-  // Contatos e redes sociais (opcionais). Instagram/Facebook guardam @usuário ou o endereço do perfil, como digitado.
+  // Contatos e redes sociais (opcionais). Instagram/Facebook/TikTok guardam @usuário ou o endereço do perfil, como digitado.
   whatsapp: text("whatsapp"),
   email: text("email"),
   instagram: text("instagram"),
   facebook: text("facebook"),
+  tiktok: text("tiktok"),
   // Endereço residencial
   residentialCep: text("residential_cep"),
   residentialStreet: text("residential_street"),

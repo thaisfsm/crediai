@@ -4,11 +4,16 @@
 
 export const SOCIAL_NETWORKS = { instagram: "Instagram", facebook: "Facebook" } as const;
 export type SocialNetwork = keyof typeof SOCIAL_NETWORKS;
+// Cliente tem também TikTok (o investidor fica só com Instagram e Facebook).
+export const CLIENT_SOCIAL_NETWORKS = { ...SOCIAL_NETWORKS, tiktok: "TikTok" } as const;
+export type ClientSocialNetwork = keyof typeof CLIENT_SOCIAL_NETWORKS;
 
-const SOCIAL_HOSTS: Record<SocialNetwork, RegExp> = {
+const SOCIAL_HOSTS: Record<ClientSocialNetwork, RegExp> = {
   instagram: /^(www\.)?instagram\.com$/i,
   facebook: /^((www|m|web)\.)?(facebook\.com|fb\.com)$/i,
+  tiktok: /^((www|m|vm)\.)?tiktok\.com$/i,
 };
+const SOCIAL_BASE: Record<ClientSocialNetwork, string> = { instagram: "https://instagram.com/", facebook: "https://facebook.com/", tiktok: "https://www.tiktok.com/@" };
 
 export function normalizeSocial(value: string): { ok: true; value: string | null } | { ok: false; error: string } {
   const clean = value.trim().replace(/\s+/g, "");
@@ -17,9 +22,9 @@ export function normalizeSocial(value: string): { ok: true; value: string | null
   return { ok: true, value: clean };
 }
 
-// Link do perfil: endereço http(s) do próprio Instagram/Facebook, ou @usuário convertido no endereço da rede.
+// Link do perfil: endereço http(s) do próprio Instagram/Facebook/TikTok, ou @usuário convertido no endereço da rede.
 // Qualquer outro valor (por exemplo um site de terceiros) é exibido como texto, sem link.
-export function socialHref(network: SocialNetwork, stored: string | null) {
+export function socialHref(network: ClientSocialNetwork, stored: string | null) {
   if (!stored) return null;
   if (/^https?:\/\//i.test(stored)) {
     try {
@@ -29,10 +34,10 @@ export function socialHref(network: SocialNetwork, stored: string | null) {
       return null;
     }
   }
-  if (/^(www\.)?(instagram\.com|facebook\.com|fb\.com)\//i.test(stored)) return socialHref(network, `https://${stored}`);
+  if (/^(www\.)?(instagram\.com|facebook\.com|fb\.com|tiktok\.com)\//i.test(stored)) return socialHref(network, `https://${stored}`);
   const user = stored.replace(/^@/, "");
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(user)) return null;
-  return network === "instagram" ? `https://instagram.com/${user}` : `https://facebook.com/${user}`;
+  return `${SOCIAL_BASE[network]}${user}`;
 }
 
 // @usuário para exibir (endereços ficam como estão).

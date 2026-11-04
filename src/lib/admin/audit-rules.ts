@@ -115,7 +115,7 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   firstDueDate: "Primeiro vencimento", nextDueDate: "Próximo vencimento", graceDays: "Tolerância (dias)", expiresAt: "Fim do teste",
   active: "Acesso liberado", mustChangePassword: "Precisa trocar a senha", role: "Papel", priceInCents: "Preço padrão (centavos)",
   description: "Descrição", dueDate: "Vencimento", amountCents: "Valor (centavos)", paidAt: "Pago em", sessionsClosed: "Sessões encerradas",
-  document: "CPF/CNPJ", phone: "Telefone", whatsapp: "WhatsApp", instagram: "Instagram", facebook: "Facebook", notes: "Observações",
+  document: "CPF/CNPJ", phone: "Telefone", whatsapp: "WhatsApp", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", notes: "Observações",
   investorId: "Investidor", investorName: "Investidor", agreedRateBps: "Taxa combinada (pontos-base)", ratePeriod: "Período da taxa",
   startDate: "Início", maturityDate: "Vencimento do contrato", dueDay: "Dia de vencimento", kind: "Tipo de documento", fileName: "Arquivo",
   contentType: "Formato", sizeBytes: "Tamanho (bytes)", replacedDocumentId: "Documento substituído",
