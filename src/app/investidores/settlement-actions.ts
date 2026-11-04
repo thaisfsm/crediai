@@ -5,11 +5,11 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { withTenantContext } from "@/lib/auth/guards";
-import { investmentPayments, investmentRevisions, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
+import { capitalMovements, investmentPayments, investmentRevisions, investmentScheduleItems, investments, investors, tenants, wallets } from "@/lib/db/schema";
 import { checkOutflow } from "@/lib/finance/cashflow";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { formatDate, formatMoney, parseMoneyToCents, todayIso } from "@/lib/finance/format";
-import { EARLY_SETTLEMENT_DESCRIPTION, PAYMENT_METHODS, PAYMENT_NOTES_MAX, REFERENCE_MAX, checkEarlySettlement, earlySettlementPlan, entryEvidence, isPaymentMethod, maskReference } from "@/lib/investors/payables";
+import { EARLY_SETTLEMENT_DESCRIPTION, EARLY_SETTLEMENT_FEE_DESCRIPTION, PAYMENT_METHODS, PAYMENT_NOTES_MAX, PRORATA_NOTE, REFERENCE_MAX, SETTLEMENT_KINDS, checkEarlySettlement, checkSettlementTerms, contractLabel, earlySettlementPlan, entryEvidence, isPaymentMethod, isSettlementKind, maskReference, proRataYield, settlementTotals } from "@/lib/investors/payables";
 import { loadEntryEvidence } from "@/lib/investors/payables-queries";
 import { insertCapitalPayment } from "@/lib/investors/payment-write";
 import { scheduleSummary } from "@/lib/investors/rules";
@@ -49,6 +49,11 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
   const shownPrincipal = Number(field(data, "principalCents", 20));
   const yieldText = field(data, "yieldAmount", 40);
   const yieldCents = yieldText ? parseMoneyToCents(yieldText) : 0;
+  const kind = field(data, "settlementKind", 20);
+  const feeText = field(data, "feeAmount", 40);
+  const feeCents = feeText ? parseMoneyToCents(feeText) : 0;
+  const shownProRata = Number(field(data, "proRataCents", 20));
+  const allowAbove = field(data, "allowAbove", 4) === "1";
   const method = field(data, "method", 20);
   const reference = field(data, "reference", 400) || null;
   const notes = field(data, "notes", 1000) || null;
@@ -56,6 +61,7 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
   if (field(data, "confirm", 4) !== "1") return { ok: false, error: "Confirme a liquidação antecipada: o contrato será encerrado e o valor sairá do capital." };
   if (!REQUEST_ID.test(requestId)) return { ok: false, error: "Formulário expirado. Recarregue a página e tente de novo." };
   if (yieldCents === null) return { ok: false, error: "Informe o rendimento final em reais (ou deixe zero)." };
+  if (!isSettlementKind(kind)) return { ok: false, error: "Escolha o tipo da liquidação: por decisão da empresa ou resgate solicitado pelo investidor." };
   if (!isPaymentMethod(method)) return { ok: false, error: "Escolha a forma de pagamento." };
   if (reference && reference.length > REFERENCE_MAX) return { ok: false, error: `A referência pode ter no máximo ${REFERENCE_MAX} caracteres.` };
   if (notes && notes.length > PAYMENT_NOTES_MAX) return { ok: false, error: `A observação pode ter no máximo ${PAYMENT_NOTES_MAX} caracteres.` };
@@ -65,7 +71,7 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
       const [wallet] = await tx.select().from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
       if (!wallet) return { ok: false, error: "Defina o capital inicial da carteira (tela Capital) antes de liquidar." };
       const [repeated] = await tx.select({ id: investmentPayments.id, investmentId: investmentPayments.investmentId }).from(investmentPayments)
-        .where(and(eq(investmentPayments.tenantId, tenantId), inArray(investmentPayments.idempotencyKey, [`${requestId}-p`, `${requestId}-y`])));
+        .where(and(eq(investmentPayments.tenantId, tenantId), inArray(investmentPayments.idempotencyKey, [`${requestId}-p`, `${requestId}-y`, `${requestId}-r`])));
       if (repeated) {
         return repeated.investmentId === investmentId
           ? { ok: true, message: "Esta liquidação já estava registrada. Nada foi lançado em dobro." }
@@ -79,9 +85,12 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
       const items = await tx.select().from(investmentScheduleItems)
         .where(and(eq(investmentScheduleItems.investmentId, investment.id), eq(investmentScheduleItems.tenantId, tenantId)))
         .orderBy(asc(investmentScheduleItems.dueDate), asc(investmentScheduleItems.number)).for("update");
-      const payments = await tx.select({ scheduleItemId: investmentPayments.scheduleItemId, kind: investmentPayments.kind, amountCents: investmentPayments.amountCents }).from(investmentPayments)
+      const payments = await tx.select({ scheduleItemId: investmentPayments.scheduleItemId, kind: investmentPayments.kind, amountCents: investmentPayments.amountCents, paidOn: investmentPayments.paidOn }).from(investmentPayments)
         .where(and(eq(investmentPayments.tenantId, tenantId), eq(investmentPayments.investmentId, investment.id)));
-      const plan = earlySettlementPlan({ amountCents: investment.amountCents, items, payments: payments.map((payment) => ({ ...payment, kind: payment.kind === "YIELD" ? "YIELD" as const : "PRINCIPAL" as const })), settledOn });
+      const typed = payments.map((payment) => ({ ...payment, kind: payment.kind === "YIELD" ? "YIELD" as const : "PRINCIPAL" as const }));
+      const plan = earlySettlementPlan({ amountCents: investment.amountCents, items, payments: typed, settledOn });
+      // Pro-rata sempre recalculado aqui, com o contrato travado (o valor da tela só serve para conferir o que foi visto).
+      const proRata = proRataYield({ items, payments: typed, startDate: investment.startDate, settledOn });
       const [chain] = await tx.select({
         renewed: sql<boolean>`exists (select 1 from investment r where r.renewed_from_investment_id = ${investment.id} and r.tenant_id = ${tenantId})`,
         originHasCapital: sql<boolean>`crediai_investment_has_capital(${tenantId}, ${investment.id})`,
@@ -89,13 +98,20 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
       const startedOn = cycleStartedOn(wallet);
       const check = checkEarlySettlement({ status: investment.status, renewed: chain.renewed, settledOn, today: todayIso(), startDate: investment.startDate, cycleStartedOn: startedOn, principalRemainingCents: plan.principalRemainingCents, yieldCents });
       if (!check.ok) return check;
+      const totals = settlementTotals({ principalCents: plan.principalRemainingCents, yieldCents, proRataCents: proRata.cents, feeCents: feeCents ?? -1 });
+      const lastPaidOn = payments.map((payment) => payment.paidOn).sort().at(-1) ?? null;
+      const terms = checkSettlementTerms({ kind, feeCents, grossCents: totals.grossCents, yieldCents, overdueYieldCents: plan.overdueYieldCents, allowAbove, settledOn, lastPaidOn });
+      if (!terms.ok) return terms;
+      if (shownProRata !== proRata.cents) return { ok: false, error: "O rendimento pro-rata mudou desde que a confirmação foi aberta. Confira e confirme de novo. Nada foi registrado." };
       if (shownPrincipal !== plan.principalRemainingCents) return { ok: false, error: "O principal a devolver mudou desde que a confirmação foi aberta (houve uma baixa). Confira e confirme de novo. Nada foi registrado." };
       const evidence = await loadEntryEvidence(tx, tenantId, investment.id);
       const allowed = entryEvidence({ capitalEntryRule: investment.capitalEntryRule, hasEntry: evidence.entries.has(investment.id), hasPriorContribution: evidence.priors.has(investment.id),
         renewedFrom: investment.renewedFromInvestmentId, originHasCapital: chain.originHasCapital });
       if (!allowed.ok) return { ok: false, error: `${allowed.error} Nada foi registrado.` };
-      const totalCents = plan.principalRemainingCents + yieldCents;
-      // Mesma regra das baixas: o capital não fica negativo hoje nem em nenhuma data a partir da liquidação.
+      const totalCents = totals.netCents;
+      const yieldTotalCents = yieldCents + proRata.cents;
+      // Mesma regra das baixas: o capital não fica negativo hoje nem em nenhuma data a partir da liquidação. Conta o
+      // valor líquido: a taxa retida entra no capital na mesma data, antes das saídas.
       const capital = await tenantCapital(tx, tenantId);
       const outflow = checkOutflow({ ledger: [...capital.capitalLedger].reverse(), amountCents: totalCents, occurredAt: settledOn, availableCents: capital.summary.availableCents });
       if (!outflow.ok) return outflow;
@@ -109,29 +125,55 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
       }
       const number = items.reduce((highest, item) => Math.max(highest, item.number), 0) + 1;
       const itemId = id("isi");
-      const settlementItem = { id: itemId, tenantId, investmentId: investment.id, number, dueDate: settledOn, yieldCents, principalCents: plan.principalRemainingCents, description: EARLY_SETTLEMENT_DESCRIPTION, createdByUserId: session.user.id };
+      const settlementItem = { id: itemId, tenantId, investmentId: investment.id, number, dueDate: settledOn, yieldCents: yieldTotalCents, principalCents: plan.principalRemainingCents, description: EARLY_SETTLEMENT_DESCRIPTION, createdByUserId: session.user.id };
       await tx.insert(investmentScheduleItems).values(settlementItem);
       const kept = items.filter((item) => !plan.removeItemIds.includes(item.id)).map((item) => plan.trimItems.find((trim) => trim.id === item.id) ? { ...item, ...plan.trimItems.find((trim) => trim.id === item.id) } : item);
       const after = scheduleSummary([...kept, settlementItem]);
       const base = { paidOn: settledOn, method, reference, notes, scheduleItemId: itemId };
+      // Taxa de resgate: não é principal nem rendimento. O principal e os rendimentos saem inteiros (a obrigação do
+      // contrato fica quitada) e a taxa retida entra no capital como "Outras entradas", com descrição própria e chave
+      // contra envio repetido: o saldo muda só pelo valor líquido pago ao investidor.
+      let feeMovementId: string | null = null;
+      if (totals.feeCents > 0) {
+        feeMovementId = id("cap");
+        await tx.insert(capitalMovements).values({
+          id: feeMovementId, tenantId, kind: "OTHER_INCOME", category: "OTHER_INCOME", source: "FINANCE", amountCents: totals.feeCents, occurredAt: settledOn, cycleNumber: wallet.cycleNumber,
+          description: `${EARLY_SETTLEMENT_FEE_DESCRIPTION} · ${row.investorName} · ${contractLabel(investment)}`, notes: null, createdByUserId: session.user.id, idempotencyKey: `ivf-${requestId}`,
+        });
+      }
       if (plan.principalRemainingCents > 0) {
         await insertCapitalPayment({ tx, tenantId, session, payment: { ...base, kind: "PRINCIPAL", amountCents: plan.principalRemainingCents, requestId: `${requestId}-p` }, item: settlementItem, investment, investorName: row.investorName, balanceCents: plan.principalRemainingCents, cycleNumber: wallet.cycleNumber, auditNote: EARLY_SETTLEMENT_DESCRIPTION });
       }
       if (yieldCents > 0) {
-        await insertCapitalPayment({ tx, tenantId, session, payment: { ...base, kind: "YIELD", amountCents: yieldCents, requestId: `${requestId}-y` }, item: settlementItem, investment, investorName: row.investorName, balanceCents: yieldCents, cycleNumber: wallet.cycleNumber, auditNote: EARLY_SETTLEMENT_DESCRIPTION });
+        await insertCapitalPayment({ tx, tenantId, session, payment: { ...base, kind: "YIELD", amountCents: yieldCents, requestId: `${requestId}-y` }, item: settlementItem, investment, investorName: row.investorName, balanceCents: yieldTotalCents, cycleNumber: wallet.cycleNumber, auditNote: EARLY_SETTLEMENT_DESCRIPTION });
+      }
+      if (proRata.cents > 0) {
+        await insertCapitalPayment({ tx, tenantId, session, payment: { ...base, kind: "YIELD", amountCents: proRata.cents, requestId: `${requestId}-r` }, item: settlementItem, investment, investorName: row.investorName, balanceCents: proRata.cents, cycleNumber: wallet.cycleNumber, auditNote: PRORATA_NOTE });
       }
       await tx.update(investments).set({ status: "CLOSED", updatedAt: sql`now()` }).where(and(eq(investments.id, investment.id), eq(investments.tenantId, tenantId)));
-      const summary = `${formatMoney(totalCents)} em ${formatDate(settledOn)}: principal ${formatMoney(plan.principalRemainingCents)} e rendimento final ${formatMoney(yieldCents)}`;
+      const feeText = totals.feeCents > 0 ? `, taxa de liquidação antecipada ${formatMoney(totals.feeCents)} retida` : "";
+      const summary = `${formatMoney(totalCents)} líquidos em ${formatDate(settledOn)} (${SETTLEMENT_KINDS[kind].toLowerCase()}): principal ${formatMoney(plan.principalRemainingCents)}, rendimento final ${formatMoney(yieldCents)}, pro-rata ${formatMoney(proRata.cents)}${feeText}; bruto ${formatMoney(totals.grossCents)}`;
+      const memory = {
+        settlementKind: kind, settlementKindLabel: SETTLEMENT_KINDS[kind], principalInvestedCents: investment.amountCents, principalPaidBeforeCents: plan.principalPaidCents,
+        principalCents: plan.principalRemainingCents, yieldsPaidBeforeCents: payments.filter((payment) => payment.kind === "YIELD").reduce((total, payment) => total + payment.amountCents, 0),
+        overdueYieldCents: plan.overdueYieldCents, yieldCents, proRataCents: proRata.cents, proRataFormula: proRata.formula, proRataPeriodStart: proRata.periodStart, proRataNextDueDate: proRata.nextDueDate,
+        proRataDays: proRata.elapsedDays, proRataPeriodDays: proRata.periodDays, proRataBaseYieldCents: proRata.baseYieldCents, proRataPaidOnNextCents: proRata.paidOnNextCents,
+        grossCents: totals.grossCents, feeCents: totals.feeCents, netCents: totals.netCents, capitalOutCents: totals.grossCents, capitalFeeInCents: totals.feeCents, capitalNetChangeCents: -totals.netCents, feeMovementId,
+      };
       await tx.insert(investmentRevisions).values([
         { id: id("ivr"), tenantId, investmentId: investment.id, kind: "SCHEDULE", description: "Cronograma encerrado na liquidação antecipada", changes: [{ field: "Cronograma", before, after }], changedByUserId: session.user.id },
         { id: id("ivr"), tenantId, investmentId: investment.id, kind: "CONTRACT", description: EARLY_SETTLEMENT_DESCRIPTION,
-          changes: [{ field: "Liquidação antecipada", before: `${formatMoney(plan.openScheduleCents)} em aberto no cronograma (${plan.closedCount} ${plan.closedCount === 1 ? "parcela" : "parcelas"})`, after: summary }, { field: "Status", before: "Ativo", after: "Encerrado" }], changedByUserId: session.user.id },
+          changes: [{ field: "Liquidação antecipada", before: `${formatMoney(plan.openScheduleCents)} em aberto no cronograma (${plan.closedCount} ${plan.closedCount === 1 ? "parcela" : "parcelas"})`, after: summary }, { field: "Tipo", before: null, after: SETTLEMENT_KINDS[kind] },
+            { field: "Rendimento pro-rata temporis", before: null, after: `${formatMoney(proRata.cents)}: ${proRata.formula}` },
+            { field: EARLY_SETTLEMENT_FEE_DESCRIPTION, before: null, after: totals.feeCents > 0 ? `${formatMoney(totals.feeCents)} retida (entrada no capital, não é principal nem rendimento)` : "Sem taxa" },
+            { field: "Valor líquido pago", before: null, after: `${formatMoney(totals.grossCents)} bruto − ${formatMoney(totals.feeCents)} de taxa = ${formatMoney(totals.netCents)}` },
+            { field: "Status", before: "Ativo", after: "Encerrado" }], changedByUserId: session.user.id },
       ]);
       await recordAdminAudit(tx, session, {
         action: "INVESTMENT_SETTLED_EARLY", entity: "investment", entityId: investment.id, tenantId, tenantName: await tenantName(tx, tenantId),
         description: `Contrato de ${row.investorName} liquidado antecipadamente (${summary})`,
         before: { status: investment.status, schedule: before, openScheduleCents: plan.openScheduleCents, principalPaidCents: plan.principalPaidCents },
-        after: { status: "CLOSED", schedule: after, settledOn, principalCents: plan.principalRemainingCents, yieldCents, totalCents, method: PAYMENT_METHODS[method], reference: maskReference(reference), removedItems: plan.removeItemIds.length, trimmedItems: plan.trimItems.length, settlementItemId: itemId, cycleNumber: wallet.cycleNumber },
+        after: { status: "CLOSED", schedule: after, settledOn, ...memory, totalCents, method: PAYMENT_METHODS[method], reference: maskReference(reference), removedItems: plan.removeItemIds.length, trimmedItems: plan.trimItems.length, settlementItemId: itemId, cycleNumber: wallet.cycleNumber },
       });
       return { ok: true, message: `Contrato liquidado: ${summary}. As parcelas futuras foram encerradas e o contrato ficou encerrado.` };
     });
