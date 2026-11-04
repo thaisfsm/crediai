@@ -48,6 +48,13 @@ test("IV2. redes sociais: @usuário ou URL, sem validação restritiva; link só
   assert.equal(socialHref("instagram", "instagram.com/maria"), "https://instagram.com/maria");
   assert.equal(socialHref("instagram", "https://golpe.example.com/maria"), null);
   assert.equal(socialHref("facebook", "javascript:alert(1)"), null);
+  // TikTok (só no cadastro do cliente): @usuário vira tiktok.com/@usuário; endereço só do próprio TikTok.
+  assert.equal(socialHref("tiktok", "@maria.silva"), "https://www.tiktok.com/@maria.silva");
+  assert.equal(socialHref("tiktok", "maria"), "https://www.tiktok.com/@maria");
+  assert.equal(socialHref("tiktok", "tiktok.com/@maria"), "https://tiktok.com/@maria");
+  assert.equal(socialHref("tiktok", "https://www.tiktok.com/@maria"), "https://www.tiktok.com/@maria");
+  assert.equal(socialHref("tiktok", "https://instagram.com/maria"), null);
+  assert.equal(socialHref("instagram", "tiktok.com/@maria"), null);
   assert.equal(socialLabel("maria"), "@maria");
   assert.equal(whatsappHref("11987654321"), "https://wa.me/5511987654321");
   assert.equal(normalizeEmail("a@b").ok, false);

@@ -158,7 +158,7 @@ export async function lookupRegisteredPersonAction(document: string): Promise<{ 
     const investorRows = await tx.select().from(investors).where(and(eq(investors.tenantId, tenantId), eq(investors.document, digits))).limit(1);
     const people: RegisteredPerson[] = [
       ...clientRows.map((row) => ({ source: "client" as const, id: row.id, name: row.name, values: clean({
-        name: row.name, phone: row.phone, whatsapp: row.whatsapp, email: row.email, instagram: row.instagram, facebook: row.facebook,
+        name: row.name, phone: row.phone, whatsapp: row.whatsapp, email: row.email, instagram: row.instagram, facebook: row.facebook, tiktok: row.tiktok,
         Cep: row.residentialCep, Street: row.residentialStreet, Number: row.residentialNumber, Complement: row.residentialComplement, District: row.residentialDistrict, City: row.residentialCity, State: row.residentialState }) })),
       ...investorRows.map((row) => ({ source: "investor" as const, id: row.id, name: row.name, values: clean({
         name: row.name, phone: row.phone, whatsapp: row.whatsapp, email: row.email, instagram: row.instagram, facebook: row.facebook,

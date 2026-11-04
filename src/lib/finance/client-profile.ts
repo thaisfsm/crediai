@@ -16,8 +16,8 @@ export const referencePartLabels = { Name: "Nome", Phone: "Telefone", Relationsh
 export const guarantorParts = ["Name", "Document", "Phone", "Notes"] as const;
 export const guarantorPartLabels = { Name: "Nome do avalista", Document: "CPF do avalista", Phone: "Telefone do avalista", Notes: "Observação sobre o avalista" } as const;
 
-// Contatos e redes sociais (opcionais): WhatsApp, e-mail, Instagram e Facebook.
-export const contactKeys = ["whatsapp", "email", "instagram", "facebook"] as const;
+// Contatos e redes sociais (opcionais): WhatsApp, e-mail, Instagram, Facebook e TikTok.
+export const contactKeys = ["whatsapp", "email", "instagram", "facebook", "tiktok"] as const;
 export type ContactKey = (typeof contactKeys)[number];
 
 type AddressKey = `${AddressKind}${AddressPart}`;
