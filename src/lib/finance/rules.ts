@@ -409,7 +409,18 @@ function stateFor(balanceCents: number, nextDue: string | null, asOf: string): {
   return { state: daysUntilDue < 0 ? "OVERDUE" : daysUntilDue === 0 ? "DUE_TODAY" : "ACTIVE", daysUntilDue };
 }
 
-// Parcelado e diário: os juros pagos acompanham a proporção do contrato sobre o TOTAL pago até cada pagamento
+// Parcelado (regra de 05/11/2026): o recebimento amortiza primeiro o principal em aberto; só depois de todo o principal
+// quitado o que entra conta como juros recebidos (lucro). Vale para os pagamentos gravados com a ordem PRINCIPAL_FIRST
+// (todo pagamento novo do parcelado) e, nos pagamentos anteriores à 0054 (sem ordem gravada), quando o contrato é de
+// principal primeiro. Os pagamentos antigos gravados como juros primeiro (ou sem ordem num contrato antigo) continuam
+// pela proporção abaixo até serem corrigidos com autorização: nada já registrado muda de divisão sozinho.
+const principalFirstInstallment = (terms: LedgerTerms, payment: LedgerPayment) =>
+  terms.modality === "INSTALLMENT" && (payment.allocationOrder ?? terms.paymentOrder) === "PRINCIPAL_FIRST";
+// Ordem gravada nos pagamentos novos: parcelado sempre principal primeiro; as demais modalidades, a ordem do contrato.
+export const allocationOrderFor = (terms: Pick<LedgerTerms, "modality" | "paymentOrder">): AllocationOrder =>
+  terms.modality === "INSTALLMENT" ? "PRINCIPAL_FIRST" : terms.paymentOrder ?? "INTEREST_FIRST";
+
+// Diário (e pagamentos antigos do parcelado, acima): os juros pagos acompanham a proporção do contrato sobre o TOTAL pago até cada pagamento
 // (juros acumulados = arredondamento de total pago × juros / total do contrato), e cada pagamento leva a diferença.
 // Assim o arredondamento nunca se acumula de um pagamento para o outro (no máximo meio centavo de diferença em
 // relação à proporção exata, em qualquer momento), e o pagamento que zera o saldo leva o resto exato dos juros.
@@ -434,9 +445,14 @@ function amortizedLedger<T extends LedgerPayment>(contract: LedgerTerms, ordered
   const items: LedgerItem<T>[] = ordered.map((payment) => {
     const balanceBeforeCents = Math.max(totalCents - interestPaidCents - principalPaidCents, 0);
     const interestLeft = Math.max(terms.interestCents - interestPaidCents, 0);
+    const principalLeft = Math.max(terms.principalCents - principalPaidCents, 0);
     const finishes = payment.amountCents >= balanceBeforeCents;
     const paidAfter = interestPaidCents + principalPaidCents + payment.amountCents;
-    const interestPart = finishes ? interestLeft : Math.min(interestLeft, payment.amountCents, Math.max(interestAt(paidAfter) - interestPaidCents, 0));
+    // Nunca amortiza mais principal do que o que está em aberto: o que passar dele é juros (no máximo os juros que faltam).
+    const atLeastInterest = Math.max(payment.amountCents - principalLeft, 0);
+    const interestPart = finishes ? interestLeft
+      : principalFirstInstallment(contract, payment) ? Math.min(interestLeft, atLeastInterest)
+      : Math.min(interestLeft, payment.amountCents, Math.max(interestAt(paidAfter) - interestPaidCents, atLeastInterest));
     const principalPart = payment.amountCents - interestPart;
     interestPaidCents += interestPart;
     principalPaidCents += principalPart;
@@ -670,7 +686,7 @@ export function planPayment<T extends LedgerPayment>(terms: LedgerTerms, previou
     if (!latest) return fail("O saldo total vale só para o pagamento mais recente: há pagamento registrado depois desta data.");
     if (amountCents !== before.balanceCents) return fail(`O saldo total nesta data é ${formatMoney(before.balanceCents)}.`);
   }
-  const payment = { id: paymentId, amountCents, paidAt, createdAt: "9999-12-31T23:59:59.999Z", mode, allocationOrder: terms.paymentOrder ?? "INTEREST_FIRST", period } as LedgerPayment as T;
+  const payment = { id: paymentId, amountCents, paidAt, createdAt: "9999-12-31T23:59:59.999Z", mode, allocationOrder: allocationOrderFor(terms), period } as LedgerPayment as T;
   const list = [...previous, payment];
   const planned: LedgerTerms = renewal ? { ...terms, renewals: [...terms.renewals, { paymentId, ...renewal }] } : terms;
   const after = operationLedger(planned, list, asOf);
@@ -688,7 +704,7 @@ export function planPayment<T extends LedgerPayment>(terms: LedgerTerms, previou
     if (changed || check.periodViews.find((entry) => entry.number === period)?.remainingCents !== 0) return fail("Este recebimento mudaria outros períodos. Atualize a tela e confira.");
   }
   return {
-    ok: true as const, mode, allocationOrder: terms.paymentOrder ?? "INTEREST_FIRST", renewal, before, after, item, period,
+    ok: true as const, mode, allocationOrder: allocationOrderFor(terms), renewal, before, after, item, period,
     settles: after.balanceCents === 0,
     // Resumo da prévia (o mesmo que o servidor grava).
     interestCents: item.interestCents, principalCents: item.principalCents,
