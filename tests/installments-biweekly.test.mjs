@@ -36,8 +36,8 @@ test("Q2. pagamentos, parcial, atraso e quitação do parcelado quinzenal", () =
   assert.equal(partial.amountDueCents, 15000);
   assert.equal(partial.state, "OVERDUE");
   assert.equal(partial.daysUntilDue, -4);
-  // Cada pagamento leva juros e principal na proporção do contrato (1/3 juros), sem juros sobre juros nem mora.
-  assert.deepEqual(partial.items.map((item) => [item.interestCents, item.principalCents]), [[10000, 20000], [5000, 10000]]);
+  // Principal primeiro (31/10/2026): R$ 450 recebidos de R$ 600 de principal → tudo principal, lucro 0. Sem mora.
+  assert.deepEqual(partial.items.map((item) => [item.interestCents, item.principalCents]), [[0, 30000], [0, 15000]]);
   assert.equal(partial.balanceCents, 45000);
   // Quitação: o restante (R$ 450) quita; juros recebidos = 300 no total, principal = 600.
   const settled = operationLedger(terms, [pay("p1", 30000, "2026-11-06"), pay("p2", 15000, "2026-11-21"), pay("p3", 45000, "2026-12-06")], "2026-12-06");

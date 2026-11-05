@@ -14,11 +14,11 @@ const isCents = (value) => Number.isInteger(value);
 test("R1. produção: R$ 5.000 em 6 × R$ 1.166 (juros R$ 1.996), 5 parcelas pagas → juros pagos R$ 1.663,33, sem acumular R$ 0,02", () => {
   const terms = installment(500000, 199600, 6, 116600);
   const ledger = operationLedger(terms, payments(Array(5).fill(116600)), "2026-10-06");
-  // Exato: 5 × 1.166 × 1.996 / 6.996 = R$ 1.663,333… → R$ 1.663,33. A regra antiga somava 5 × R$ 332,67 = R$ 1.663,35.
-  assert.equal(ledger.interestPaidCents, 166333);
-  assert.equal(ledger.principalPaidCents, 416667);
+  // Principal primeiro (31/10/2026): R$ 5.830 recebidos → R$ 5.000 de principal recuperado e R$ 830 de lucro.
+  assert.equal(ledger.interestPaidCents, 83000);
+  assert.equal(ledger.principalPaidCents, 500000);
   assert.equal(ledger.interestPaidCents + ledger.principalPaidCents, 5 * 116600);
-  assert.equal(ledger.principalRemainingCents, 83333);
+  assert.equal(ledger.principalRemainingCents, 0);
 });
 
 test("R2. cada pagamento: juros + principal = valor pago, em centavos inteiros", () => {
@@ -42,7 +42,7 @@ test("R3. o arredondamento nunca se acumula: juros pagos ficam a no máximo meio
     assert.ok(Math.abs(amortizedInterestPaid(paid, terms) - exact) <= 0.5, `parcela ${k}`);
   }
   const ledger = operationLedger(terms, payments(amounts), "2027-01-01");
-  assert.ok(Math.abs(ledger.interestPaidCents - (paid * 333333) / 1333333) <= 0.5);
+  assert.equal(ledger.interestPaidCents, Math.max(paid - 1000000, 0)); // principal primeiro
 });
 
 test("R4. quitação fecha exatamente: juros pagos = juros do contrato, principal pago = principal, saldo zero", () => {
@@ -91,7 +91,7 @@ test("R7. carteira: capital emprestado + juros recebidos batem com o que foi pag
   const paid = pays.reduce((total, payment) => total + payment.amountCents, 0);
   assert.equal(summary.receivedInterestCents + summary.receivedPrincipalCents, paid);
   assert.equal(summary.lentCents + summary.receivedPrincipalCents, 700000);
-  // R$ 1.663,33 + R$ 533,33 (antes: R$ 1.663,35 + R$ 533,34 = R$ 0,03 a mais de juros e a menos de principal).
-  assert.equal(summary.receivedInterestCents, 166333 + 53333);
+  // Principal primeiro: op A recebeu R$ 5.830 (R$ 830 de lucro), op B R$ 1.200 de R$ 2.000 de principal (lucro 0).
+  assert.equal(summary.receivedInterestCents, 83000);
   assert.equal(summary.availableCents, 1000000 - 700000 + paid);
 });
