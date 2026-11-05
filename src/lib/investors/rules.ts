@@ -16,7 +16,7 @@ export const personTypeOf = (row: { personType: string | null; document: string 
   row.personType === "PF" || row.personType === "PJ" ? row.personType : row.document?.length === 11 ? "PF" : row.document?.length === 14 ? "PJ" : null;
 export type InvestorStatus = keyof typeof INVESTOR_STATUS;
 
-export const INVESTMENT_STATUS = { PENDING_SIGNATURE: "Aguardando assinatura", ACTIVE: "Ativo", CLOSED: "Encerrado", CANCELED: "Cancelado" } as const;
+export const INVESTMENT_STATUS = { PENDING_SIGNATURE: "Aguardando assinatura", ACTIVE: "Ativo", CLOSED: "Liquidado", CANCELED: "Cancelado" } as const;
 export type InvestmentStatus = keyof typeof INVESTMENT_STATUS;
 
 // O período da taxa é sempre escolhido no contrato: o sistema não presume mensal, anual nem nenhum outro.
@@ -289,9 +289,26 @@ export function rateLabel(agreedRateBps: number, ratePeriod: RatePeriod) {
 }
 
 // Filtros da lista (endereço /investidores?q=…&status=…&carteira=…&pagina=…).
-export function investorFilters(search: { q?: string; status?: string; carteira?: string; pagina?: string }) {
+// Abas da lista de investidores (padrão de Operações): Ativos (contrato ativo/aguardando assinatura, ou ainda sem
+// contrato), Liquidados (ao menos um contrato liquidado) e Todos. A contagem de cada aba é de CONTRATOS.
+export const INVESTMENT_SITUATIONS = { ativos: "Ativos", liquidados: "Liquidados", todos: "Todos" } as const;
+export type InvestmentSituation = keyof typeof INVESTMENT_SITUATIONS;
+export function parseInvestmentSituation(value: string): InvestmentSituation {
+  return value === "liquidados" || value === "todos" ? value : "ativos";
+}
+// Contrato que conta como "ativo" (não liquidado nem cancelado).
+export const OPEN_INVESTMENT_STATUSES = ["ACTIVE", "PENDING_SIGNATURE"] as const satisfies readonly InvestmentStatus[];
+// Situação exibida na linha do investidor, a partir das contagens de contratos (o cadastro inativo prevalece).
+export function investorSituation(input: { status: InvestorStatus; openCount: number; closedCount: number; totalCount: number }): "Ativo" | "Inativo" | "Liquidado" | "Cancelado" {
+  if (input.status === "INACTIVE") return "Inativo";
+  if (input.openCount > 0 || input.totalCount === 0) return "Ativo";
+  return input.closedCount > 0 ? "Liquidado" : "Cancelado";
+}
+
+export function investorFilters(search: { q?: string; status?: string; carteira?: string; pagina?: string; situacao?: string }) {
   const page = Number(search.pagina);
   return {
+    situacao: parseInvestmentSituation((search.situacao ?? "").trim()),
     q: (search.q ?? "").trim().slice(0, 120),
     status: (parseInvestorStatus(search.status ?? "") ?? "") as InvestorStatus | "",
     carteira: (search.carteira ?? "").trim().slice(0, 80),

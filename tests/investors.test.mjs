@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { investmentFields, investorFields, investorFilters, rateLabel, summarizeInvestments, RATE_PERIODS } from "../src/lib/investors/rules.ts";
+import { INVESTMENT_STATUS, investmentFields, investorFields, investorFilters, investorSituation, parseInvestmentSituation, rateLabel, summarizeInvestments, RATE_PERIODS } from "../src/lib/investors/rules.ts";
 import { normalizeEmail, normalizeSocial, socialHref, socialLabel, whatsappHref } from "../src/lib/contacts.ts";
 import { formatCpfCnpj, maskCpfCnpj, normalizeCpfCnpj } from "../src/lib/finance/format.ts";
 
@@ -126,7 +126,7 @@ test("IV5. painel: soma só o cadastrado; rendimentos vêm do cronograma e das b
 });
 
 test("IV6. filtros da lista: status só valores conhecidos, página válida", () => {
-  assert.deepEqual(investorFilters({ q: "  ana ", status: "x", pagina: "-2" }), { q: "ana", status: "", carteira: "", page: 1 });
+  assert.deepEqual(investorFilters({ q: "  ana ", status: "x", pagina: "-2" }), { situacao: "ativos", q: "ana", status: "", carteira: "", page: 1 });
   assert.equal(investorFilters({ status: "INACTIVE", pagina: "3" }).page, 3);
 });
 
@@ -190,4 +190,19 @@ test("IL2. migration 0026 só acrescenta colunas e travas: nenhum dado existente
   assert.ok(!/\b(UPDATE|DELETE|TRUNCATE|DROP|INSERT)\b/i.test(sql));
   assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 3);
   assert.ok(/investment_redemption_valid/.test(sql) && /investment_yield_payment_valid/.test(sql));
+});
+
+test("abas Ativos/Liquidados/Todos: aba padrão, situação da linha e rótulo Liquidado", () => {
+  assert.equal(parseInvestmentSituation(""), "ativos");
+  assert.equal(parseInvestmentSituation("liquidados"), "liquidados");
+  assert.equal(parseInvestmentSituation("todos"), "todos");
+  assert.equal(parseInvestmentSituation("x'; drop"), "ativos");
+  assert.equal(investorFilters({ situacao: "liquidados" }).situacao, "liquidados");
+  assert.equal(INVESTMENT_STATUS.CLOSED, "Liquidado");
+  // Gumercindo: cadastro ativo, único contrato liquidado → Liquidado (não Ativo).
+  assert.equal(investorSituation({ status: "ACTIVE", openCount: 0, closedCount: 1, totalCount: 1 }), "Liquidado");
+  assert.equal(investorSituation({ status: "ACTIVE", openCount: 1, closedCount: 1, totalCount: 2 }), "Ativo");
+  assert.equal(investorSituation({ status: "ACTIVE", openCount: 0, closedCount: 0, totalCount: 0 }), "Ativo");
+  assert.equal(investorSituation({ status: "ACTIVE", openCount: 0, closedCount: 0, totalCount: 1 }), "Cancelado");
+  assert.equal(investorSituation({ status: "INACTIVE", openCount: 1, closedCount: 0, totalCount: 1 }), "Inativo");
 });

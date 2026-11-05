@@ -292,6 +292,40 @@ test("LQ8. tela do Gumercindo (fictício) antes de confirmar: os dois cenários 
   assert.equal(await one(`select status from investment where id = '${id}'`), "ACTIVE", "a tela não grava nada sem confirmar");
 });
 
+test("LQ9. status Liquidado automático e abas Ativos/Liquidados/Todos com a contagem de contratos (dados fictícios)", async () => {
+  const investor = await investorAction(robério, "createInvestorAction", { personType: "PF", name: "Hugo Abas Teste", document: "529.982.247-25" });
+  assert.equal(investor?.ok, true, JSON.stringify(investor));
+  const saved = ids.investor; ids.investor = investor.id;
+  const id = await contract("LIQ-ABAS");
+  ids.investor = saved;
+  const tabs = (html) => Object.fromEntries([...html.matchAll(/(Ativos|Liquidados|Todos) (\d+)/g)].map((match) => [match[1], Number(match[2])]));
+  let list = await page(robério, "/investidores?q=Hugo+Abas");
+  assert.deepEqual(tabs(list.html), { Ativos: 1, Liquidados: 0, Todos: 1 });
+  assert.match(list.html, /Hugo Abas Teste/);
+  assert.doesNotMatch((await page(robério, "/investidores?q=Hugo+Abas&situacao=liquidados")).html, /Hugo Abas Teste/);
+  const paidBefore = await one(`select md5(string_agg(row(p.*)::text, '|' order by id)) from investment_payment p where investment_id = '${id}'`);
+  const request = requestId();
+  assert.equal((await settle(robério, id, { requestId: request }))?.ok, true);
+  // O status muda sozinho na confirmação, sem edição manual; as baixas anteriores não mudam.
+  assert.equal(await one(`select status from investment where id = '${id}'`), "CLOSED");
+  assert.equal(await one(`select md5(string_agg(row(p.*)::text, '|' order by id)) from investment_payment p where investment_id = '${id}' and idempotency_key not like '${request}%'`), paidBefore);
+  list = await page(robério, "/investidores?q=Hugo+Abas");
+  assert.deepEqual(tabs(list.html), { Ativos: 0, Liquidados: 1, Todos: 1 });
+  assert.doesNotMatch(list.html, /Hugo Abas Teste/, "liquidado não aparece entre os ativos");
+  const closed = await page(robério, "/investidores?q=Hugo+Abas&situacao=liquidados");
+  assert.match(closed.html, /Hugo Abas Teste/);
+  assert.match(closed.html, /Liquidado/);
+  assert.match(closed.html, new RegExp(`R\\$\\s20\\.000,00 · liquidado em ${TODAY.split("-").reverse().join("/")}`));
+  const all = await page(robério, "/investidores?q=Hugo+Abas&situacao=todos");
+  assert.match(all.html, /Hugo Abas Teste/);
+  const detail = await page(robério, `/investidores/investimentos/${id}`);
+  assert.match(detail.html, /Liquidado/);
+  // Isolamento: o tenant B não vê o investidor nem conta os contratos do A.
+  const other = await page(fernando, "/investidores?q=Hugo+Abas&situacao=todos");
+  assert.doesNotMatch(other.html, /Hugo Abas Teste/);
+  assert.deepEqual(tabs(other.html), { Ativos: 0, Liquidados: 0, Todos: 0 });
+});
+
 test("LQ5. nada fora do previsto mudou (operações, clientes, tenants, usuários e tudo do tenant B)", async () => {
   assert.equal(await protectedHash(), hashBefore);
 });

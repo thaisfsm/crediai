@@ -167,7 +167,7 @@ export async function settleInvestmentEarlyAction(data: FormData): Promise<Actio
             { field: "Rendimento pro-rata temporis", before: null, after: `${formatMoney(proRata.cents)}: ${proRata.formula}` },
             { field: EARLY_SETTLEMENT_FEE_DESCRIPTION, before: null, after: totals.feeCents > 0 ? `${formatMoney(totals.feeCents)} retida (entrada no capital, não é principal nem rendimento)` : "Sem taxa" },
             { field: "Valor líquido pago", before: null, after: `${formatMoney(totals.grossCents)} bruto − ${formatMoney(totals.feeCents)} de taxa = ${formatMoney(totals.netCents)}` },
-            { field: "Status", before: "Ativo", after: "Encerrado" }], changedByUserId: session.user.id },
+            { field: "Status", before: "Ativo", after: "Liquidado" }], changedByUserId: session.user.id },
       ]);
       await recordAdminAudit(tx, session, {
         action: "INVESTMENT_SETTLED_EARLY", entity: "investment", entityId: investment.id, tenantId, tenantName: await tenantName(tx, tenantId),
