@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, isIsoDate, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
 import { CONTRACT_STATES, contractState, formatDateTime, type ContractState } from "@/lib/investors/contract";
 import {
-  DOCUMENT_KINDS, INVESTMENT_PAYMENT_METHODS, REDEMPTION_RULES, redemptionDate, redemptionLabel, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, addTermIso, installmentsFor, investorAddress, rateLabel, termFromDates, termLabel,
+  DOCUMENT_KINDS, INVESTMENT_SITUATIONS, investorSituation, type InvestmentSituation, INVESTMENT_PAYMENT_METHODS, REDEMPTION_RULES, redemptionDate, redemptionLabel, INVESTMENT_STATUS, INVESTOR_STATUS, PAYMENT_FREQUENCIES, PERSON_TYPES, RATE_PERIODS, TERM_UNIT_LABELS, addTermIso, installmentsFor, investorAddress, rateLabel, termFromDates, termLabel,
   type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorStatus, type PaymentFrequency, type PersonType, type RedemptionRule, type TermUnit,
 } from "@/lib/investors/rules";
 import type { InvestmentDetail, InvestorDetail, InvestorsPage } from "@/lib/investors/queries";
@@ -289,13 +289,26 @@ function RenewSection({ data }: { data: InvestmentDetail }) {
   );
 }
 
+const INVESTOR_SITUATION_ICONS: Record<InvestmentSituation, ReactNode> = {
+  ativos: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  liquidados: <><circle cx="12" cy="12" r="9" /><path d="m8 12.5 3 3 5-6" /></>,
+  todos: <><path d="M4 6h16M4 12h16M4 18h16" /></>,
+};
+const situationTone = { Ativo: "status-active", Inativo: "status-muted", Liquidado: "status-paid", Cancelado: "status-muted" } as const;
+
 // /investidores: painel, filtros, lista paginada e cadastro.
 export function InvestorsHome({ data }: { data: InvestorsPage }) {
   const router = useRouter();
   const [creating, setCreating] = useState(false);
   const { summary, filters } = data;
   const filtered = Boolean(filters.q || filters.status || filters.carteira);
-  const pageHref = (page: number) => `/investidores?${new URLSearchParams({ ...Object.fromEntries(Object.entries(filters).filter(([, value]) => value)), pagina: String(page) })}`;
+  const situation = filters.situacao;
+  const query = (extra: Record<string, string>) => {
+    const params = new URLSearchParams(Object.fromEntries(Object.entries({ ...filters, ...extra }).filter(([key, value]) => value && !(key === "situacao" && value === "ativos"))));
+    const text = params.toString();
+    return text ? `/investidores?${text}` : "/investidores";
+  };
+  const pageHref = (page: number) => query({ pagina: String(page) });
   return (
     <div className="workspace-page">
       <PageHeading eyebrow="CREDIAI · INVESTIDORES" title="Investidores" description={data.isMaster ? "Investidores e contratos de todas as carteiras (visão MASTER)." : "Quem investe na sua carteira e os contratos de cada um."}>
@@ -330,7 +343,16 @@ export function InvestorsHome({ data }: { data: InvestorsPage }) {
 
       <section className="panel table-panel" aria-label="Lista de investidores">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Investidores</h2><span className="today-count">{data.matched}</span></div><p>Busque por nome, CPF/CNPJ, telefone, e-mail ou rede social.</p></div></div>
+        <div className="situation-tabs" role="group" aria-label="Situação dos contratos">
+          {(Object.keys(INVESTMENT_SITUATIONS) as InvestmentSituation[]).map((key) => (
+            <Link key={key} prefetch={false} href={query({ situacao: key })} className={`situation-tab${situation === key ? " active" : ""}`} aria-current={situation === key ? "page" : undefined}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{INVESTOR_SITUATION_ICONS[key]}</svg>
+              {INVESTMENT_SITUATIONS[key]}<span className="situation-count" title="Contratos">{data.situationCounts[key]}</span>
+            </Link>
+          ))}
+        </div>
         <form className="investor-filters" action="/investidores" method="get" role="search">
+          {situation !== "ativos" && <input type="hidden" name="situacao" value={situation} />}
           <label className="field"><span>Buscar</span><input name="q" defaultValue={filters.q} placeholder="Nome, CPF/CNPJ, telefone…" maxLength={120} /></label>
           <label className="field"><span>Status</span><select name="status" defaultValue={filters.status}>
             <option value="">Todos</option>{(Object.keys(INVESTOR_STATUS) as InvestorStatus[]).map((status) => <option key={status} value={status}>{INVESTOR_STATUS[status]}</option>)}
@@ -343,8 +365,8 @@ export function InvestorsHome({ data }: { data: InvestorsPage }) {
           <div className="investor-filter-actions"><button className="outline-button">Aplicar</button>{filtered && <Link prefetch={false} className="text-link" href="/investidores">Limpar</Link>}</div>
         </form>
         {data.investors.length === 0 ? (
-          <EmptyPanel icon="briefcase" text={filtered ? "Nenhum investidor com esses filtros." : "Nenhum investidor cadastrado ainda."}
-            action={!filtered && !creating ? <button className="primary-button" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> Cadastrar o primeiro investidor</button> : undefined} />
+          <EmptyPanel icon="briefcase" text={filtered ? "Nenhum investidor com esses filtros." : situation === "liquidados" ? "Nenhum contrato liquidado." : situation === "ativos" && data.situationCounts.todos > 0 ? "Nenhum contrato ativo." : "Nenhum investidor cadastrado ainda."}
+            action={!filtered && !creating && data.situationCounts.todos === 0 ? <button className="primary-button" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> Cadastrar o primeiro investidor</button> : undefined} />
         ) : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th>{data.isMaster && <th>Carteira</th>}<th>CPF/CNPJ</th><th>Telefone/WhatsApp</th><th>E-mail e redes</th><th>Status</th><th>Investimentos</th><th>Cadastro</th><th /></tr></thead>
@@ -355,8 +377,12 @@ export function InvestorsHome({ data }: { data: InvestorsPage }) {
                 <td>{formatCpfCnpj(investor.document) ?? "—"}</td>
                 <td className="nowrap-cell">{formatPhone(investor.phone) ?? "—"}{investor.whatsapp && <small>WhatsApp {formatPhone(investor.whatsapp)}</small>}</td>
                 <td>{investor.email ?? "—"}{investor.instagram && <small>Instagram: <SocialLink network="instagram" value={investor.instagram} /></small>}{investor.facebook && <small>Facebook: <SocialLink network="facebook" value={investor.facebook} /></small>}</td>
-                <td><InvestorStatusChip status={investor.status} /></td>
-                <td>{investor.investmentCount}</td>
+                <td>{(() => { const label = investorSituation({ status: investor.status, openCount: investor.openCount, closedCount: investor.closedCount, totalCount: investor.investmentCount }); return <span className={`status-chip ${situationTone[label]}`}><i />{label}</span>; })()}</td>
+                <td>{situation === "ativos" ? investor.openCount : situation === "liquidados" ? investor.closedCount : investor.investmentCount}
+                  {situation === "liquidados" && investor.closedInvestments.map((item) => (
+                    <small key={item.id}><Link prefetch={false} className="text-link" href={`/investidores/investimentos/${item.id}`}>{`${formatMoney(item.amountCents)} · liquidado em ${formatDate(item.closedOn)}`}</Link></small>
+                  ))}
+                </td>
                 <td>{dateOf(investor.createdAt)}</td>
                 <td className="actions-cell"><span className="row-actions"><Link prefetch={false} className="outline-button" href={`/investidores/${investor.id}`}>Ver</Link></span></td>
               </tr>

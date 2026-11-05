@@ -15,7 +15,7 @@ import {
   type DocumentKind, type InvestmentPaymentMethod, type InvestmentStatus, type InvestorDocumentKind, type InvestorStatus, type PaymentFrequency, type RatePeriod, type RedemptionRule, type TermUnit,
 } from "./rules";
 
-type Search = { q?: string; status?: string; carteira?: string; pagina?: string };
+type Search = { q?: string; status?: string; carteira?: string; pagina?: string; situacao?: string };
 
 // Carteiras que o MASTER pode escolher (filtro da lista e carteira de um novo investidor). Encerradas ficam de fora.
 async function tenantOptions(tx: Parameters<Parameters<typeof withInvestorContext>[0]>[0], scope: InvestorScope) {
@@ -43,6 +43,16 @@ export async function loadInvestorsPage(search: Search) {
         ...(digits.length >= 3 ? [sql`${investors.document} like ${`%${digits}%`}`, sql`${investors.phone} like ${`%${digits}%`}`, sql`${investors.whatsapp} like ${`%${digits}%`}`] : []),
       ));
     }
+    // Contagens por contrato do investidor (nome qualificado à mão: dentro de sql`` o Drizzle não qualifica colunas).
+    const openOf = sql`(select count(*) from investment i where i.investor_id = investor.id and i.tenant_id = investor.tenant_id and i.status in ('ACTIVE', 'PENDING_SIGNATURE'))`;
+    const closedOf = sql`(select count(*) from investment i where i.investor_id = investor.id and i.tenant_id = investor.tenant_id and i.status = 'CLOSED')`;
+    const totalOf = sql`(select count(*) from investment i where i.investor_id = investor.id and i.tenant_id = investor.tenant_id)`;
+    // Contratos por aba, com os mesmos filtros de busca/status/carteira (antes de aplicar a aba).
+    const [tabCounts] = await tx.select({
+      ativos: sql<string>`coalesce(sum(${openOf}), 0)`, liquidados: sql<string>`coalesce(sum(${closedOf}), 0)`, todos: sql<string>`coalesce(sum(${totalOf}), 0)`,
+    }).from(investors).where(and(...conditions));
+    if (filters.situacao === "ativos") conditions.push(sql`(${openOf} > 0 or ${totalOf} = 0)`);
+    if (filters.situacao === "liquidados") conditions.push(sql`${closedOf} > 0`);
     const where = and(...conditions);
     const [{ total }] = await tx.select({ total: count() }).from(investors).where(where);
     const pages = Math.max(Math.ceil(total / INVESTORS_PAGE_SIZE), 1);
@@ -51,7 +61,12 @@ export async function loadInvestorsPage(search: Search) {
       investor: investors,
       tenantName: tenants.name,
       // Nome qualificado à mão: dentro de sql`` o Drizzle não qualifica colunas de outras tabelas.
-      investmentCount: sql<string>`(select count(*) from investment i where i.investor_id = investor.id and i.tenant_id = investor.tenant_id)`,
+      investmentCount: sql<string>`${totalOf}`,
+      openCount: sql<string>`${openOf}`,
+      closedCount: sql<string>`${closedOf}`,
+      // Contratos liquidados (histórico) para abrir direto da aba Liquidados.
+      // Data: a da linha "Liquidação antecipada" do cronograma; sem ela (encerrado manualmente/renovado), a última alteração.
+      closedInvestments: sql<{ id: string; amountCents: number; closedOn: string }[]>`(select coalesce(json_agg(x order by x."closedOn" desc), '[]'::json) from (select i.id, i.amount_cents as "amountCents", coalesce((select max(s.due_date) from investment_schedule_item s where s.investment_id = i.id and s.tenant_id = i.tenant_id and s.description = 'Liquidação antecipada'), (i.updated_at at time zone 'America/Sao_Paulo')::date)::text as "closedOn" from investment i where i.investor_id = investor.id and i.tenant_id = investor.tenant_id and i.status = 'CLOSED') x)`,
     }).from(investors).innerJoin(tenants, eq(tenants.id, investors.tenantId)).where(where)
       .orderBy(asc(investors.name), asc(investors.id)).limit(INVESTORS_PAGE_SIZE).offset((page - 1) * INVESTORS_PAGE_SIZE);
 
@@ -72,16 +87,18 @@ export async function loadInvestorsPage(search: Search) {
       ownTenantId: scope.tenantId,
       today,
       tenants: tenantsList,
-      filters: { q: filters.q, status: filters.status, carteira },
+      filters: { q: filters.q, status: filters.status, carteira, situacao: filters.situacao },
+      situationCounts: { ativos: Number(tabCounts?.ativos ?? 0), liquidados: Number(tabCounts?.liquidados ?? 0), todos: Number(tabCounts?.todos ?? 0) },
       summary: summarizeInvestments(summaryRows.map((row) => ({
         ...row, status: row.status as InvestmentStatus, scheduledYieldCents: Number(row.scheduledYieldCents), paidYieldCents: Number(row.paidYieldCents), paidPrincipalCents: Number(row.paidPrincipalCents),
       })), today),
       upcoming: upcoming.map((row) => ({ ...row, maturityDate: row.maturityDate as string })),
       // A lista não leva dados bancários nem data de nascimento: só o que aparece nela.
-      investors: rows.map(({ investor, tenantName, investmentCount }) => ({
+      investors: rows.map(({ investor, tenantName, investmentCount, openCount, closedCount, closedInvestments }) => ({
         id: investor.id, name: investor.name, tradeName: investor.tradeName, personType: personTypeOf(investor), document: investor.document, phone: investor.phone, whatsapp: investor.whatsapp,
         email: investor.email, instagram: investor.instagram, facebook: investor.facebook, status: investor.status as InvestorStatus, createdAt: investor.createdAt.toISOString(),
-        tenantName, investmentCount: Number(investmentCount),
+        tenantName, investmentCount: Number(investmentCount), openCount: Number(openCount), closedCount: Number(closedCount),
+        closedInvestments: (closedInvestments ?? []).map((item) => ({ id: item.id, amountCents: Number(item.amountCents), closedOn: String(item.closedOn).slice(0, 10) })),
       })),
       matched: total,
       page,
