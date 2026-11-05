@@ -26,7 +26,7 @@ import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
+import { allocationOrderFor, BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -963,7 +963,7 @@ export async function settleOperationEarlyAction(data: FormData): Promise<Action
       return { ok: false, error: `O valor negociado precisa cobrir ao menos o principal que ainda não voltou (${formatMoney(prior.principalRemainingCents)}). Desconto sobre o principal não é tratado aqui.` };
     }
     const paymentId = id("pay");
-    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes: notes ?? "Liquidação antecipada", paymentMode: "EARLY_SETTLEMENT", allocationOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST" });
+    await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes: notes ?? "Liquidação antecipada", paymentMode: "EARLY_SETTLEMENT", allocationOrder: allocationOrderFor({ modality: operation.modality === "INSTALLMENT" ? "INSTALLMENT" : "SINGLE", paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST" }) });
     const discountCents = prior.balanceCents - amountCents;
     await tx.update(loanOperations).set({
       status: "PAID", settledAt: paidAt, settlementPaymentId: paymentId, settlementBalanceCents: prior.balanceCents, settlementDiscountCents: discountCents,
