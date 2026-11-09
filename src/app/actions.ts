@@ -10,7 +10,8 @@ import { respondToOffer } from "@/lib/credit/acceptance";
 import { evaluateProposal, type EnginePolicy } from "@/lib/credit/engine";
 import { cpfsWithOperations, openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
-import { creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
+import { PROPOSAL_DOCUMENT_KINDS } from "@/lib/credit/documents";
+import { creditProposalDocuments, creditProposalReviews, proposalLinks, creditProposals, creditPolicies, operationRequests, capitalMovements, clientDocuments, investmentPriorContributions, investors, clients, installmentDeferrals, loanOperationRevisions, loanOperations, loanRenewals, paymentRevisions, payments, tenants, walletCycles, wallets } from "@/lib/db/schema";
 import { normalizeEmail, normalizeSocial } from "@/lib/contacts";
 import { bankFields, bankKeys } from "@/lib/bank-account";
 import { brazilianStates, clientProfileKeys, type ClientProfile } from "@/lib/finance/client-profile";
@@ -388,6 +389,22 @@ export async function saveProposalReviewAction(proposalId: string, checks: Recor
       .onConflictDoUpdate({ target: [creditProposalReviews.proposalId, creditProposalReviews.phase], set: values });
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REVIEWED", proposal.id, `Proposta de ${proposal.applicantName}: conferência da fase ${proposal.phase} ${completed ? "concluída" : "salva incompleta"}.`, { phase: proposal.phase, checks: marked, note: observation, completed });
     return { ok: true, message: completed ? "Conferência concluída. Já pode avançar a fase." : "Conferência salva. Faltam itens para avançar." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// O dono leva para a fase 1 uma proposta que o cliente deixou em preenchimento pelo link (mesma regra do portal: os 4 documentos precisam estar anexados).
+export async function submitDraftProposalAction(proposalId: string): Promise<ActionResult> {
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, proposalId), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.status !== "DRAFT") return { ok: false, error: "Esta proposta já foi enviada para a esteira." };
+    const docs = await tx.select({ kind: creditProposalDocuments.kind }).from(creditProposalDocuments).where(and(eq(creditProposalDocuments.proposalId, proposal.id), eq(creditProposalDocuments.tenantId, tenantId)));
+    if (PROPOSAL_DOCUMENT_KINDS.some((kind) => !docs.some((doc) => doc.kind === kind))) return { ok: false, error: "Faltam documentos obrigatórios. O cliente precisa anexá-los pelo link." };
+    await tx.update(creditProposals).set({ status: "OPEN", phase: "RECEIVED", phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposal.id, `Proposta de ${proposal.applicantName} (enviada pelo link) levada à fase "Proposta recebida" pelo dono.`, { phase: "RECEIVED", via: "OWNER_FROM_DRAFT" });
+    return { ok: true, message: `Proposta de ${proposal.applicantName} enviada para a fase "Proposta recebida".` };
   });
   if (result.ok) revalidatePath("/");
   return result;

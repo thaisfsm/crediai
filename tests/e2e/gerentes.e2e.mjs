@@ -661,10 +661,20 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   await draftView.goto(`${BASE}/?tela=esteira-de-credito`);
   const drafts = draftView.getByRole("region", { name: "Propostas em preenchimento" });
   await drafts.getByText("Joana Fictícia Teste").waitFor();
-  assert.match(await drafts.innerText(), /falta só tocar em "Enviar proposta"/);
+  assert.match(await drafts.innerText(), /Falta só enviar para a esteira/);
   assert.equal(await draftView.getByRole("region", { name: "Proposta recebida" }).getByText("Joana Fictícia Teste").count(), 0, "rascunho não entra na fase 1");
   if (SHOTS) await draftView.screenshot({ path: `${SHOTS}/dono-esteira-em-preenchimento.png`, fullPage: true });
+  // O dono não precisa esperar o cliente: botão leva o rascunho completo para a fase 1 (e um rascunho incompleto não tem botão nem passa no servidor).
+  const draftId = await one(`select id from credit_proposal where source='APPLICANT'`);
+  assert.equal((await actionArgs(await apiLogin("fernando@teste.local"), "submitDraftProposalAction", [draftId])).result?.ok, false, "outra carteira não promove rascunho alheio");
+  assert.equal(await one(`select status from credit_proposal where id='${draftId}'`), "DRAFT");
+  await draftView.getByRole("button", { name: "Enviar para a esteira" }).click();
+  await draftView.getByRole("region", { name: "Proposta recebida" }).getByText("Joana Fictícia Teste").waitFor();
+  assert.equal(await one(`select status||'/'||phase from credit_proposal where id='${draftId}'`), "OPEN/RECEIVED");
+  assert.equal((await actionArgs(ownerCookie, "submitDraftProposalAction", [draftId])).result?.ok, false, "não promove duas vezes");
   await draftView.context().close();
+  // Volta ao estado de rascunho para seguir o fluxo do cliente abaixo.
+  await admin(`update credit_proposal set status='DRAFT' where id='${draftId}'`);
   const ownerHtml = await (await get(ownerCookie, "/?tela=esteira-de-credito")).text();
   const otherHtml = await (await get(await apiLogin("fernando@teste.local"), "/?tela=esteira-de-credito")).text();
   assert.equal(ownerHtml.includes("Joana Fictícia Teste") && otherHtml.includes("Esteira") , true, "páginas carregadas");
