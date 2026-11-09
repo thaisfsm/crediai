@@ -1320,6 +1320,7 @@ button { color:inherit; }
 .pipeline-column small { color: var(--muted, #8fa6b8); font-size: 11px; }
 .pipeline-step { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 999px; background: rgba(66,224,208,.16); color: #42e0d0; font-size: 12px; font-weight: 700; }
 .pipeline-card { display: grid; gap: 4px; padding: 11px; border: 1px solid rgba(124,184,213,.16); border-radius: 12px; background: rgba(7,17,27,.7); font-size: 13px; }
+.pipeline-drafts { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .pipeline-docs { display: grid; gap: 2px; font-size: 11px; }
 .pipeline-docs a { color: #42e0d0; }
 .pipeline-review { display: grid; gap: 6px; margin: 6px 0 0; padding: 8px 10px; border: 1px solid rgba(66,224,208,.22); border-radius: 10px; }

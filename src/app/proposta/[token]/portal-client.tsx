@@ -9,6 +9,26 @@ import { MoneyInput } from "@/app/money-input";
 import { loginApplicantAction, logoutApplicantAction, registerApplicantAction, saveProposalDraftAction, submitProposalAction, respondToOfferAction, uploadProposalDocumentAction } from "./actions";
 
 type Result = { ok: true; message: string } | { ok: false; error: string };
+
+// Foto de celular costuma passar de 4 MB (limite do envio). Imagens grandes são reduzidas no próprio aparelho antes de subir.
+const UPLOAD_LIMIT = 4 * 1024 * 1024;
+const SHRINK_ABOVE = 1.5 * 1024 * 1024;
+async function shrinkImage(file: File): Promise<File> {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= SHRINK_ABOVE) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    for (const [side, quality] of [[2000, 0.82], [1600, 0.72], [1200, 0.65]] as const) {
+      const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (blob && blob.size <= UPLOAD_LIMIT - 64 * 1024) return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+    }
+  } catch { /* navegador sem suporte: tenta enviar o original */ }
+  return file;
+}
 type Offer = { cents: number; termMonths: number; rateBps: number; interestCents: number; totalCents: number; installmentCents: number; acceptedAt: string | null };
 type Proposal = { offer: Offer | null; status: string; phaseLabel: string; decisionNote: string | null; values: { name: string; cpf: string; phone: string; requested: string; income: string; termMonths: string }; documents: { kind: string; fileName: string }[] } | null;
 
@@ -136,15 +156,25 @@ export function PortalClient({ token, tenantName, applicant, proposal }: { token
             const file = event.currentTarget.files?.[0];
             event.currentTarget.value = "";
             if (!file) return;
-            const data = new FormData();
-            data.set("kind", doc.kind);
-            data.set("file", file);
-            void run(() => uploadProposalDocumentAction(token, data));
+            void run(async () => {
+              const ready = await shrinkImage(file);
+              if (ready.size > UPLOAD_LIMIT) return { ok: false, error: `"${doc.label}": o arquivo tem mais de 4 MB. Tire uma foto do documento ou envie um PDF menor.` };
+              const data = new FormData();
+              data.set("kind", doc.kind);
+              data.set("file", ready);
+              try {
+                const result = await uploadProposalDocumentAction(token, data);
+                return result.ok ? { ok: true, message: `${doc.label}: recebido.` } : result;
+              } catch {
+                return { ok: false, error: `Não foi possível enviar "${doc.label}". Verifique a internet e tente de novo; se continuar, tire uma foto do documento.` };
+              }
+            });
           }} />
         </li>
       ))}</ul>
       <h2>Passo 3 de 3: enviar</h2>
-      <button className="auth-submit auth-submit-login" disabled={busy || !allDocs} onClick={() => void run(() => submitProposalAction(token))}>{allDocs ? "Enviar proposta" : "Envie os 4 documentos para continuar"}<span>→</span></button>
+      {!allDocs && <p className="auth-error" role="status">Sua proposta ainda NÃO foi enviada. Faltam {PROPOSAL_DOCUMENTS.filter((doc) => !have.has(doc.kind)).length} documento(s).</p>}
+      <button className="auth-submit auth-submit-login" disabled={busy || !allDocs} onClick={() => void run(() => submitProposalAction(token))}>{busy ? "Aguarde…" : allDocs ? "Enviar proposta" : "Envie os 4 documentos para continuar"}<span>→</span></button>
     </>}
     {note}
     {logout}
