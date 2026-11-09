@@ -723,6 +723,7 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   await page2.getByRole("button", { name: "Sim, aceitar" }).click();
   await page2.getByText(/Oferta aceita em/).waitFor();
   assert.equal(await one(`select accepted_via from credit_proposal where id='${portalProposal}'`), "APPLICANT");
+  assert.equal(await one(`select count(*) from client where tenant_id='ten_roberio' and document='52998224725'`), 1, "CPF já cadastrado: usa o cliente existente, sem duplicar");
   assert.equal(await one(`select count(*) from admin_audit_log where action='CREDIT_PROPOSAL_ACCEPTED'`), 1, "aceite auditado");
   // Já aceita: o dono não volta nem reprova, e nada de capital ou contrato foi criado.
   assert.match(String((await actionArgs(ownerCookie, "moveCreditProposalAction", [portalProposal, "back"])).result?.error), /já aceitou/);
@@ -895,6 +896,20 @@ test("G19. fase 7 (aceite do cliente): o dono registra o aceite de proposta pró
   assert.equal((await accept()).result?.ok, true);
   assert.equal(await one(`select accepted_via from credit_proposal where id='${proposalId}'`), "OWNER");
   assert.equal((await accept()).result?.ok, false, "só uma vez");
+  // Cliente novo (CPF ainda não cadastrado): o aceite cadastra o cliente sozinho, com os dados da proposta, sem contrato nem capital.
+  const capitalBefore = await one(`select count(*) from capital_movement where tenant_id='ten_roberio'`);
+  const opsBefore = await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`);
+  assert.equal((await action(ownerCookie, "createCreditProposalAction", { applicantName: "Gina Nova Teste", cpf: "168.995.350-09", phone: "(11) 91234-5678", email: "gina@ficticio.local", requested: "1.000,00", termMonths: "2" }, "/")).result?.ok, true);
+  const ginaId = await one(`select id from credit_proposal where cpf='16899535009'`);
+  await admin(`update credit_proposal set phase='ACCEPTANCE', offer_cents=100000, offer_term_months=2, offer_rate_bps=3000, offered_at=now() where id='${ginaId}'`);
+  assert.equal(await one(`select count(*) from client where document='16899535009'`), 0, "ainda não cadastrada antes do aceite");
+  assert.equal((await actionArgs(ownerCookie, "registerOfferAcceptanceAction", [ginaId])).result?.ok, true);
+  assert.equal(await one(`select name||'|'||phone||'|'||email||'|'||tenant_id from client where document='16899535009'`), "Gina Nova Teste|11912345678|gina@ficticio.local|ten_roberio");
+  assert.equal(await one(`select count(*) from client where tenant_id='ten_fernando' and document='16899535009'`), 0, "só na carteira do dono");
+  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore, "não cria contrato");
+  assert.equal(await one(`select count(*) from capital_movement where tenant_id='ten_roberio'`), capitalBefore, "não mexe no capital");
+  await admin(`delete from credit_proposal where id='${ginaId}'`);
+  await admin(`delete from client where document='16899535009'`);
   assert.equal((await actionArgs(await apiLogin(EMAIL, NEW_PASSWORD), "registerOfferAcceptanceAction", [proposalId])).result?.ok === true, false, "a gerente não alcança");
   // Regra do banco: aceite sem oferta é impossível.
   await assert.rejects(admin(`update credit_proposal set accepted_at=now(), accepted_via='OWNER', offer_cents=null, offer_term_months=null, offer_rate_bps=null, offered_at=null where id='${proposalId}'`));
