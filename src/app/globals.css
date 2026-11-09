@@ -1329,8 +1329,10 @@ button { color:inherit; }
 .pipeline-rule { display: block; font-size: 11px; line-height: 1.4; }
 .pipeline-rule-pass strong { color: #7ee2a8; }
 .pipeline-rule-fail strong { color: #ff8a8a; }
-.pipeline-offer-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.pipeline-offer-fields label { display: grid; gap: 2px; font-size: 11px; }
+.pipeline-offer-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.pipeline-offer-fields label { display: grid; gap: 2px; min-width: 0; font-size: 11px; }
+.pipeline-offer-fields label:nth-child(3) { grid-column: 1 / -1; }
+.pipeline-offer-fields input { width: 100%; min-width: 0; box-sizing: border-box; }
 .proposal-offer dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 8px 0 12px; }
 .proposal-offer dt { color: #8fa6ad; font-size: 13px; }
 .proposal-offer dd { margin: 0; font-weight: 600; text-align: right; }
