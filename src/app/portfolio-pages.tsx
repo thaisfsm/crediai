@@ -2025,6 +2025,25 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
           </div>
         ) : <div className="pipeline-actions"><button className="primary-button" disabled={busy} onClick={() => void run(() => manageProposalLinkAction("create"))}>Gerar link de proposta</button></div>}
       </section>
+      {portfolio.draftProposals.length > 0 && (
+        <section className="panel form-panel" aria-label="Propostas em preenchimento">
+          <div className="panel-header"><div><h2>Em preenchimento pelo link ({portfolio.draftProposals.length})</h2><p>O cliente começou pelo link mas ainda não enviou. A proposta só entra na fase 1 quando ele anexar os 4 documentos e tocar em &quot;Enviar proposta&quot;.</p></div></div>
+          <div className="pipeline-drafts">
+            {portfolio.draftProposals.map((draft) => {
+              const missing = PROPOSAL_DOCUMENTS.filter((doc) => !draft.documentKinds.includes(doc.kind));
+              return (
+                <article className="pipeline-card" key={draft.id}>
+                  <strong>{draft.applicantName}</strong>
+                  <span>{formatMoney(draft.requestedCents)} em {draft.termMonths} {draft.termMonths === 1 ? "mês" : "meses"}</span>
+                  {(draft.phone || draft.email) && <span>{[draft.phone ? maskPhone(draft.phone) : null, draft.email].filter(Boolean).join(" · ")}</span>}
+                  <small>Começou em {formatDateTime(draft.createdAt)}</small>
+                  <small className="pipeline-indicator">{missing.length === 0 ? "Documentos completos: falta só tocar em \"Enviar proposta\"." : `Faltam ${missing.length} de ${PROPOSAL_DOCUMENTS.length} documentos: ${missing.map((doc) => doc.label).join("; ")}.`}</small>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <section className="panel form-panel" aria-label="Nova proposta">
         <div className="panel-header"><div><h2>Nova proposta</h2><p>Cadastro manual: entra direto na fase "Proposta recebida". O cliente também pode enviar pelo link acima.</p></div></div>
         <form className="form-grid form-grid-inline" onSubmit={onSubmit}>

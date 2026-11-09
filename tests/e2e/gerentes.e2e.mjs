@@ -5,6 +5,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
 import postgres from "postgres";
+import zlib from "node:zlib";
 
 const BASE = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(BASE)) throw new Error("Teste destrutivo: só roda em localhost.");
@@ -64,6 +65,15 @@ async function actionArgs(cookie, name, args, path = "/") {
   const response = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual", headers: { cookie, "next-action": actionId(name), accept: "text/x-component", origin: BASE, "content-type": "text/plain;charset=UTF-8" }, body: JSON.stringify(args) });
   const result = (await response.text()).match(/^1:(\{.*\})$/m)?.[1];
   return { status: response.status, result: result ? JSON.parse(result) : null };
+}
+// PNG sem compressão com ruído (não encolhe): simula foto de celular grande.
+function noisePng(width, height) {
+  const chunk = (type, data) => { const out = Buffer.alloc(12 + data.length); out.writeUInt32BE(data.length, 0); out.write(type, 4, "ascii"); data.copy(out, 8); out.writeUInt32BE(zlib.crc32(out.subarray(4, 8 + data.length)), 8 + data.length); return out; };
+  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761 >>> 13) & 0xff;
+  for (let y = 0; y < height; y++) raw[y * (width * 3 + 1)] = 0;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", zlib.deflateSync(raw, { level: 0 })), chunk("IEND", Buffer.alloc(0))]);
 }
 const get = (cookie, path) => fetch(`${BASE}${path}`, { redirect: "manual", headers: { cookie } });
 const poll = async (query, expected) => { for (let i = 0; i < 60; i++) { if (String(await one(query)) === String(expected)) return; await sleep(250); } assert.equal(String(await one(query)), String(expected)); };
@@ -634,15 +644,31 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   // Arquivo que não é PDF/imagem é recusado; PDFs válidos entram um a um.
   await page.getByLabel("Comprovante de residência").setInputFiles({ name: "x.txt", mimeType: "text/plain", buffer: Buffer.from("texto") });
   await page.getByText(/Envie um PDF ou uma imagem/).waitFor();
+  await page.getByText(/ainda NÃO foi enviada/).waitFor();
+  // Foto de celular com mais de 4 MB (caso da Patricia): o navegador reduz antes de enviar e o documento entra.
+  const bigPhoto = noisePng(1300, 1300);
+  assert.equal(bigPhoto.length > 4 * 1024 * 1024, true, "foto de teste maior que o limite");
   const labels = ["Documento de identidade (RG ou CNH)", "Comprovante de residência", "Extrato bancário (últimos 3 meses)", "Holerite (último)"];
   for (const [index, label] of labels.entries()) {
-    await page.getByLabel(label).setInputFiles(pdf(`doc${index}.pdf`));
+    await page.getByLabel(label).setInputFiles(index === 0 ? { name: "rg-celular.png", mimeType: "image/png", buffer: bigPhoto } : pdf(`doc${index}.pdf`));
     await poll(`select count(*) from credit_proposal_document`, index + 1);
     if (index < 3) assert.equal(await page.getByRole("button", { name: /Envie os 4 documentos/ }).isDisabled(), true);
   }
+  assert.equal(await one(`select content_type||'/'||(size_bytes < 4194304) from credit_proposal_document where kind='ID_DOCUMENT'`), "image/jpeg/true", "foto reduzida para JPEG abaixo do limite");
   await page.getByRole("button", { name: "Enviar proposta" }).waitFor();
-  const board = await get(ownerCookie, "/");
-  assert.equal(String(await board.text()).includes("Joana Fictícia Teste"), false, "rascunho não aparece na esteira");
+  // Rascunho: fora das fases, mas o dono vê em "Em preenchimento pelo link" o que falta; outra carteira não vê nada.
+  const draftView = await signIn("roberio@teste.local", PASSWORD, { width: 1600, height: 1000 });
+  await draftView.goto(`${BASE}/?tela=esteira-de-credito`);
+  const drafts = draftView.getByRole("region", { name: "Propostas em preenchimento" });
+  await drafts.getByText("Joana Fictícia Teste").waitFor();
+  assert.match(await drafts.innerText(), /falta só tocar em "Enviar proposta"/);
+  assert.equal(await draftView.getByRole("region", { name: "Proposta recebida" }).getByText("Joana Fictícia Teste").count(), 0, "rascunho não entra na fase 1");
+  if (SHOTS) await draftView.screenshot({ path: `${SHOTS}/dono-esteira-em-preenchimento.png`, fullPage: true });
+  await draftView.context().close();
+  const ownerHtml = await (await get(ownerCookie, "/?tela=esteira-de-credito")).text();
+  const otherHtml = await (await get(await apiLogin("fernando@teste.local"), "/?tela=esteira-de-credito")).text();
+  assert.equal(ownerHtml.includes("Joana Fictícia Teste") && otherHtml.includes("Esteira") , true, "páginas carregadas");
+  assert.equal(otherHtml.includes("Joana Fictícia Teste") || otherHtml.includes("joana@ficticio.local"), false, "outra carteira não vê o rascunho");
   await page.getByRole("button", { name: "Enviar proposta" }).click();
   await page.getByText(/Proposta enviada/).first().waitFor();
   assert.equal(await one(`select status||'/'||phase from credit_proposal where source='APPLICANT'`), "OPEN/RECEIVED");

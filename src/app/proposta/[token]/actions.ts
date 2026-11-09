@@ -86,7 +86,7 @@ export async function saveProposalDraftAction(token: string, data: FormData): Pr
     if (current && current.status !== "DRAFT") return { ok: false, error: "Sua proposta já foi enviada e está em análise." };
     if (current) await tx.update(creditProposals).set(values).where(eq(creditProposals.id, current.id));
     else await tx.insert(creditProposals).values({ id: newId("prp"), tenantId, source: "APPLICANT", applicantId: applicant.id, status: "DRAFT", ...values });
-    return { ok: true, message: "Dados salvos. Agora envie os documentos." };
+    return { ok: true, message: "Dados salvos. Sua proposta ainda não foi enviada: anexe os 4 documentos abaixo e toque em Enviar proposta." };
   });
   if (result?.ok) revalidatePath(`/proposta/${token}`);
   return result ?? { ok: false, error: LINK_ERROR };

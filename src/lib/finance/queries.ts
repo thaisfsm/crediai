@@ -100,8 +100,14 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .from(creditProposalDocuments).where(and(eq(creditProposalDocuments.tenantId, tenantId), inArray(creditProposalDocuments.proposalId, proposalRows.map((row) => row.id))));
     const proposalReviewRows = scope || proposalRows.length === 0 ? [] : await tx.select().from(creditProposalReviews)
       .where(and(eq(creditProposalReviews.tenantId, tenantId), inArray(creditProposalReviews.proposalId, proposalRows.map((row) => row.id))));
+    // Propostas que o cliente começou pelo link e ainda não enviou (rascunho): só o dono vê, para saber quem travou e em que passo.
+    const draftRows = scope ? [] : await tx.select({ id: creditProposals.id, applicantName: creditProposals.applicantName, email: creditProposals.email, phone: creditProposals.phone,
+      requestedCents: creditProposals.requestedCents, termMonths: creditProposals.termMonths, createdAt: creditProposals.createdAt })
+      .from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.status, "DRAFT"))).orderBy(desc(creditProposals.createdAt)).limit(100);
+    const draftDocumentRows = draftRows.length === 0 ? [] : await tx.select({ proposalId: creditProposalDocuments.proposalId, kind: creditProposalDocuments.kind })
+      .from(creditProposalDocuments).where(and(eq(creditProposalDocuments.tenantId, tenantId), inArray(creditProposalDocuments.proposalId, draftRows.map((row) => row.id))));
     const [linkRow] = scope ? [] : await tx.select({ token: proposalLinks.token, enabled: proposalLinks.enabled }).from(proposalLinks).where(eq(proposalLinks.tenantId, tenantId));
-    return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, knownCpfs, proposalRows, proposalDocumentRows, proposalReviewRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, knownCpfs, proposalRows, proposalDocumentRows, proposalReviewRows, draftRows, draftDocumentRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 // Quanto ainda cabe de principal a desembolsar: o mesmo cálculo da trava da Nova operação (máximo da política menos o principal emprestado da carteira toda).
@@ -192,6 +198,10 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null, minContractCents: data.policyRow?.minContractCents ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0, !data.knownCpfs.has(row.cpf.replace(/\D/g, ""))),
       installmentCents: row.negotiatedInstallmentCents, acceptedAt: row.acceptedAt?.toISOString() ?? null, acceptedVia: row.acceptedVia,
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
+    })),
+    draftProposals: data.draftRows.map((row) => ({
+      id: row.id, applicantName: row.applicantName, email: row.email, phone: row.phone, requestedCents: row.requestedCents, termMonths: row.termMonths,
+      createdAt: row.createdAt.toISOString(), documentKinds: data.draftDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => doc.kind),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,
     // Gerentes de contas e quem responde por cada contrato: o gerente do contrato (transferido) ou, sem ele, o do cliente.
