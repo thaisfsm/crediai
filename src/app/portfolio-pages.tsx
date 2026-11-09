@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { transferOperationAction } from "./gerentes/actions";
-import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, saveCreditPolicyAction, completeMaxPrincipalReviewAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
+import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, submitDraftProposalAction, saveCreditPolicyAction, completeMaxPrincipalReviewAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
@@ -2037,7 +2037,8 @@ export function CreditPipelinePage({ portfolio, onChanged }: { portfolio: Tenant
                   <span>{formatMoney(draft.requestedCents)} em {draft.termMonths} {draft.termMonths === 1 ? "mês" : "meses"}</span>
                   {(draft.phone || draft.email) && <span>{[draft.phone ? maskPhone(draft.phone) : null, draft.email].filter(Boolean).join(" · ")}</span>}
                   <small>Começou em {formatDateTime(draft.createdAt)}</small>
-                  <small className="pipeline-indicator">{missing.length === 0 ? "Documentos completos: falta só tocar em \"Enviar proposta\"." : `Faltam ${missing.length} de ${PROPOSAL_DOCUMENTS.length} documentos: ${missing.map((doc) => doc.label).join("; ")}.`}</small>
+                  <small className="pipeline-indicator">{missing.length === 0 ? "Documentos completos. Falta só enviar para a esteira." : `Faltam ${missing.length} de ${PROPOSAL_DOCUMENTS.length} documentos: ${missing.map((doc) => doc.label).join("; ")}.`}</small>
+                  {missing.length === 0 && <div className="pipeline-actions"><button className="primary-button" disabled={busy} onClick={() => void run(() => submitDraftProposalAction(draft.id))}>Enviar para a esteira</button></div>}
                 </article>
               );
             })}
