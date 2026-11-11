@@ -105,6 +105,7 @@ test("U5. Investidores pelo menu: cadastro pelo formulário, ficha, novo investi
   await page.waitForURL(/\/investidores\/inv_/);
   await page.getByRole("link", { name: "@navegador" }).waitFor();
   await page.getByRole("button", { name: /Novo investimento/ }).click();
+  await page.getByRole("heading", { name: "Novo investimento" }).waitFor();
   await page.locator('input[name="amount"]').fill("20.000,00");
   await page.locator('input[name="rate"]').fill("2");
   await page.locator('select[name="ratePeriod"]').selectOption("MONTHLY");
@@ -118,6 +119,26 @@ test("U5. Investidores pelo menu: cadastro pelo formulário, ficha, novo investi
   await page.getByRole("button", { name: /Enviar documento/ }).click();
   await page.getByRole("link", { name: "Visualizar" }).waitFor({ timeout: 15_000 });
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/desktop-investimento.png`, fullPage: true });
+  await context.close();
+});
+
+test("U5b. celular: Novo investimento abre o formulário à vista (abaixo da lista, sem ficar escondido no fim da página)", async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await signIn(context, "roberio@teste.local");
+  await page.goto(`${BASE}/investidores/${await one(`select id from investor where name='Investidor pelo Navegador'`)}`);
+  await page.getByRole("heading", { name: "Investimentos", exact: true }).waitFor();
+  const before = await page.locator("section").count();
+  await page.getByRole("button", { name: /Novo investimento/ }).click();
+  await page.getByRole("heading", { name: "Novo investimento" }).waitFor();
+  assert.equal(await page.locator("section").count(), before + 1, "o formulário abriu");
+  // O formulário fica logo abaixo da lista de investimentos (antes dos documentos) e a tela rola até ele.
+  const order = await page.evaluate(() => { const form = document.querySelector('section[aria-label="Novo investimento"]'), docs = document.querySelector('section[aria-label="Documentos dos investimentos"]'); return !!form && !!docs && !!(form.compareDocumentPosition(docs) & Node.DOCUMENT_POSITION_FOLLOWING); });
+  assert.equal(order, true, "formulário antes da seção de documentos");
+  await page.waitForFunction(() => { const r = document.querySelector('input[name="amount"]')?.getBoundingClientRect(); return !!r && r.top >= 0 && r.bottom <= innerHeight; }, null, { timeout: 8000 });
+  await page.locator('input[name="amount"]').fill("1.000,00");
+  await page.locator('input[name="rate"]').fill("2");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, "sem rolagem lateral");
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/celular-novo-investimento.png` });
   await context.close();
 });
 
