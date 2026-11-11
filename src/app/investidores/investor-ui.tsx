@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { SOCIAL_NETWORKS, socialHref, socialLabel, whatsappHref, type SocialNetwork } from "@/lib/contacts";
 import { centsToInput, cnpjProblem, cpfCnpjProblem, cpfProblem, formatCpfCnpj, formatDate, formatMoney, formatPhone, isIsoDate, maskCnpj, maskCpf, maskCpfCnpj, maskPhone, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { addressLine } from "@/lib/investors/address";
@@ -406,6 +406,9 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [creating, setCreating] = useState(false);
+  // O formulário abre logo abaixo da lista de investimentos e a tela rola até ele (antes ficava no fim da página, fora de vista).
+  const creationRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (creating) creationRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [creating]);
   const { investor, investments } = data;
   const activeCents = investments.filter((item) => item.status === "ACTIVE").reduce((total, item) => total + item.amountCents, 0);
   const whatsapp = whatsappHref(investor.whatsapp);
@@ -465,6 +468,7 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
           </table></div>
         )}
       </section>
+      {creating && <div ref={creationRef}><InvestmentForm investorId={investor.id} today={today} accounts={data.bankAccounts} onDone={() => { setCreating(false); router.refresh(); }} onCancel={() => setCreating(false)} /></div>}
       <section className="panel form-panel" aria-label="Documentos dos investimentos">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Documentos dos investimentos</h2><span className="today-count">{data.documents.length}</span></div><p>Versões vigentes. Cada documento pertence a um investimento: envie ou substitua na página do investimento.</p></div></div>
         {data.documents.length === 0 ? <EmptyPanel icon="file" text="Nenhum documento enviado nos investimentos deste investidor." /> : (
@@ -483,7 +487,6 @@ export function InvestorDetailView({ data, today }: { data: InvestorDetail; toda
           })}</ul>
         )}
       </section>
-      {creating && <InvestmentForm investorId={investor.id} today={today} accounts={data.bankAccounts} onDone={() => { setCreating(false); router.refresh(); }} onCancel={() => setCreating(false)} />}
     </div>
   );
 }
