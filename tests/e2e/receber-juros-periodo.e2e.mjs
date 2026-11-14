@@ -109,7 +109,7 @@ test("RE2. pagar o 1º período (vencido) grava só ele: 100% juros, principal i
   const capitalBefore = Number(await one(`select coalesce(sum(amount_cents),0) from payment where operation_id = '${opP}'`));
   const result = await pay(opP, { amount: "100,00", period: "1" });
   assert.equal(result?.ok, true, JSON.stringify(result));
-  assert.match(result.message, /1º período: R\$\s?100,00 recebidos como juros\. Principal mantido em R\$\s?5\.000,00/);
+  assert.match(result.message, /1º período: (Juros \/ Renovação: )?R\$\s?100,00 recebidos como juros\. Principal mantido em R\$\s?5\.000,00/);
   assert.deepEqual((await periodsRows(opP)).map((r) => [r.p, r.a, r.m, r.o]), [[1, 10000, "INTEREST_ONLY_RENEWAL", "PRINCIPAL_FIRST"]]);
   assert.deepEqual((await admin(`select period_number::int n, previous_due_date::text a, new_due_date::text b from loan_renewal where operation_id = '${opP}'`)).map((r) => [r.n, r.a, r.b]),
     [[2, day(-70), (await admin(`select (date '${day(-70)}' + interval '1 month')::date::text d`))[0].d]], "uma renovação, vencimento pelo calendário");
@@ -166,9 +166,10 @@ test("RE5. tela: lista de períodos com situação própria; escolher o 1º per�
     const table = panel.locator(".interest-periods table");
     const snapshot = async () => table.locator("tbody tr").evaluateAll((rows) => rows.map((r) => [r.dataset.period, r.dataset.status, r.querySelector("td:nth-child(3)")?.textContent, r.querySelector("td:nth-child(4)")?.textContent]));
     const before = await snapshot();
-    assert.equal(before.length, 3, "1º e 2º pagos e renovados + o 3º (vencido); nenhum período futuro");
-    assert.equal(before.find((r) => r[0] === "3")[1], "OVERDUE");
-    assert.match(await panel.getByRole("button", { name: /^Saldo total/ }).innerText(), /R\$\s?5\.100,00/, "principal + juros vencidos, sem juros futuros");
+    // Desktop: 1º e 2º pagos e renovados + o 3º (vencido), nenhum período futuro. Celular: depois do 3º pago no desktop, nasce o 4º.
+    assert.equal(before.length, tag === "desktop" ? 3 : 4, "nenhum período além do seguinte ao último pago");
+    assert.equal(before.find((r) => r[0] === "3")[1], tag === "desktop" ? "OVERDUE" : "PAID_RENEWED");
+    assert.match(await panel.getByRole("button", { name: /^Saldo total/ }).innerText(), /R\$\s?5\.100,00/, "principal + juros do período em aberto, sem juros futuros");
     assert.equal(before.find((r) => r[0] === "1")[1] === "OVERDUE" || before.find((r) => r[0] === "1")[1] === "PAID_RENEWED", true);
     assert.equal(before.find((r) => r[0] === "2")[1], "PAID_RENEWED", "2º já pago e renovado (RE2)");
     if (SHOTS) await panel.screenshot({ path: `${SHOTS}/lista-periodos-${tag}.png` });
@@ -186,7 +187,7 @@ test("RE5. tela: lista de períodos com situação própria; escolher o 1º per�
       assert.equal(preview["Principal depois"], "R$ 5.000,00");
       if (SHOTS) await panel.screenshot({ path: `${SHOTS}/confirmacao-periodo-${tag}.png` });
       await panel.locator("form").getByRole("button", { name: "Confirmar recebimento e renovar" }).click();
-      await panel.getByText(new RegExp(`${number}º período: R\\$\\s?100,00 recebidos como juros`)).waitFor({ timeout: 15_000 });
+      await panel.getByText(new RegExp(`${number}º período: (Juros / Renovação: )?R\\$\\s?100,00 recebidos como juros`)).waitFor({ timeout: 15_000 });
       await page.waitForTimeout(800);
       const after = await snapshot();
       for (const row of before) {
