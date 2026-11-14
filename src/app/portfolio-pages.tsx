@@ -1487,7 +1487,9 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
                   <tr key={item.number} data-period={item.number} data-status={item.status} className={period === item.number ? "row-selected" : undefined}>
                     <td>{item.number}º período</td><td>{formatDate(item.dueDate)}</td><td>{formatMoney(item.interestCents)}</td><td>{formatMoney(item.paidCents)}</td>
                     <td><span className={`status-chip ${item.status === "OVERDUE" ? "status-late" : item.status === "DUE_TODAY" ? "status-due" : item.status === "PAID_RENEWED" ? "status-renewal" : item.status === "PAID" ? "status-paid" : "status-active"}`}><i />{periodStatusLabels[item.status]}</span></td>
-                    <td>{isOpen && item.remainingCents > 0 && operation.principalRemainingCents > 0
+                    <td>{isOpen && item.remainingCents > 0 && operation.principalRemainingCents > 0 && item.locked
+                      ? <span className="muted-cell" data-action="period-locked">Bloqueado até receber o {operation.pendingPeriods[0]?.number}º período</span>
+                      : isOpen && item.remainingCents > 0 && operation.principalRemainingCents > 0
                       ? <button type="button" className={period === item.number ? "primary-button" : "outline-button"} data-action="receive-period" aria-pressed={period === item.number} onClick={() => pickPeriod(item)}>Receber juros e renovar ({formatMoney(item.remainingCents)})</button>
                       : <span className="muted-cell">—</span>}</td>
                   </tr>

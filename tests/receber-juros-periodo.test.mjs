@@ -2,7 +2,7 @@
 // não quita nem altera os outros; juros simples contínuos; caso Tatiana com nove pagamentos.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { operationLedger, planPayment, CONTINUOUS_INTEREST_FROM } from "../src/lib/finance/rules.ts";
+import { operationLedger, planPayment } from "../src/lib/finance/rules.ts";
 
 const contract = (paymentOrder, extra = {}) => ({
   modality: "SINGLE", frequency: "MONTHLY", principalCents: 500000, interestRateBps: 200, interestCents: 10000, firstDueDate: "2023-05-01",
@@ -32,25 +32,24 @@ for (const order of ["PRINCIPAL_FIRST", "INTEREST_FIRST"]) {
   });
 }
 
-test("RP3. sem pagar, os períodos nascem um a um (juros simples) e ficam vencidos individualmente", () => {
+test("RP3. sem pagar, o 2º período não nasce enquanto o 1º estiver vencido (sequência, 14/11/2026)", () => {
   const s = start("PRINCIPAL_FIRST");
   const led = operationLedger(s.terms, s.payments, "2023-08-02");
-  assert.deepEqual(led.periodViews.map((p) => [p.number, p.dueDate, p.interestCents, p.status]),
-    [[1, "2023-05-01", 10000, "OVERDUE"], [2, "2023-06-01", 10000, "OVERDUE"], [3, "2023-07-01", 10000, "OVERDUE"], [4, "2023-08-01", 10000, "OVERDUE"], [5, "2023-09-01", 10000, "UPCOMING"]]);
-  assert.equal(led.interestRemainingCents, 50000); assert.equal(led.principalRemainingCents, 500000); assert.equal(led.renewalCount, 0);
+  assert.deepEqual(led.periodViews.map((p) => [p.number, p.dueDate, p.interestCents, p.status, p.locked]), [[1, "2023-05-01", 10000, "OVERDUE", false]]);
+  assert.equal(led.interestRemainingCents, 10000); assert.equal(led.principalRemainingCents, 500000); assert.equal(led.renewalCount, 0);
 });
 
-test("RP4/RP5. pagar o 3º período vencido não quita nem altera o 1º, 2º e 4º", () => {
-  let s = start("PRINCIPAL_FIRST");
-  const before = operationLedger(s.terms, s.payments, "2023-08-02").periodViews;
-  s = pay(s, "p3", 3, "2023-08-02");
+test("RP4/RP5. pagar o período vencido libera o seguinte pelo calendário do contrato, um de cada vez", () => {
+  let s = pay(start("PRINCIPAL_FIRST"), "p1", 1, "2023-08-02");
   assert.equal(s.error, undefined);
   assert.equal(s.plan.interestCents, 10000); assert.equal(s.plan.principalCents, 0);
-  const after = operationLedger(s.terms, s.payments, "2023-08-02").periodViews;
-  for (const n of [1, 2, 4]) assert.deepEqual(after.find((p) => p.number === n), before.find((p) => p.number === n), `período ${n} mudou`);
-  assert.equal(after[2].status, "PAID_RENEWED"); assert.deepEqual(after[2].paymentIds, ["p3"]);
-  assert.equal(operationLedger(s.terms, s.payments, "2023-08-02").interestRemainingCents, 40000);
-  assert.equal(operationLedger(s.terms, s.payments, "2023-08-02").principalRemainingCents, 500000);
+  assert.equal(s.plan.renewal.newDueDate, "2023-06-01");
+  assert.equal(status(s, "2023-08-02"), "1:PAID_RENEWED 2:OVERDUE");
+  s = pay(s, "p2", 2, "2023-08-02");
+  assert.equal(s.error, undefined);
+  assert.equal(status(s, "2023-08-02"), "1:PAID_RENEWED 2:PAID_RENEWED 3:OVERDUE");
+  const led = operationLedger(s.terms, s.payments, "2023-08-02");
+  assert.equal(led.interestRemainingCents, 10000); assert.equal(led.principalRemainingCents, 500000);
 });
 
 test("RP6. valor diferente dos juros do período e período já pago são recusados", () => {
@@ -70,27 +69,24 @@ test("RP7. renovar o período atual usa o calendário do contrato (dia âncora) 
   assert.equal(custom.nextDueDate, "2023-05-20");
 });
 
-test("RP8/RP9/RP10. juros simples contínuos sem capitalizar; pagamento manual e amortização respeitam o contrato", () => {
+test("RP8/RP9/RP10. sem capitalizar e sem juros futuros; pagamento manual e amortização respeitam o contrato", () => {
   const s = start("PRINCIPAL_FIRST");
   const led = operationLedger(s.terms, s.payments, "2023-07-15");
-  // 3 vencidos (05, 06, 07) = R$ 300 + o 4º período já aberto (vence 01/08) = R$ 400, tudo sobre o mesmo principal.
-  assert.equal(led.interestRemainingCents, 40000); assert.equal(led.principalRemainingCents, 500000);
-  assert.ok(led.periodViews.every((p) => p.interestCents === 10000));
+  // 1º período vencido (01/05) sem pagar: só ele é exigível; os seguintes não nascem.
+  assert.equal(led.interestRemainingCents, 10000); assert.equal(led.principalRemainingCents, 500000);
   const manual = planPayment(s.terms, [], { mode: "MANUAL", amountCents: 10000, paidAt: "2023-07-15" }, "2023-07-15", "m");
   assert.equal(manual.principalCents, 10000); assert.equal(manual.interestCents, 0); // principal primeiro nos manuais
   const am = planPayment(s.terms, [], { mode: "PRINCIPAL_AMORTIZATION", amountCents: 100000, paidAt: "2023-07-15" }, "2023-07-15", "a");
-  assert.equal(am.ok, true); assert.equal(am.principalCents, 100000); assert.equal(am.after.interestRemainingCents, 40000);
-  const fullPlan = planPayment(s.terms, [], { mode: "FULL_SETTLEMENT", amountCents: 540000, paidAt: "2023-07-15" }, "2023-07-15", "f");
+  assert.equal(am.ok, true); assert.equal(am.principalCents, 100000); assert.equal(am.after.interestRemainingCents, 10000);
+  const fullPlan = planPayment(s.terms, [], { mode: "FULL_SETTLEMENT", amountCents: 510000, paidAt: "2023-07-15" }, "2023-07-15", "f");
   assert.equal(fullPlan.ok, true); assert.equal(fullPlan.settles, true);
 });
 
-test("RP11. contrato antigo (juros primeiro): vencimentos até hoje não mudam; depois da data de corte geram juros contínuos", () => {
+test("RP11. contrato antigo (juros primeiro): vencido sem pagar fica no mesmo período, antes e depois de 05/11/2026", () => {
   const s = start("INTEREST_FIRST", { firstDueDate: "2026-09-01" });
-  // vencimento anterior ao corte: continua "em atraso" no 1º período (regra de sempre)
   assert.equal(operationLedger(s.terms, s.payments, "2026-11-04").periodViews.length, 1);
-  assert.ok("2026-09-01" < CONTINUOUS_INTEREST_FROM);
   const later = start("INTEREST_FIRST", { firstDueDate: "2026-12-01" });
-  assert.equal(operationLedger(later.terms, later.payments, "2027-02-02").periodViews.length, 4);
+  assert.equal(operationLedger(later.terms, later.payments, "2027-02-02").periodViews.length, 1);
 });
 
 test("RP14. receber o mesmo período duas vezes não duplica renovação (2º envio recusado)", () => {

@@ -89,8 +89,9 @@ test("preparação: contrato de R$ 5.000 a 2% atrasado há ~4 períodos (princip
 test("RE1. recusas sem gravar: soma de vários períodos, valor errado, período inexistente, período com modalidade errada, outro tenant", async () => {
   const hash = await dataHash();
   const cases = [
-    [{ amount: "400,00", expectedPeriod: "1" }, /Escolha na lista qual período/],
-    [{ amount: "100,00", expectedPeriod: "1" }, /Escolha na lista qual período/],
+    [{ amount: "400,00", expectedPeriod: "1" }, /exatamente os juros pendentes/],
+    // Sequência (14/11/2026): com o 1º vencido sem pagar, o 2º período não nasce (sem juros futuros).
+    [{ amount: "100,00", period: "2" }, /ainda não tinha começado/],
     [{ amount: "90,00", period: "1" }, /1º período tem R\$\s?100,00/],
     [{ amount: "100,00", period: "99" }, /ainda não tinha começado/],
     [{ amount: "100,00", period: "1", paymentMode: "MANUAL" }, /Período inválido/],
@@ -104,22 +105,27 @@ test("RE1. recusas sem gravar: soma de vários períodos, valor errado, período
   assert.equal(await dataHash(), hash, "nada gravado");
 });
 
-test("RE2. pagar o 2º período (vencido) grava só ele: 100% juros, principal intacto, demais períodos pendentes", async () => {
+test("RE2. pagar o 1º período (vencido) grava só ele: 100% juros, principal intacto, libera o 2º pelo calendário do contrato", async () => {
   const capitalBefore = Number(await one(`select coalesce(sum(amount_cents),0) from payment where operation_id = '${opP}'`));
-  const result = await pay(opP, { amount: "100,00", period: "2" });
+  const result = await pay(opP, { amount: "100,00", period: "1" });
   assert.equal(result?.ok, true, JSON.stringify(result));
-  assert.match(result.message, /2º período: R\$\s?100,00 recebidos como juros\. Principal mantido em R\$\s?5\.000,00/);
-  assert.deepEqual((await periodsRows(opP)).map((r) => [r.p, r.a, r.m, r.o]), [[2, 10000, "INTEREST_ONLY_RENEWAL", "PRINCIPAL_FIRST"]]);
-  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opP}'`), 0, "o 2º não era o período atual: nenhuma renovação nova, nenhuma duplicidade");
+  assert.match(result.message, /1º período: R\$\s?100,00 recebidos como juros\. Principal mantido em R\$\s?5\.000,00/);
+  assert.deepEqual((await periodsRows(opP)).map((r) => [r.p, r.a, r.m, r.o]), [[1, 10000, "INTEREST_ONLY_RENEWAL", "PRINCIPAL_FIRST"]]);
+  assert.deepEqual((await admin(`select period_number::int n, previous_due_date::text a, new_due_date::text b from loan_renewal where operation_id = '${opP}'`)).map((r) => [r.n, r.a, r.b]),
+    [[2, day(-70), (await admin(`select (date '${day(-70)}' + interval '1 month')::date::text d`))[0].d]], "uma renovação, vencimento pelo calendário");
   assert.equal(Number(await one(`select sum(amount_cents) from payment where operation_id = '${opP}'`)), capitalBefore + 10000);
-  const again = await pay(opP, { amount: "100,00", period: "2" });
+  const again = await pay(opP, { amount: "100,00", period: "1" });
   assert.equal(again?.ok, false); assert.match(again.error, /já estão pagos/);
+  // O 3º período ainda não existe: o 2º (vencido) precisa ser pago antes.
+  const third = await pay(opP, { amount: "100,00", period: "3" });
+  assert.equal(third?.ok, false); assert.match(third.error, /ainda não tinha começado/);
 });
 
 test("RE3. envios simultâneos do mesmo período gravam um pagamento só", async () => {
-  const results = await Promise.all([1, 2, 3, 4].map(() => pay(opP, { amount: "100,00", period: "1" })));
+  const results = await Promise.all([1, 2, 3, 4].map(() => pay(opP, { amount: "100,00", period: "2" })));
   assert.equal(results.filter((r) => r?.ok).length, 1, JSON.stringify(results));
-  assert.equal(await one(`select count(*)::int from payment where operation_id = '${opP}' and interest_period_number = 1`), 1);
+  assert.equal(await one(`select count(*)::int from payment where operation_id = '${opP}' and interest_period_number = 2`), 1);
+  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opP}'`), 2);
 });
 
 test("RE4. banco: período único por operação; modalidade/período travados; reclassificação só auditada na mesma transação", async () => {
@@ -160,13 +166,15 @@ test("RE5. tela: lista de períodos com situação própria; escolher o 1º per�
     const table = panel.locator(".interest-periods table");
     const snapshot = async () => table.locator("tbody tr").evaluateAll((rows) => rows.map((r) => [r.dataset.period, r.dataset.status, r.querySelector("td:nth-child(3)")?.textContent, r.querySelector("td:nth-child(4)")?.textContent]));
     const before = await snapshot();
-    assert.ok(before.length >= 4, "períodos listados individualmente");
+    assert.equal(before.length, 3, "1º e 2º pagos e renovados + o 3º (vencido); nenhum período futuro");
+    assert.equal(before.find((r) => r[0] === "3")[1], "OVERDUE");
+    assert.match(await panel.getByRole("button", { name: /^Saldo total/ }).innerText(), /R\$\s?5\.100,00/, "principal + juros vencidos, sem juros futuros");
     assert.equal(before.find((r) => r[0] === "1")[1] === "OVERDUE" || before.find((r) => r[0] === "1")[1] === "PAID_RENEWED", true);
     assert.equal(before.find((r) => r[0] === "2")[1], "PAID_RENEWED", "2º já pago e renovado (RE2)");
     if (SHOTS) await panel.screenshot({ path: `${SHOTS}/lista-periodos-${tag}.png` });
     if (tag === "desktop") {
       const buttons = table.getByRole("button", { name: /^Receber juros e renovar/ });
-      assert.equal(await table.locator("tr[data-period='1'] button").count(), 0, "1º já pago no RE3: sem ação");
+      assert.equal(await table.locator("tr[data-period='1'] button").count(), 0, "1º já pago no RE2: sem ação");
       assert.equal(await table.locator("tr[data-period='2'] button").count(), 0, "2º já pago: sem ação");
       await buttons.first().click();
       const number = await table.locator("tr[aria-selected], tr.row-selected").getAttribute("data-period");
