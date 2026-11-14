@@ -222,16 +222,17 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
     await page.waitForTimeout(800);
     await panel.getByRole("button", { name: "Fechar" }).click();
 
-    // Contrato D (principal primeiro, atrasado): composição dos juros pendentes período a período.
+    // Contrato D (principal primeiro, atrasado): sequência (14/11/2026) — só o 1º período existe enquanto estiver vencido
+    // sem pagar; saldo total = principal + juros vencidos, sem juros futuros. Pagar o 1º libera o 2º pelo calendário.
     panel = await panelOf(page, "Modalidade D Atrasado");
+    assert.equal(await panel.locator(".interest-periods tbody tr").count(), 1, "nenhum período futuro");
+    assert.match(await panel.getByRole("button", { name: /^Saldo total/ }).innerText(), /R\$\s?5\.100,00/);
     const pendingD = await panel.getByRole("button", { name: /^Receber juros e renovar/ }).first().innerText();
     await panel.getByRole("button", { name: /^Receber juros e renovar/ }).first().click();
-    const composition = await panel.getByText(/Juros pendentes por período:/).locator("..").innerText();
-    assert.match(composition, /1º \(venc\. .*\) R\$\s?100,00 · 2º/);
     const previewD = await previewOf(panel);
     assert.equal(previewD["Para principal"], "R$ 0,00");
     assert.equal(previewD["Principal depois"], "R$ 5.000,00");
-    assert.equal(previewD["Juros pendentes depois"].replace(/\s/g, " "), "R$ 300,00", "só o 1º período é pago; os outros três continuam pendentes");
+    assert.equal(previewD["Juros pendentes depois"].replace(/\s/g, " "), "R$ 100,00", "o 2º período nasce pelo calendário do contrato, já vencido");
     if (SHOTS) { await panel.locator(".payment-plan-preview").scrollIntoViewIfNeeded(); await page.screenshot({ path: `${SHOTS}/3-atrasado-composicao-${tag}.png` }); }
     if (tag === "celular") {
       const amount = pendingD.match(/R\$\s?([\d.,]+)/)[1];
@@ -255,8 +256,8 @@ test("ME7. tela: prévia completa = gravado; atrasado mostra composição dos pe
     await panel.getByRole("button", { name: "Fechar" }).click();
     await context.close();
   }
-  // Contrato D atrasado: o 1º período já tinha o seguinte aberto; pagar só ele não cria renovação nova nem toca nos outros.
-  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opD}'`), 0);
+  // Contrato D atrasado: pagar o 1º período renova uma vez (abre o 2º pelo calendário do contrato).
+  assert.equal(await one(`select count(*)::int from loan_renewal where operation_id = '${opD}'`), 1);
   assert.equal(await one(`select count(*)::int from payment where operation_id = '${opD}' and interest_period_number = 1 and payment_mode = 'INTEREST_ONLY_RENEWAL'`), 1);
 });
 

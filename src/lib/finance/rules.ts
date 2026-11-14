@@ -284,7 +284,8 @@ export const periodStatusLabels: Record<PeriodStatus, string> = {
   PAID_RENEWED: "Pago e renovado", PAID: "Pago", OVERDUE: "Vencido", DUE_TODAY: "Vence hoje", UPCOMING: "A vencer",
 };
 // paymentIds: pagamentos que pagaram juros deste período (rastreabilidade).
-export type PeriodView = PendingPeriod & { status: PeriodStatus; openedBy: LedgerPeriod["openedBy"]; paymentIds: string[] };
+// locked: há juros de um período anterior ainda sem pagar; este fica bloqueado para "Receber juros e renovar" até lá.
+export type PeriodView = PendingPeriod & { status: PeriodStatus; openedBy: LedgerPeriod["openedBy"]; paymentIds: string[]; locked: boolean };
 // number = número ATUAL entre as obrigações ativas (a parcela renegociada mantém o número original, que é o histórico);
 // originalNumber = número no contrato original; deferredTo = número atual da obrigação para onde a parcela foi; deferredFrom =
 // número original da parcela que originou esta obrigação do final; additionCents = acréscimo dessa obrigação.
@@ -294,12 +295,12 @@ export type LedgerState = "ACTIVE" | "DUE_TODAY" | "OVERDUE" | "PAID";
 
 const isAmortized = (terms: LedgerTerms) => terms.modality === "INSTALLMENT" || terms.frequency === "DAILY";
 
-// Juros contínuos: enquanto houver principal em aberto, cada vencimento ultrapassado abre o período seguinte, mesmo com
-// juros anteriores sem pagar (eles ficam pendentes, um a um, sem capitalizar). Vale para os contratos de principal primeiro
-// desde sempre e, nos contratos antigos (juros primeiro), para os vencimentos a partir desta data: assim nenhum pagamento
-// já registrado nesses contratos muda de divisão e nenhuma operação quitada reabre.
-export const CONTINUOUS_INTEREST_FROM = "2026-11-05";
-const continuousAt = (terms: LedgerTerms, dueDate: string) => terms.paymentOrder === "PRINCIPAL_FIRST" || dueDate >= CONTINUOUS_INTEREST_FROM;
+// Sequência dos períodos de juros (regra da Thaís, 14/11/2026), em todos os contratos com renovação de juros: o período
+// seguinte só nasce quando os juros dos períodos anteriores estão integralmente pagos (na hora, por "Receber juros e
+// renovar", ou no vencimento, se já estavam pagos). Enquanto houver juros vencidos sem pagar, nenhum período novo é gerado
+// nem liberado para renovação: o saldo é o principal em aberto + os juros já gerados e exigíveis, sem juros futuros.
+// A regra anterior ("juros contínuos", 04/11 a 14/11) abria períodos no vencimento mesmo com juros atrasados; um período
+// assim só continua existindo se um recebimento já gravado o pagou (histórico preservado). A amortização não muda.
 
 // Juros de um novo período sobre o principal em aberto, sem juros sobre juros:
 //  • taxa: principal em aberto × taxa do período;
@@ -527,16 +528,24 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
     }
     return amount - rest;
   };
-  // Renovação no vencimento: juros pagos e a data chegou; nos juros contínuos, também depois do vencimento sem os juros pagos.
+  // Próximo período pelo calendário do contrato, com juros sobre o principal em aberto (sem juros sobre juros).
+  const openNext = () => {
+    const due = current().dueDate;
+    open({ dueDate: nextDueDate(terms.frequency, due, anchorDay), interestCents: periodInterest(terms, principalOpen), principalBaseCents: principalOpen, openedOn: due, openedBy: "DUE_DATE", paymentId: null });
+  };
+  // Renovação no vencimento: só quando os juros de todos os períodos já gerados estão pagos e a data chegou. Com juros
+  // vencidos sem pagar, o período seguinte não nasce (fica bloqueado até a quitação desses juros).
   const renewOnDue = (date: string) => {
     // Período sem juros (taxa 0%) não renova: vencido com principal em aberto, fica Em atraso.
-    while (principalOpen > 0 && current().interestCents > 0 && ((left(current()) === 0 && pending() === 0 && date >= current().dueDate) || (continuousAt(terms, current().dueDate) && date > current().dueDate))) {
-      const due = current().dueDate;
-      open({ dueDate: nextDueDate(terms.frequency, due, anchorDay), interestCents: periodInterest(terms, principalOpen), principalBaseCents: principalOpen, openedOn: due, openedBy: "DUE_DATE", paymentId: null });
-    }
+    while (principalOpen > 0 && current().interestCents > 0 && left(current()) === 0 && pending() === 0 && date >= current().dueDate) openNext();
   };
   const items: LedgerItem<T>[] = ordered.map((payment) => {
     renewOnDue(payment.paidAt);
+    // Histórico: recebimento já gravado pela regra anterior (juros contínuos, 04/11 a 14/11/2026) para um período aberto
+    // com juros anteriores ainda pendentes. Esse período continua existindo para o pagamento registrado não mudar de divisão.
+    if (payment.period != null && payment.mode === "INTEREST_ONLY_RENEWAL") {
+      while (principalOpen > 0 && current().interestCents > 0 && current().number < payment.period && payment.paidAt > current().dueDate) openNext();
+    }
     const balanceBeforeCents = principalOpen + pending();
     const row = rows.get(payment.id);
     const mode = payment.mode ?? null;
@@ -581,11 +590,13 @@ function recurringLedger<T extends LedgerPayment>(terms: LedgerTerms, ordered: T
   const pendingPeriods: PendingPeriod[] = periods.filter((item) => left(item) > 0)
     .map((item) => ({ number: item.number, dueDate: item.dueDate, interestCents: item.interestCents, paidCents: item.interestPaidCents ?? 0, remainingCents: left(item) }));
   // Cada período com a sua situação (pago, pago e renovado, vencido, vence hoje, a vencer).
+  const firstPending = periods.find((item) => left(item) > 0)?.number ?? null;
   const periodViews: PeriodView[] = periods.map((item, index) => {
     const remainingCents = left(item);
+    const locked = remainingCents > 0 && firstPending !== null && item.number > firstPending;
     const status: PeriodStatus = remainingCents === 0 ? (index < periods.length - 1 ? "PAID_RENEWED" : "PAID")
       : item.dueDate < asOf ? "OVERDUE" : item.dueDate === asOf ? "DUE_TODAY" : "UPCOMING";
-    return { number: item.number, dueDate: item.dueDate, interestCents: item.interestCents, paidCents: item.interestPaidCents ?? 0, remainingCents, status, openedBy: item.openedBy, paymentIds: paidBy.get(item.number) ?? [] };
+    return { number: item.number, dueDate: item.dueDate, interestCents: item.interestCents, paidCents: item.interestPaidCents ?? 0, remainingCents, status, openedBy: item.openedBy, paymentIds: paidBy.get(item.number) ?? [], locked };
   });
   // Vencimento a cobrar: o do período pendente mais antigo (em atraso, se já passou); sem pendência, o do período atual.
   const dueDate = pendingPeriods[0]?.dueDate ?? period.dueDate;
@@ -651,6 +662,9 @@ export function planPayment<T extends LedgerPayment>(terms: LedgerTerms, previou
     const target = before.periodViews.find((item) => item.number === period);
     if (!target) return fail(`Na data do recebimento (${formatDate(paidAt)}), o ${period}º período ainda não tinha começado. Confira a data.`);
     if (target.remainingCents <= 0) return fail(`Os juros do ${period}º período já estão pagos. Atualize a tela e confira antes de registrar de novo.`);
+    // Sequência: com juros de um período anterior sem pagar, este período fica bloqueado (receba o mais antigo primeiro).
+    const older = before.pendingPeriods.find((item) => item.number < period);
+    if (older) return fail(`O ${period}º período está bloqueado: receba antes os juros do ${older.number}º período (vencimento ${formatDate(older.dueDate)}, ${formatMoney(older.remainingCents)}).`);
     if (amountCents !== target.remainingCents) return fail(`O ${period}º período tem ${formatMoney(target.remainingCents)} de juros a receber. Para outro valor, use "Pagamento manual".`);
     if (period === before.periodNumber) {
       const anchorDay = Number(terms.firstDueDate.slice(8, 10));

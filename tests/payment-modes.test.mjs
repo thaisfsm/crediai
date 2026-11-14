@@ -62,15 +62,15 @@ test("MP3. oito 'Só os juros' seguidos (caso Tatiana corrigido): juros R$ 800, 
   assert.equal(ledger.nextDueDate, "2024-01-01");
   assert.equal(ledger.balanceCents, 510000);
   assert.ok(ledger.items.every((item) => item.kind === "RENEWAL" && item.principalCents === 0));
-  // Hoje (03/11/2026): os juros simples continuam nascendo, R$ 100 por mês, de 01/01/2024 até o período atual.
+  // Hoje: o 9º período (01/01/2024) está vencido e sem pagar; pela sequência (14/11/2026), nenhum período novo nasce até
+  // ele ser pago. Saldo = principal + os juros vencidos e exigíveis (só os do 9º).
   const hoje = operationLedger(terms, payments, "2026-11-03");
   assert.equal(hoje.principalRemainingCents, 500000);
   assert.equal(hoje.nextDueDate, "2024-01-01");
   assert.equal(hoje.state, "OVERDUE");
-  assert.equal(hoje.pendingPeriods.length, 36);
-  assert.ok(hoje.pendingPeriods.every((item) => item.remainingCents === 10000));
-  assert.equal(hoje.interestRemainingCents, 360000);
-  assert.equal(hoje.balanceCents, 860000);
+  assert.equal(hoje.pendingPeriods.length, 1);
+  assert.equal(hoje.interestRemainingCents, 10000);
+  assert.equal(hoje.balanceCents, 510000);
   assert.equal(hoje.renewalCount, 8, "períodos abertos em atraso não contam como renovação");
 });
 
@@ -89,38 +89,36 @@ test("MP4. renovação sem duplicidade: o mesmo período não renova duas vezes;
   assert.equal(planPayment(parcelado, [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 60000, paidAt: "2023-05-01" }, "2023-05-01").ok, false);
 });
 
-test("MP5. juros dos períodos seguintes continuam com juros anteriores pendentes: R$ 5.000 a 2% por 3 períodos = R$ 5.300", () => {
+test("MP5. com juros vencidos sem pagar, o período seguinte não nasce: R$ 5.000 a 2% atrasado 3 meses = R$ 5.100", () => {
   const ledger = operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-07-01");
   assert.equal(ledger.principalRemainingCents, 500000);
-  assert.deepEqual(ledger.pendingPeriods.map((item) => [item.number, item.dueDate, item.remainingCents]), [[1, "2023-05-01", 10000], [2, "2023-06-01", 10000], [3, "2023-07-01", 10000]]);
-  assert.equal(ledger.interestRemainingCents, 30000);
-  assert.equal(ledger.balanceCents, 530000);
+  assert.deepEqual(ledger.pendingPeriods.map((item) => [item.number, item.dueDate, item.remainingCents]), [[1, "2023-05-01", 10000]]);
+  assert.equal(ledger.interestRemainingCents, 10000);
+  assert.equal(ledger.balanceCents, 510000);
   assert.equal(ledger.nextDueDate, "2023-05-01", "cobra a partir do período pendente mais antigo");
-  // Cada período nasce no dia seguinte ao vencimento do anterior (sem multa nem mora): em 02/07 já são 4.
-  assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-07-02").interestRemainingCents, 40000);
   assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-05-01").interestRemainingCents, 10000, "no dia do vencimento ainda não está atrasado");
-  assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-05-02").interestRemainingCents, 20000);
-  // Com atraso, o recebimento é POR PERÍODO (04/11): a soma de vários períodos é recusada; o período atual (3º) renova.
-  const summed = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 30000, paidAt: "2023-07-01", expectedPeriod: 3 }, "2023-07-01");
+  assert.equal(operationLedger(contract("PRINCIPAL_FIRST"), [], "2023-05-02").interestRemainingCents, 10000);
+  // Recebe o 1º período (atrasado): renova pelo calendário do contrato (o 2º vence 01/06) e o 2º passa a ser exigível.
+  const summed = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 30000, paidAt: "2023-07-01", expectedPeriod: 1 }, "2023-07-01");
   assert.equal(summed.ok, false);
-  const plan = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 10000, paidAt: "2023-07-01", period: 3 }, "2023-07-01");
+  assert.equal(planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 10000, paidAt: "2023-07-01", period: 3 }, "2023-07-01").ok, false, "o 3º período não existe");
+  const plan = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "INTEREST_ONLY_RENEWAL", amountCents: 10000, paidAt: "2023-07-01", period: 1 }, "2023-07-01");
   assert.equal(plan.ok, true);
-  assert.equal(plan.pendingPeriods.length, 3);
-  assert.equal(plan.after.interestRemainingCents, 30000, "períodos 1 e 2 continuam pendentes + o 4º período recém-aberto");
-  assert.equal(plan.renewal.previousDueDate, "2023-07-01");
-  assert.equal(plan.renewal.newDueDate, "2023-08-01");
+  assert.equal(plan.renewal.previousDueDate, "2023-05-01");
+  assert.equal(plan.renewal.newDueDate, "2023-06-01");
+  assert.equal(plan.after.interestRemainingCents, 10000, "só o 2º período (já vencido) fica pendente");
   assert.equal(plan.principalAfterCents, 500000);
 });
 
 test("MP6. sem capitalização: cada período cobra juros só sobre o principal em aberto, nunca sobre juros pendentes", () => {
   const ledger = operationLedger(contract("PRINCIPAL_FIRST"), [], "2024-05-02");
-  assert.ok(ledger.periods.every((period) => period.interestCents === 10000 && period.principalBaseCents === 500000));
-  assert.equal(ledger.interestRemainingCents, ledger.periods.length * 10000);
-  // Amortização de R$ 2.500 em 15/06 reduz à metade os juros dos períodos abertos depois dela; os já abertos não mudam.
-  const { terms, payments } = record(contract("PRINCIPAL_FIRST"), [["a", "PRINCIPAL_AMORTIZATION", 250000, "2023-06-15"]]);
-  const after = operationLedger(terms, payments, "2023-08-15");
-  assert.deepEqual(after.periods.map((period) => period.interestCents), [10000, 10000, 10000, 5000, 5000]);
-  assert.equal(after.interestRemainingCents, 40000);
+  assert.equal(ledger.periods.length, 1, "sem pagar, não nascem períodos novos");
+  assert.equal(ledger.interestRemainingCents, 10000);
+  // Amortização de R$ 2.500 em 15/06 reduz à metade os juros do período aberto depois dela; o já aberto não muda.
+  const { terms, payments } = record(contract("PRINCIPAL_FIRST"), [["a", "PRINCIPAL_AMORTIZATION", 250000, "2023-06-15"], ["j", "INTEREST_ONLY_RENEWAL", 10000, "2023-06-16", { period: 1 }]]);
+  const after = operationLedger(terms, payments, "2023-06-16");
+  assert.deepEqual(after.periods.map((period) => period.interestCents), [10000, 5000]);
+  assert.equal(after.interestRemainingCents, 5000);
 });
 
 test("MP7. pagamento manual respeita a ordem do contrato (principal primeiro × juros primeiro) e não renova", () => {
@@ -147,30 +145,30 @@ test("MP8. amortização do principal: só principal (também no juros primeiro)
 });
 
 test("MP9. saldo total: exatamente principal + juros pendentes; quita; outro valor recusado", () => {
-  const late = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "FULL_SETTLEMENT", amountCents: 530000, paidAt: "2023-07-01" }, "2023-07-01");
+  const late = planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "FULL_SETTLEMENT", amountCents: 510000, paidAt: "2023-07-01" }, "2023-07-01");
   assert.equal(late.ok, true);
   assert.equal(late.settles, true);
-  assert.deepEqual([late.principalCents, late.interestCents], [500000, 30000]);
+  assert.deepEqual([late.principalCents, late.interestCents], [500000, 10000]);
   assert.equal(paymentLabel(late.item), "Quitação");
-  assert.match(planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "FULL_SETTLEMENT", amountCents: 510000, paidAt: "2023-07-01" }, "2023-07-01").error, /saldo total nesta data é/);
+  assert.match(planPayment(contract("PRINCIPAL_FIRST"), [], { mode: "FULL_SETTLEMENT", amountCents: 530000, paidAt: "2023-07-01" }, "2023-07-01").error, /saldo total nesta data é/, "juros de períodos futuros não entram");
 });
 
 test("MP10. liquidação antecipada: só pelo formulário próprio; principal primeiro, o resto juros, o que faltava é desconto", () => {
   assert.match(planPayment(contract("INTEREST_FIRST"), [], { mode: "EARLY_SETTLEMENT", amountCents: 500000, paidAt: "2023-04-20" }, "2023-04-20").error, /formulário próprio/);
   const terms = { ...contract("PRINCIPAL_FIRST"), settlementPaymentId: "liq" };
   const ledger = operationLedger(terms, [{ id: "liq", amountCents: 505000, paidAt: "2023-07-01", mode: "EARLY_SETTLEMENT", allocationOrder: "PRINCIPAL_FIRST" }], "2023-07-01");
-  assert.deepEqual([ledger.principalPaidCents, ledger.interestPaidCents, ledger.forgivenCents, ledger.balanceCents], [500000, 5000, 25000, 0]);
+  assert.deepEqual([ledger.principalPaidCents, ledger.interestPaidCents, ledger.forgivenCents, ledger.balanceCents], [500000, 5000, 5000, 0]);
   assert.equal(paymentLabel(ledger.items[0]), "Liquidação antecipada");
 });
 
 test("MP11. prévia = gravado: o extrato recalculado a partir do que o servidor grava bate com a prévia em todos os modos", () => {
   const cases = [
-    [contract("PRINCIPAL_FIRST"), "INTEREST_ONLY_RENEWAL", 10000, "2023-07-01", { period: 3 }],
+    [contract("PRINCIPAL_FIRST"), "INTEREST_ONLY_RENEWAL", 10000, "2023-07-01", { period: 1 }],
     [contract("INTEREST_FIRST"), "INTEREST_ONLY_RENEWAL", 10000, "2023-04-20", { expectedPeriod: 1 }],
     [contract("PRINCIPAL_FIRST"), "MANUAL", 123456, "2023-06-10", {}],
     [contract("INTEREST_FIRST"), "MANUAL", 123456, "2023-06-10", {}],
     [contract("INTEREST_FIRST"), "PRINCIPAL_AMORTIZATION", 50000, "2023-04-10", {}],
-    [contract("PRINCIPAL_FIRST"), "FULL_SETTLEMENT", 530000, "2023-06-10", {}],
+    [contract("PRINCIPAL_FIRST"), "FULL_SETTLEMENT", 510000, "2023-06-10", {}],
   ];
   for (const [terms, mode, amountCents, paidAt, extra] of cases) {
     const preview = planPayment(terms, [], { mode, amountCents, paidAt, ...extra }, "2023-08-20", "preview");
