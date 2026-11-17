@@ -13,7 +13,7 @@ import { INVESTOR_CATEGORIES, isInvestorCategory } from "@/lib/investors/payable
 import type { TenantPortfolio } from "@/lib/finance/queries";
 import { clientProfitHistory } from "@/lib/finance/client-profit";
 import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, type ReportFilters, type ReportPeriod, type ReportScope, type ReportStatus } from "@/lib/finance/report";
-import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
+import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorFromClient, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, periodStatusLabels, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
@@ -398,10 +398,74 @@ function setEmptyField(form: HTMLFormElement, name: string, value: string, repla
   const same = (a: string, b: string) => a === b || (name.endsWith("Cep") && onlyDigits(a) === onlyDigits(b));
   if (element.value && !(replaceable !== undefined && same(element.value, replaceable))) return false;
   if (same(element.value, value) && element.value) return true;
+  setFieldValue(element, value);
+  return true;
+}
+// Troca o valor de um campo como se fosse digitado (o React e as máscaras recebem o evento normalmente).
+function setFieldValue(element: HTMLInputElement | HTMLSelectElement, value: string) {
   const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(element, value);
   element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
-  return true;
+}
+
+// Avalista a partir da base: procura nos clientes da PRÓPRIA carteira (a mesma busca da tela Clientes, filtrada pelo tenant no
+// servidor) e "Usar como avalista" preenche nome, CPF e telefone. Os campos continuam editáveis; sem escolha, digita-se à mão.
+function GuarantorPicker({ excludeId }: { excludeId?: string }) {
+  const [query, setQuery] = useState("");
+  const [state, setState] = useState<{ query: string; results: ClientSearchResult[]; error?: string } | null>(null);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const boxRef = useRef<HTMLDivElement>(null);
+  const trimmed = query.trim();
+  const tooShort = trimmed !== "" && !/\p{L}/u.test(trimmed) && onlyDigits(trimmed).length < 3;
+  useEffect(() => {
+    if (!trimmed || tooShort) return;
+    const timer = setTimeout(() => startTransition(async () => {
+      try {
+        const result = await searchClientsAction(trimmed);
+        setState(result.ok ? { query: trimmed, results: result.results } : { query: trimmed, results: [], error: result.error });
+      } catch {
+        setState({ query: trimmed, results: [], error: "Não foi possível buscar agora. Tente novamente." });
+      }
+    }), 250);
+    return () => clearTimeout(timer);
+  }, [trimmed, tooShort]);
+  const shown = trimmed && state?.query === trimmed ? { ...state, results: state.results.filter((client) => client.id !== excludeId) } : null;
+  const choose = (client: ClientSearchResult) => {
+    const form = boxRef.current?.closest("form");
+    if (!form) return;
+    for (const [name, value] of Object.entries(guarantorFromClient(client))) {
+      const element = form.elements.namedItem(name);
+      if (element instanceof HTMLInputElement) setFieldValue(element, value);
+    }
+    setChosen(client.name);
+    setQuery("");
+  };
+  return (
+    <div className="guarantor-picker field-wide" ref={boxRef}>
+      <label className="field"><span>Buscar avalista na base de clientes</span>
+        <input type="search" aria-label="Buscar avalista na base de clientes" placeholder="Nome, CPF, telefone ou e-mail de um cliente já cadastrado" value={query} maxLength={120}
+          onChange={(event) => { setQuery(event.target.value); setChosen(null); }} onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }} />
+      </label>
+      {trimmed ? (
+        <p className="client-search-status" role="status">{tooShort ? "Digite ao menos 3 números do CPF ou do telefone." : !shown || pending ? "Buscando…" : shown.error ?? (shown.results.length === 0 ? `Nenhum cliente encontrado para "${trimmed}". Preencha o avalista abaixo.` : `Escolha o cliente que será o avalista:`)}</p>
+      ) : chosen ? (
+        <p className="form-feedback" role="status">Avalista preenchido com o cadastro de {chosen}. Confira e ajuste se precisar.</p>
+      ) : (
+        <p className="capital-note">Escolha um cliente já cadastrado ou preencha os campos abaixo para um avalista novo.</p>
+      )}
+      {shown && !pending && shown.results.length > 0 && (
+        <ul className="guarantor-results" aria-label="Clientes para avalista">
+          {shown.results.map((client) => (
+            <li key={client.id}>
+              <span><strong>{client.name}</strong><small>{[formatCpf(client.document) && `CPF ${formatCpf(client.document)}`, formatPhone(client.phone || client.whatsapp), client.archived && "Arquivado"].filter(Boolean).join(" · ") || "Sem CPF e telefone"}</small></span>
+              <button type="button" className="outline-button" aria-label={`Usar ${client.name} como avalista`} onClick={() => choose(client)}>Usar como avalista</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 export function usePersonPrefill(target: "client" | "investor") {
   const [notice, setNotice] = useState<string | null>(null);
@@ -567,6 +631,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
         <fieldset className="form-section field-wide">
           <legend>Avalista</legend>
           <div className="form-grid">
+            {!manager && !readOnly && <GuarantorPicker excludeId={editing?.id} />}
             <label className="field field-wide"><span>{guarantorPartLabels.Name}</span><input name="guarantorName" maxLength={160} defaultValue={editing?.guarantorName ?? ""} /></label>
             <label className="field"><span>{guarantorPartLabels.Document}</span><MaskedInput name="guarantorDocument" mask={maskCpf} initial={formatCpf(editing?.guarantorDocument ?? null) ?? ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
             <label className="field"><span>{guarantorPartLabels.Phone}</span><MaskedInput name="guarantorPhone" mask={maskPhone} initial={formatPhone(editing?.guarantorPhone ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>

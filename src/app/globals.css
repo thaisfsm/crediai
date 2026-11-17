@@ -1148,6 +1148,15 @@ button { color:inherit; }
 .client-search-status { margin:0; color:#8296a7; font-size:11px; }
 @media (max-width: 720px) { .client-search { padding:12px 12px 2px; } .client-search-box { max-width:none; } }
 .client-search-box input::-webkit-search-cancel-button { display:none; }
+/* Avalista escolhido na base de clientes (cadastro/edição de cliente) */
+.guarantor-picker { grid-column:1 / -1; display:flex; flex-direction:column; gap:8px; }
+.guarantor-picker .field { max-width:560px; }
+.guarantor-picker .capital-note, .guarantor-picker .form-feedback { margin:0; }
+.guarantor-results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; }
+.guarantor-results li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid rgba(112,145,170,.22); border-radius:10px; background-color:#07111f; }
+.guarantor-results li > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.guarantor-results small { color:#8296a7; font-size:11px; }
+@media (max-width: 720px) { .guarantor-results li { flex-direction:column; align-items:stretch; } }
 .client-search:only-child { padding-bottom:14px; }
 
 /* Prévia dos vencimentos do parcelado */

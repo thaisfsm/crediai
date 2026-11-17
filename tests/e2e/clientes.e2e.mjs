@@ -430,6 +430,53 @@ test("CE8d. tela: modo visualização/edição do cadastro (campos bloqueados, E
   await context.close();
 });
 
+test("CE8e. avalista escolhido na base de clientes: preenche nome/CPF/telefone, continua editável, grava e só busca na própria carteira", async () => {
+  // Um cliente de cada carteira com o mesmo nome: a busca do avalista só pode mostrar o da própria carteira.
+  assert.equal((await create(robério, { name: "Avalista Base Teste", document: "741.852.963-55", phone: "(11) 92519-2705" })).ok, true);
+  assert.equal((await create(fernando, { name: "Avalista Base Teste", document: "258.147.369-09", phone: "(21) 98888-7777" })).ok, true);
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    const context = await browser.newContext({ viewport, locale: "pt-BR" });
+    const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+    await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/?tela=clientes`);
+    const form = page.getByRole("region", { name: "Novo cliente" });
+    const section = form.getByRole("group", { name: "Avalista" });
+    await section.getByRole("searchbox", { name: "Buscar avalista na base de clientes" }).fill("avalista base");
+    const list = section.getByRole("list", { name: "Clientes para avalista" });
+    await list.waitFor({ timeout: 15_000 });
+    assert.equal(await list.getByRole("listitem").count(), 1, "só o cliente da própria carteira");
+    assert.match(await list.textContent(), /741\.852\.963-55/);
+    if (SHOTS) await section.screenshot({ path: `${SHOTS}/avalista-busca-${viewport.width}.png` });
+    await list.getByRole("button", { name: "Usar Avalista Base Teste como avalista" }).click();
+    assert.equal(await section.getByLabel("Nome do avalista").inputValue(), "Avalista Base Teste");
+    assert.equal(await section.getByLabel("CPF do avalista").inputValue(), "741.852.963-55");
+    assert.equal(await section.getByLabel("Telefone do avalista").inputValue(), "(11) 92519-2705");
+    await section.getByText(/Avalista preenchido com o cadastro de Avalista Base Teste/).waitFor();
+    if (SHOTS) await section.screenshot({ path: `${SHOTS}/avalista-preenchido-${viewport.width}.png` });
+    // Continua editável à mão antes de gravar.
+    await section.getByLabel("Telefone do avalista").fill("11977776666");
+    await section.getByLabel("Observação sobre o avalista").fill("irmão");
+    // Enter na busca não envia o cadastro.
+    await section.getByRole("searchbox", { name: "Buscar avalista na base de clientes" }).press("Enter");
+    const clientName = `Cliente Com Avalista ${viewport.width}`;
+    await form.getByLabel("Nome completo").fill(clientName);
+    await form.getByRole("button", { name: "Cadastrar cliente" }).click();
+    await page.getByText(new RegExp(`Cliente ${clientName} cadastrado`)).waitFor({ timeout: 15_000 });
+    const saved = await clientOf("ten_roberio", clientName);
+    assert.equal(saved.guarantor_name, "Avalista Base Teste");
+    assert.equal(saved.guarantor_document, "74185296355");
+    assert.equal(saved.guarantor_phone, "11977776666");
+    assert.equal(saved.guarantor_notes, "irmão");
+    await context.close();
+  }
+  // Pelo servidor, a busca usada pelo avalista também não cruza carteiras.
+  assert.deepEqual(names(await search(robério, "Avalista Base Teste")), ["Avalista Base Teste"]);
+  assert.equal((await search(robério, "258.147.369-09")).results.length, 0);
+});
+
 test("CE9. nada que já existia mudou (operações, pagamentos, capital, investidores, clientes antigos)", async () => {
   assert.equal(await existingHash(), before);
 });
