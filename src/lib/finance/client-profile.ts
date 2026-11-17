@@ -1,4 +1,5 @@
 import { bankKeys, type BankKey } from "../bank-account";
+import { formatCpf, formatPhone } from "./format";
 
 // Campos do cadastro completo do cliente: contatos e redes sociais, endereços, empresa, dados bancários, referências e avalista. Usado pelo
 // formulário, pela ação de gravação e pela ficha do cliente, para que os três tratem sempre os mesmos campos.
@@ -15,6 +16,11 @@ export const referenceParts = ["Name", "Phone", "Relationship"] as const;
 export const referencePartLabels = { Name: "Nome", Phone: "Telefone", Relationship: "Grau de parentesco" } as const;
 export const guarantorParts = ["Name", "Document", "Phone", "Notes"] as const;
 export const guarantorPartLabels = { Name: "Nome do avalista", Document: "CPF do avalista", Phone: "Telefone do avalista", Notes: "Observação sobre o avalista" } as const;
+// Avalista escolhido na base de clientes da própria carteira: nome, CPF e telefone (ou WhatsApp, se não houver telefone)
+// já no formato dos campos do formulário. A observação fica como estava; tudo continua editável à mão.
+export function guarantorFromClient(client: { name: string; document: string | null; phone: string | null; whatsapp: string | null }) {
+  return { guarantorName: client.name, guarantorDocument: formatCpf(client.document) ?? "", guarantorPhone: formatPhone(client.phone || client.whatsapp) ?? "" };
+}
 
 // Contatos e redes sociais (opcionais): WhatsApp, e-mail, Instagram, Facebook e TikTok.
 export const contactKeys = ["whatsapp", "email", "instagram", "facebook", "tiktok"] as const;

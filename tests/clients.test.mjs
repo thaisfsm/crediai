@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cnpjProblem, cpfProblem, formatCnpj, isValidCnpj, isValidCpf, maskCnpj, normalizeCnpj, normalizeCpf } from "../src/lib/finance/format.ts";
 import { bankFields, bankSummary, formatPixKey, normalizePixKey } from "../src/lib/bank-account.ts";
 import { clientSearchTerms, normalizeName } from "../src/lib/finance/client-search.ts";
-import { clientProfileKeys } from "../src/lib/finance/client-profile.ts";
+import { clientProfileKeys, guarantorFromClient } from "../src/lib/finance/client-profile.ts";
 
 const form = (values) => (key, max) => String(values[key] ?? "").trim().slice(0, max);
 
@@ -81,4 +81,13 @@ test("CL5. busca: nome sem acentos, palavras em qualquer ordem; CPF e telefone c
 
 test("CL6. cadastro do cliente inclui empresa e dados bancários", () => {
   for (const key of ["businessCompanyName", "businessCnpj", "bankHolderName", "bankHolderDocument", "bankName", "bankBranch", "bankAccount", "bankAccountType", "pixKeyType", "pixKey"]) assert.ok(clientProfileKeys.includes(key), key);
+});
+
+test("avalista escolhido na base: nome, CPF e telefone no formato do formulário; WhatsApp quando não há telefone", () => {
+  assert.deepEqual(guarantorFromClient({ name: "Alexandre Severiano", document: "52998224725", phone: "11925192705", whatsapp: "11900000000" }),
+    { guarantorName: "Alexandre Severiano", guarantorDocument: "529.982.247-25", guarantorPhone: "(11) 92519-2705" });
+  assert.deepEqual(guarantorFromClient({ name: "Só WhatsApp", document: null, phone: null, whatsapp: "1133334444" }),
+    { guarantorName: "Só WhatsApp", guarantorDocument: "", guarantorPhone: "(11) 3333-4444" });
+  assert.deepEqual(guarantorFromClient({ name: "Sem contato", document: null, phone: "", whatsapp: null }),
+    { guarantorName: "Sem contato", guarantorDocument: "", guarantorPhone: "" });
 });
