@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cnpjProblem, cpfProblem, formatCnpj, isValidCnpj, isValidCpf, maskCnpj, normalizeCnpj, normalizeCpf } from "../src/lib/finance/format.ts";
 import { bankFields, bankSummary, formatPixKey, normalizePixKey } from "../src/lib/bank-account.ts";
-import { clientSearchTerms, normalizeName } from "../src/lib/finance/client-search.ts";
+import { clientSearchTerms, filterGuarantorCandidates, normalizeName } from "../src/lib/finance/client-search.ts";
 import { clientProfileKeys, guarantorFromClient } from "../src/lib/finance/client-profile.ts";
 
 const form = (values) => (key, max) => String(values[key] ?? "").trim().slice(0, max);
@@ -90,4 +90,21 @@ test("avalista escolhido na base: nome, CPF e telefone no formato do formulário
     { guarantorName: "Só WhatsApp", guarantorDocument: "", guarantorPhone: "(11) 3333-4444" });
   assert.deepEqual(guarantorFromClient({ name: "Sem contato", document: null, phone: "", whatsapp: null }),
     { guarantorName: "Sem contato", guarantorDocument: "", guarantorPhone: "" });
+});
+
+test("lista do avalista: vazio mostra todos em ordem alfabética, filtra por nome sem acento, CPF, telefone e e-mail, sem o próprio cliente", () => {
+  const clients = [
+    { id: "c1", name: "Pedro Alcântara", document: "52998224725", phone: "11968638522", whatsapp: null, email: "pedro@x.com" },
+    { id: "c2", name: "Ana Souza", document: null, phone: null, whatsapp: "21999990000", email: null },
+    { id: "c3", name: "Bruno Lima", document: "11144477735", phone: null, whatsapp: null, email: "bruno@lima.com" },
+  ];
+  const ids = (query, exclude) => filterGuarantorCandidates(clients, query, exclude).map((client) => client.id);
+  assert.deepEqual(ids(""), ["c2", "c3", "c1"]);
+  assert.deepEqual(ids("", "c3"), ["c2", "c1"]);
+  assert.deepEqual(ids("pedro alcantara"), ["c1"]);
+  assert.deepEqual(ids("PED"), ["c1"]);
+  assert.deepEqual(ids("529.982"), ["c1"]);
+  assert.deepEqual(ids("(21) 99999"), ["c2"]);
+  assert.deepEqual(ids("bruno@"), ["c3"]);
+  assert.deepEqual(ids("zzz"), []);
 });

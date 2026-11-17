@@ -399,8 +399,13 @@
 :root[data-theme="light"] .client-search-box .search-icon { color:#607483; }
 :root[data-theme="light"] .client-search-box .search-clear { color:#4d5f6e; }
 :root[data-theme="light"] .client-search-status { color:#4d5f6e; }
-:root[data-theme="light"] .guarantor-results li { border:1px solid rgba(16,42,66,0.165); background-color:#ffffff; }
-:root[data-theme="light"] .guarantor-results small { color:#4d5f6e; }
+:root[data-theme="light"] .guarantor-combo .search-icon { color:#607483; }
+:root[data-theme="light"] .guarantor-caret { color:#607483; }
+:root[data-theme="light"] .guarantor-options { border:1px solid rgba(16,42,66,0.24); background-color:#ffffff; box-shadow:0 12px 32px rgba(15,35,55,0.126); }
+:root[data-theme="light"] .guarantor-options li.is-active { background-color:rgba(30,161,199,0.126); }
+:root[data-theme="light"] .guarantor-options strong { color:#18262f; }
+:root[data-theme="light"] .guarantor-options small { color:#4d5f6e; }
+:root[data-theme="light"] .guarantor-options li.guarantor-empty { color:#4d5f6e; }
 :root[data-theme="light"] .schedule-preview { border:1px solid rgba(16,42,66,0.135); background:rgba(241,245,249,0.55); }
 :root[data-theme="light"] .schedule-preview p { color:#2c3c46; }
 :root[data-theme="light"] .schedule-preview li { color:#4d5f6e; border-bottom:1px dashed rgba(16,42,66,0.105); }

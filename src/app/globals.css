@@ -1148,15 +1148,20 @@ button { color:inherit; }
 .client-search-status { margin:0; color:#8296a7; font-size:11px; }
 @media (max-width: 720px) { .client-search { padding:12px 12px 2px; } .client-search-box { max-width:none; } }
 .client-search-box input::-webkit-search-cancel-button { display:none; }
-/* Avalista escolhido na base de clientes (cadastro/edição de cliente) */
-.guarantor-picker { grid-column:1 / -1; display:flex; flex-direction:column; gap:8px; }
-.guarantor-picker .field { max-width:560px; }
+/* Avalista escolhido na base de clientes (cadastro/edição de cliente): lista que abre ao clicar e filtra ao digitar */
+.guarantor-picker { grid-column:1 / -1; position:relative; display:flex; flex-direction:column; gap:8px; }
+.guarantor-picker > .field { max-width:560px; }
 .guarantor-picker .capital-note, .guarantor-picker .form-feedback { margin:0; }
-.guarantor-results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; }
-.guarantor-results li { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border:1px solid rgba(112,145,170,.22); border-radius:10px; background-color:#07111f; }
-.guarantor-results li > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
-.guarantor-results small { color:#8296a7; font-size:11px; }
-@media (max-width: 720px) { .guarantor-results li { flex-direction:column; align-items:stretch; } }
+.guarantor-combo { position:relative; display:flex; align-items:center; }
+.guarantor-combo input { width:100%; padding-left:38px; padding-right:34px; }
+.guarantor-combo .search-icon { position:absolute; left:12px; color:#6d8394; pointer-events:none; }
+.guarantor-caret { position:absolute; right:12px; color:#6d8394; font-size:12px; pointer-events:none; }
+.guarantor-options { position:absolute; top:68px; left:0; z-index:20; width:min(560px, 100%); max-height:300px; overflow-y:auto; list-style:none; margin:0; padding:4px; border:1px solid rgba(112,145,170,.32); border-radius:10px; background-color:#0b1727; box-shadow:0 12px 32px rgba(0,0,0,.45); }
+.guarantor-options li { display:flex; flex-direction:column; gap:2px; padding:8px 10px; border-radius:8px; cursor:pointer; }
+.guarantor-options li.is-active { background-color:rgba(65,190,226,.14); }
+.guarantor-options strong { color:#eef6fb; font-size:13px; font-weight:600; }
+.guarantor-options small { color:#8296a7; font-size:11px; }
+.guarantor-options li.guarantor-empty { cursor:default; color:#8296a7; font-size:12px; }
 .client-search:only-child { padding-bottom:14px; }
 
 /* Prévia dos vencimentos do parcelado */
