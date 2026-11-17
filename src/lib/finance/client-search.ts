@@ -29,3 +29,24 @@ export function clientSearchTerms(query: string): ClientSearchTerms {
 
 export type ClientSearchResult = { id: string; name: string; document: string | null; phone: string | null; whatsapp: string | null; email: string | null; archived: boolean };
 export const CLIENT_SEARCH_LIMIT = 20;
+
+// Lista do avalista (cadastro do cliente): filtra na hora, no navegador, os clientes da carteira já carregados.
+// Vazio mostra todos (em ordem alfabética); letras procuram cada palavra no nome (sem acentos) ou o texto no e-mail;
+// números procuram no CPF, telefone e WhatsApp. O próprio cliente em edição fica de fora.
+type GuarantorCandidate = { id: string; name: string; document: string | null; phone: string | null; whatsapp: string | null; email?: string | null };
+export function filterGuarantorCandidates<T extends GuarantorCandidate>(clients: T[], query: string, excludeId?: string): T[] {
+  const words = normalizeName(query).split(" ").filter(Boolean);
+  const digits = query.replace(/\D/g, "");
+  const hasLetters = /\p{L}/u.test(query);
+  return clients
+    .filter((client) => client.id !== excludeId)
+    .filter((client) => {
+      if (words.length === 0) return true;
+      if (hasLetters || query.includes("@")) {
+        const name = normalizeName(client.name);
+        return words.every((word) => name.includes(word)) || (client.email ?? "").toLowerCase().includes(query.trim().toLowerCase());
+      }
+      return digits.length > 0 && [client.document, client.phone, client.whatsapp].some((value) => (value ?? "").replace(/\D/g, "").includes(digits));
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+}

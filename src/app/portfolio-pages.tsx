@@ -1,12 +1,12 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, useTransition, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { transferOperationAction } from "./gerentes/actions";
 import { registerOfferAcceptanceAction, saveProposalOfferAction, saveProposalReviewAction, manageProposalLinkAction, createCreditProposalAction, moveCreditProposalAction, rejectCreditProposalAction, submitDraftProposalAction, saveCreditPolicyAction, completeMaxPrincipalReviewAction, confirmOperationPixAction, cancelOperationAction, deferInstallmentAction, loadAllCyclesReportAction, previewOperationEditAction, searchClientsAction, lookupRegisteredPersonAction, updateOperationAction, createClientAction, createOperationAction, approveOperationRequestAction, rejectOperationRequestAction, deleteClientAction, deleteClientDocumentAction, editPaymentAction, registerContributionAction, registerPaymentAction, registerWithdrawalAction, settleOperationEarlyAction, resetWalletAction, reverseContributionAction, saveWalletAction, updateClientAction, uploadClientDocumentAction, type ActionResult, type OperationEditPreview } from "./actions";
 import { BankNameInput } from "./bank-name-input";
 import { Icon, type IconName } from "./ui-icon";
 import { BANK_ACCOUNT_TYPES, PIX_KEY_TYPES, bankSummary, formatPixKey, type BankValues, type PixKeyType } from "@/lib/bank-account";
-import type { ClientSearchResult } from "@/lib/finance/client-search";
+import { filterGuarantorCandidates, type ClientSearchResult } from "@/lib/finance/client-search";
 import { addDays, centsToInput, cnpjProblem, cpfProblem, formatCnpj, maskCnpj, formatCpf, formatDate, formatElapsed, todayIso, formatMoney, formatPhone, formatRate, maskCpf, maskPhone, onlyDigits, parseMoneyToCents, parseLoanRateToBps } from "@/lib/finance/format";
 import { capitalLedgerLabels, type ChargeFilter, type OperationsSummary, type OperationView } from "@/lib/finance/portfolio";
 import { INVESTOR_CATEGORIES, isInvestorCategory } from "@/lib/investors/payables";
@@ -408,30 +408,20 @@ function setFieldValue(element: HTMLInputElement | HTMLSelectElement, value: str
   element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
 }
 
-// Avalista a partir da base: procura nos clientes da PRÓPRIA carteira (a mesma busca da tela Clientes, filtrada pelo tenant no
-// servidor) e "Usar como avalista" preenche nome, CPF e telefone. Os campos continuam editáveis; sem escolha, digita-se à mão.
-function GuarantorPicker({ excludeId }: { excludeId?: string }) {
+// Avalista a partir da base: ao clicar no campo abre a lista com todos os clientes da carteira (os mesmos já carregados na
+// tela, só do próprio tenant); digitar nome, CPF, telefone ou e-mail filtra na hora; clicar num cliente (ou Enter) preenche
+// nome, CPF e telefone. Os campos continuam editáveis; para um avalista novo, basta preencher à mão.
+function GuarantorPicker({ clients, excludeId }: { clients: GuarantorOption[]; excludeId?: string }) {
   const [query, setQuery] = useState("");
-  const [state, setState] = useState<{ query: string; results: ClientSearchResult[]; error?: string } | null>(null);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const [chosen, setChosen] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
   const boxRef = useRef<HTMLDivElement>(null);
-  const trimmed = query.trim();
-  const tooShort = trimmed !== "" && !/\p{L}/u.test(trimmed) && onlyDigits(trimmed).length < 3;
-  useEffect(() => {
-    if (!trimmed || tooShort) return;
-    const timer = setTimeout(() => startTransition(async () => {
-      try {
-        const result = await searchClientsAction(trimmed);
-        setState(result.ok ? { query: trimmed, results: result.results } : { query: trimmed, results: [], error: result.error });
-      } catch {
-        setState({ query: trimmed, results: [], error: "Não foi possível buscar agora. Tente novamente." });
-      }
-    }), 250);
-    return () => clearTimeout(timer);
-  }, [trimmed, tooShort]);
-  const shown = trimmed && state?.query === trimmed ? { ...state, results: state.results.filter((client) => client.id !== excludeId) } : null;
-  const choose = (client: ClientSearchResult) => {
+  const listRef = useRef<HTMLUListElement>(null);
+  const options = filterGuarantorCandidates(clients, query, excludeId);
+  const current = Math.min(active, Math.max(options.length - 1, 0));
+  useEffect(() => { listRef.current?.querySelector(`[data-index="${current}"]`)?.scrollIntoView({ block: "nearest" }); }, [current, open]);
+  const choose = (client: GuarantorOption) => {
     const form = boxRef.current?.closest("form");
     if (!form) return;
     for (const [name, value] of Object.entries(guarantorFromClient(client))) {
@@ -440,33 +430,50 @@ function GuarantorPicker({ excludeId }: { excludeId?: string }) {
     }
     setChosen(client.name);
     setQuery("");
+    setOpen(false);
   };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setActive((index) => Math.max(0, Math.min(options.length - 1, Math.min(index, options.length - 1) + (event.key === "ArrowDown" ? 1 : -1))));
+    } else if (event.key === "Enter") {
+      event.preventDefault(); // nunca envia o cadastro daqui
+      if (open && options[current]) choose(options[current]);
+    } else if (event.key === "Escape") setOpen(false);
+  };
+  const detail = (client: GuarantorOption) => [formatCpf(client.document) && `CPF ${formatCpf(client.document)}`, formatPhone(client.phone || client.whatsapp)].filter(Boolean).join(" · ") || "Sem CPF e telefone";
   return (
-    <div className="guarantor-picker field-wide" ref={boxRef}>
-      <label className="field"><span>Buscar avalista na base de clientes</span>
-        <input type="search" aria-label="Buscar avalista na base de clientes" placeholder="Nome, CPF, telefone ou e-mail de um cliente já cadastrado" value={query} maxLength={120}
-          onChange={(event) => { setQuery(event.target.value); setChosen(null); }} onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }} />
+    <div className="guarantor-picker field-wide" ref={boxRef} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}>
+      <label className="field"><span>Escolher avalista entre os clientes</span>
+        <div className="guarantor-combo">
+          <span className="search-icon"><Icon name="search" size={16} /></span>
+          <input type="text" role="combobox" aria-label="Escolher avalista entre os clientes" aria-expanded={open} aria-controls="guarantor-options" aria-autocomplete="list"
+            aria-activedescendant={open && options[current] ? `guarantor-option-${options[current].id}` : undefined} autoComplete="off"
+            placeholder={clients.length ? "Clique para ver os clientes ou digite nome, CPF ou telefone" : "Nenhum cliente cadastrado ainda"} value={query} maxLength={120}
+            onFocus={() => setOpen(true)} onClick={() => setOpen(true)}
+            onChange={(event) => { setQuery(event.target.value); setActive(0); setOpen(true); setChosen(null); }} onKeyDown={onKeyDown} />
+          <span className="guarantor-caret" aria-hidden="true">▾</span>
+        </div>
       </label>
-      {trimmed ? (
-        <p className="client-search-status" role="status">{tooShort ? "Digite ao menos 3 números do CPF ou do telefone." : !shown || pending ? "Buscando…" : shown.error ?? (shown.results.length === 0 ? `Nenhum cliente encontrado para "${trimmed}". Preencha o avalista abaixo.` : `Escolha o cliente que será o avalista:`)}</p>
-      ) : chosen ? (
-        <p className="form-feedback" role="status">Avalista preenchido com o cadastro de {chosen}. Confira e ajuste se precisar.</p>
-      ) : (
-        <p className="capital-note">Escolha um cliente já cadastrado ou preencha os campos abaixo para um avalista novo.</p>
-      )}
-      {shown && !pending && shown.results.length > 0 && (
-        <ul className="guarantor-results" aria-label="Clientes para avalista">
-          {shown.results.map((client) => (
-            <li key={client.id}>
-              <span><strong>{client.name}</strong><small>{[formatCpf(client.document) && `CPF ${formatCpf(client.document)}`, formatPhone(client.phone || client.whatsapp), client.archived && "Arquivado"].filter(Boolean).join(" · ") || "Sem CPF e telefone"}</small></span>
-              <button type="button" className="outline-button" aria-label={`Usar ${client.name} como avalista`} onClick={() => choose(client)}>Usar como avalista</button>
+      {open && (
+        <ul className="guarantor-options" id="guarantor-options" role="listbox" aria-label="Clientes para avalista" ref={listRef}>
+          {options.length === 0 ? (
+            <li className="guarantor-empty" role="presentation">{query.trim() ? `Nenhum cliente encontrado para "${query.trim()}". Preencha o avalista nos campos abaixo.` : "Nenhum cliente cadastrado ainda. Preencha o avalista nos campos abaixo."}</li>
+          ) : options.map((client, index) => (
+            <li key={client.id} id={`guarantor-option-${client.id}`} role="option" aria-selected={index === current} data-index={index} className={index === current ? "is-active" : undefined}
+              onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(client)}>
+              <strong>{client.name}</strong><small>{detail(client)}</small>
             </li>
           ))}
         </ul>
       )}
+      {chosen ? <p className="form-feedback" role="status">Avalista preenchido com o cadastro de {chosen}. Confira e ajuste se precisar.</p>
+        : <p className="capital-note">Escolha um cliente da lista ou, se o avalista não for cliente, preencha os campos abaixo.</p>}
     </div>
   );
 }
+type GuarantorOption = { id: string; name: string; document: string | null; phone: string | null; whatsapp: string | null; email?: string | null };
 export function usePersonPrefill(target: "client" | "investor") {
   const [notice, setNotice] = useState<string | null>(null);
   const last = useRef("");
@@ -538,7 +545,7 @@ export type ManagerRegistration = { submit: (data: FormData) => Promise<ActionRe
 // Formulário de cadastro e edição. CPF e telefone recebem máscara enquanto o usuário digita; o servidor grava só os dígitos.
 // Cliente existente: abre em modo de visualização (campos realmente bloqueados) e "Editar" libera os campos. Ao salvar volta
 // para a visualização com os dados novos; "Cancelar" descarta o que foi digitado. `onMode` troca o modo a partir do pai.
-function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, onSaved, notice = null, manager }: { editing: ClientRow | null; readOnly?: boolean; onChanged: () => void; onCancel: () => void; onEdit?: () => void; onSaved?: (message: string) => void; notice?: string | null; manager?: ManagerRegistration }) {
+function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, onSaved, notice = null, manager, guarantorOptions }: { guarantorOptions?: GuarantorOption[]; editing: ClientRow | null; readOnly?: boolean; onChanged: () => void; onCancel: () => void; onEdit?: () => void; onSaved?: (message: string) => void; notice?: string | null; manager?: ManagerRegistration }) {
   // Troca a chave dos campos depois de cadastrar, para limpar também os campos com máscara e o endereço.
   const [resetKey, setResetKey] = useState(0);
   const [docRows, setDocRows] = useState(1);
@@ -631,7 +638,7 @@ function ClientForm({ editing, readOnly = false, onChanged, onCancel, onEdit, on
         <fieldset className="form-section field-wide">
           <legend>Avalista</legend>
           <div className="form-grid">
-            {!manager && !readOnly && <GuarantorPicker excludeId={editing?.id} />}
+            {!manager && !readOnly && guarantorOptions && <GuarantorPicker clients={guarantorOptions} excludeId={editing?.id} />}
             <label className="field field-wide"><span>{guarantorPartLabels.Name}</span><input name="guarantorName" maxLength={160} defaultValue={editing?.guarantorName ?? ""} /></label>
             <label className="field"><span>{guarantorPartLabels.Document}</span><MaskedInput name="guarantorDocument" mask={maskCpf} initial={formatCpf(editing?.guarantorDocument ?? null) ?? ""} validate={cpfProblem} inputMode="numeric" placeholder="000.000.000-00" maxLength={40} /></label>
             <label className="field"><span>{guarantorPartLabels.Phone}</span><MaskedInput name="guarantorPhone" mask={maskPhone} initial={formatPhone(editing?.guarantorPhone ?? null) ?? ""} inputMode="tel" placeholder="(11) 98765-4321" maxLength={40} /></label>
@@ -1059,7 +1066,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
       {!readOnly && <ClientSearch onOpen={(id) => { setViewingId(id); window.scrollTo({ top: 0 }); }}
         onEdit={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) startEdit(row); }}
         onDelete={(id) => { const row = portfolio.clients.find((client) => client.id === id); if (row) setDeleting(row); }} />}
-      {!readOnly && <ClientForm key={`${editing?.id ?? "new"}:${formVersion}:${editing ? JSON.stringify(editing) : ""}`} editing={editing} readOnly={editing !== null && !editMode} onChanged={onChanged}
+      {!readOnly && <ClientForm key={`${editing?.id ?? "new"}:${formVersion}:${editing ? JSON.stringify(editing) : ""}`} guarantorOptions={portfolio.clients} editing={editing} readOnly={editing !== null && !editMode} onChanged={onChanged}
         notice={savedNotice} onEdit={() => { setEditMode(true); setSavedNotice(null); setFormVersion((version) => version + 1); }}
         onSaved={(message) => { setSavedNotice(message); setEditMode(false); }}
         onCancel={() => { setSavedNotice(null); if (editing && editMode) { setEditMode(false); setFormVersion((version) => version + 1); } else { setEditingId(null); setEditMode(false); } }} />}

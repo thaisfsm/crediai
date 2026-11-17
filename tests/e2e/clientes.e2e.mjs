@@ -444,23 +444,33 @@ test("CE8e. avalista escolhido na base de clientes: preenche nome/CPF/telefone, 
     await page.goto(`${BASE}/?tela=clientes`);
     const form = page.getByRole("region", { name: "Novo cliente" });
     const section = form.getByRole("group", { name: "Avalista" });
-    await section.getByRole("searchbox", { name: "Buscar avalista na base de clientes" }).fill("avalista base");
-    const list = section.getByRole("list", { name: "Clientes para avalista" });
-    await list.waitFor({ timeout: 15_000 });
-    assert.equal(await list.getByRole("listitem").count(), 1, "só o cliente da própria carteira");
+    const combo = section.getByRole("combobox", { name: "Escolher avalista entre os clientes" });
+    // Clicar abre a lista com TODOS os clientes ativos da própria carteira (nenhum do outro tenant).
+    await combo.click();
+    const list = section.getByRole("listbox", { name: "Clientes para avalista" });
+    await list.waitFor();
+    const active = await one(`select count(*)::int from client where tenant_id = 'ten_roberio' and archived_at is null`);
+    assert.equal(await list.getByRole("option").count(), active, "lista com todos os clientes da carteira");
+    assert.equal(await list.getByRole("option", { name: /258\.147\.369-09/ }).count(), 0, "nunca o cliente do outro tenant");
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/avalista-lista-${viewport.width}.png` });
+    // Digitar filtra na hora.
+    await combo.fill("avalista base");
+    assert.equal(await list.getByRole("option").count(), 1, "só o cliente da própria carteira");
     assert.match(await list.textContent(), /741\.852\.963-55/);
-    if (SHOTS) await section.screenshot({ path: `${SHOTS}/avalista-busca-${viewport.width}.png` });
-    await list.getByRole("button", { name: "Usar Avalista Base Teste como avalista" }).click();
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/avalista-filtro-${viewport.width}.png` });
+    // Clique (desktop) ou Enter (celular) escolhe e preenche, sem botão extra; Enter nunca envia o cadastro.
+    if (viewport.width > 500) await list.getByRole("option", { name: /Avalista Base Teste/ }).click();
+    else await combo.press("Enter");
+    await list.waitFor({ state: "detached" });
     assert.equal(await section.getByLabel("Nome do avalista").inputValue(), "Avalista Base Teste");
     assert.equal(await section.getByLabel("CPF do avalista").inputValue(), "741.852.963-55");
     assert.equal(await section.getByLabel("Telefone do avalista").inputValue(), "(11) 92519-2705");
     await section.getByText(/Avalista preenchido com o cadastro de Avalista Base Teste/).waitFor();
+    assert.equal(await one(`select count(*)::int from client where name like 'Cliente Com Avalista%'`), viewport.width > 500 ? 0 : 1, "nada gravado antes de clicar em Cadastrar");
     if (SHOTS) await section.screenshot({ path: `${SHOTS}/avalista-preenchido-${viewport.width}.png` });
     // Continua editável à mão antes de gravar.
     await section.getByLabel("Telefone do avalista").fill("11977776666");
     await section.getByLabel("Observação sobre o avalista").fill("irmão");
-    // Enter na busca não envia o cadastro.
-    await section.getByRole("searchbox", { name: "Buscar avalista na base de clientes" }).press("Enter");
     const clientName = `Cliente Com Avalista ${viewport.width}`;
     await form.getByLabel("Nome completo").fill(clientName);
     await form.getByRole("button", { name: "Cadastrar cliente" }).click();
