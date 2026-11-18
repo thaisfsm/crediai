@@ -905,7 +905,8 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
       .for("update");
     if (!operation) return { ok: false, error: "Operação não encontrada nesta carteira." };
     if (operation.status !== "OPEN") return { ok: false, error: "Esta operação já não está em aberto." };
-    if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
+    // Pagamento antecipado (antes da data do empréstimo ou do vencimento) é aceito com a data real do recebimento: os juros
+    // e o principal seguem o contrato (o extrato não recalcula por data) e nem o início nem os vencimentos mudam sozinhos.
     const previous = await operationPayments(tx, tenantId, operation.id);
     const terms = await ledgerTermsOf(tx, tenantId, operation);
     const today = todayIso();
@@ -1065,7 +1066,7 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     if (!operation || operation.status === "CANCELED") return { ok: false, error: "Pagamento não encontrado nesta carteira." };
     if (operation.status === "RENEGOTIATED") return { ok: false, error: "Esta operação foi renegociada; o histórico dela não pode mais ser alterado." };
     if (operation.settlementPaymentId) return { ok: false, error: "Esta operação foi liquidada antecipadamente; os pagamentos dela não podem mais ser alterados." };
-    if (paidAt < operation.loanDate) return { ok: false, error: "O pagamento não pode ser antes da data do empréstimo." };
+    // Data anterior ao empréstimo também vale na correção (pagamento antecipado), como no registro.
     if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
     const terms = await ledgerTermsOf(tx, tenantId, operation);
     const renewalPaymentIds = new Set(terms.renewals.map((renewal) => renewal.paymentId));
