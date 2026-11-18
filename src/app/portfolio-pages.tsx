@@ -1301,7 +1301,7 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
   return (
     <form className="form-grid edit-payment-form" onSubmit={onSubmit} aria-label="Editar pagamento">
       <input type="hidden" name="paymentId" value={payment.id} />
-      <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} min={operation.loanDate} max={today} required />
+      <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} max={today} required />
       <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
       {renewal && <p className="capital-note field-wide">Este pagamento renovou o período até {formatDate(renewal.newDueDate)}. Ele pode ser corrigido para um valor maior (o excedente abate o principal), mas não menor que os juros pagos na renovação.</p>}
       <label className="field field-wide"><span>Observação</span><input name="notes" defaultValue={payment.notes ?? ""} placeholder="Opcional" maxLength={500} /></label>
@@ -1588,7 +1588,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
                 <p><strong>Receber juros do {chosenPeriod.number}º período.</strong> Vencimento {formatDate(chosenPeriod.dueDate)} · juros do período {formatMoney(chosenPeriod.remainingCents)}. Só este período é pago; os outros continuam como estão.</p>
               </div>
             )}
-            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} min={operation.loanDate} max={today} required onChange={setPaidAt} />
+            <DateField label="Data do pagamento" name="paidAt" defaultValue={today} max={today} required onChange={setPaidAt} />
             <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
             {plan && !plan.ok && <p className="form-feedback form-feedback-warning">{plan.error}</p>}
