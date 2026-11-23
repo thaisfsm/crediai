@@ -238,3 +238,15 @@ export function formatCnpj(stored: string | null) {
   if (!stored) return null;
   return onlyDigits(stored).length === 14 ? maskCnpj(stored) : stored;
 }
+
+// Resumo das parcelas com valores combinados, na ordem e agrupando as seguidas iguais: [922, 922, 922, 411] (em reais) →
+// "3 × R$ 922,00 + 1 × R$ 411,00".
+export function installmentAmountsSummary(amounts: number[]) {
+  const groups: { cents: number; count: number }[] = [];
+  for (const cents of amounts) {
+    const last = groups.at(-1);
+    if (last && last.cents === cents) last.count += 1;
+    else groups.push({ cents, count: 1 });
+  }
+  return groups.map((group) => `${group.count} × ${formatMoney(group.cents)}`).join(" + ");
+}

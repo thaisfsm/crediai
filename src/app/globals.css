@@ -1167,8 +1167,15 @@ button { color:inherit; }
 /* Prévia dos vencimentos do parcelado */
 .schedule-preview { border:1px solid rgba(112,145,170,.18); border-radius:10px; padding:12px 14px; background:rgba(7,17,31,.55); }
 .schedule-preview p { margin:0 0 8px; color:#a9bcc9; font-size:11px; }
-.schedule-preview ol { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:6px 14px; margin:0; padding:0; list-style:none; max-height:220px; overflow:auto; }
-.schedule-preview li { display:flex; justify-content:space-between; gap:8px; color:#8296a7; font-size:11.5px; padding:4px 0; border-bottom:1px dashed rgba(112,145,170,.14); }
+.schedule-preview ol { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap:6px 14px; margin:0; padding:0; list-style:none; max-height:220px; overflow:auto; }
+.schedule-preview li { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 8px; color:#8296a7; font-size:11.5px; padding:4px 0; border-bottom:1px dashed rgba(112,145,170,.14); }
+.schedule-preview li > span { flex:0 0 auto; white-space:nowrap; }
+.schedule-preview li .schedule-date { flex:1 1 120px; min-width:0; }
+.schedule-preview li .schedule-amount { flex:0 1 104px; min-width:80px; text-align:right; border:1px solid rgba(112,145,170,.3); border-radius:6px; padding:3px 6px; background:transparent; color:inherit; font:inherit; }
+.schedule-preview li .schedule-amount:focus { outline:none; border-color:#2dd4bf; }
+.schedule-preview li small { flex:1 0 100%; }
+.schedule-preview .schedule-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.schedule-preview .schedule-actions:empty { display:none; }
 .schedule-preview li strong { color:#eef6fb; font-weight:600; }
 .schedule-form { border:1px solid rgba(112,145,170,.18); border-radius:12px; padding:14px; margin:0 0 14px; background:rgba(7,17,31,.35); }
 .revision-changes { margin:6px 0 0; padding-left:16px; color:#8296a7; font-size:12px; display:grid; gap:2px; }

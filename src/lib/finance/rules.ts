@@ -74,6 +74,14 @@ export function calculateInstallments({ principalCents, installmentCents, count,
   };
 }
 
+// Parcelado com valores combinados por parcela: total = soma das parcelas; juros e taxa simples pela mesma regra.
+export function calculateCustomInstallments({ principalCents, amounts, frequency = "MONTHLY" }: { principalCents: number; amounts: number[]; frequency?: InstallmentFrequency }) {
+  const totalCents = amounts.reduce((sum, value) => sum + value, 0);
+  const interestCents = totalCents - principalCents;
+  const monthlyRate = simpleMonthlyRate({ principalCents, interestCents: Math.max(interestCents, 0), months: amounts.length });
+  return { interestCents, totalCents, calculationRule: frequency === "BIWEEKLY" ? BIWEEKLY_INSTALLMENT_RULE : INSTALLMENT_RULE, interestRateBps: Math.round(monthlyRate * 10_000), monthlyRate };
+}
+
 // Vencimento da parcela k (1 = primeiro vencimento), pela função única de vencimentos (dueDates): mês a mês no mensal e
 // pelos pares fixos de dias do quinzenal (dia X e X + 15, a mesma regra do pagamento único quinzenal).
 export function installmentDueDate(firstDueDate: string, number: number, frequency: InstallmentFrequency = "MONTHLY") {
@@ -262,6 +270,9 @@ export type LedgerTerms = {
   deferrals?: LedgerDeferral[];
   // Parcelado: vencimentos combinados (um por parcela) quando diferem da regra mensal/quinzenal; sem eles, pela regra.
   customDueDates?: string[] | null;
+  // Parcelado: valores combinados (um por parcela, em centavos) quando alguma parcela difere das demais; a soma é o total do
+  // contrato. Sem eles, todas iguais (a última leva o ajuste). Gravados no cadastro e nunca recalculados.
+  customAmounts?: number[] | null;
 };
 // mode/allocationOrder: gravados no pagamento (migration 0054). Ausentes (null) = pagamento antigo, pela regra de antes.
 // period (migration 0055): no "Receber juros e renovar", o número do período cujos juros este recebimento paga. null = sem
@@ -312,14 +323,15 @@ export function periodInterest(terms: Pick<LedgerTerms, "interestMode" | "princi
 }
 
 // Parcelas do contrato amortizado: todas iguais; no diário a última leva o ajuste para fechar o total.
-export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals" | "customDueDates">, paidCents: number): ScheduleItem[] {
+export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstDueDate" | "installmentCount" | "installmentCents" | "principalCents" | "interestCents" | "modality" | "deferrals" | "customDueDates" | "customAmounts">, paidCents: number): ScheduleItem[] {
   const count = terms.installmentCount ?? 0, base = terms.installmentCents ?? 0;
   const totalCents = terms.principalCents + terms.interestCents;
   // Parcelado: mensal ou quinzenal (operações antigas são todas mensais); diário: um vencimento por dia.
   const frequency: Frequency = terms.modality === "INSTALLMENT" ? (terms.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY") : terms.frequency;
   const custom = terms.modality === "INSTALLMENT" && terms.customDueDates?.length === count ? terms.customDueDates : null;
   const dates = custom ?? dueDates(frequency, terms.firstDueDate, count);
-  const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: index === count - 1 ? totalCents - base * (count - 1) : base }));
+  const amounts = customInstallmentAmounts(terms);
+  const original = dates.map((dueDate, index) => ({ originalNumber: index + 1, dueDate, amountCents: amounts ? amounts[index] : index === count - 1 ? totalCents - base * (count - 1) : base }));
   // Parcelas renegociadas para o final, na ordem em que foram feitas (cada nova data vem depois da anterior).
   const deferrals = [...(terms.deferrals ?? [])].filter((item) => original.some((entry) => entry.originalNumber === item.originalNumber))
     .sort((a, b) => a.newDueDate.localeCompare(b.newDueDate) || a.originalNumber - b.originalNumber);
@@ -349,6 +361,14 @@ export function amortizedSchedule(terms: Pick<LedgerTerms, "frequency" | "firstD
     }),
     ...targets,
   ];
+}
+
+// Valores combinados das parcelas, só quando válidos (parcelado, um por parcela, positivos e somando o total do contrato).
+export function customInstallmentAmounts(terms: Pick<LedgerTerms, "modality" | "installmentCount" | "principalCents" | "interestCents" | "customAmounts">) {
+  const amounts = terms.customAmounts;
+  if (terms.modality !== "INSTALLMENT" || !amounts || amounts.length !== (terms.installmentCount ?? 0)) return null;
+  if (!amounts.every((value) => Number.isInteger(value) && value > 0)) return null;
+  return amounts.reduce((sum, value) => sum + value, 0) === terms.principalCents + terms.interestCents ? amounts : null;
 }
 
 // Data da obrigação que uma parcela renegociada passa a ter: o período seguinte ao último vencimento ativo do cronograma,
