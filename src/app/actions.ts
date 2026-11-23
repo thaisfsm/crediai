@@ -27,7 +27,7 @@ import type { OperationView } from "@/lib/finance/portfolio";
 import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
-import { allocationOrderFor, BIWEEKLY_RULE, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
+import { allocationOrderFor, BIWEEKLY_RULE, calculateCustomInstallments, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
 
@@ -605,6 +605,13 @@ async function planOperationEdit(tx: TenantTransaction, tenantId: string, data: 
     next.installmentDueDates = operation.installmentDueDates;
     next.dueDate = operation.installmentDueDates[operation.installmentDueDates.length - 1];
   }
+  // Valores combinados por parcela: com o prazo e o valor de cada parcela iguais, continuam os mesmos (o total segue a soma deles);
+  // mudando o prazo ou o valor da parcela, a operação volta a ter parcelas iguais (a prévia da correção mostra o total novo).
+  if (operation.installmentAmounts && !text(data, "customInstallmentAmounts", 8000) && terms.values.modality === "INSTALLMENT" && terms.values.installmentCount === operation.installmentCount && terms.values.installmentCents === operation.installmentCents) {
+    const kept = calculateCustomInstallments({ principalCents: terms.principalCents, amounts: operation.installmentAmounts, frequency: terms.values.frequency === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY" });
+    if (kept.interestCents < 0) return { ok: false as const, error: `As parcelas combinadas somam ${formatMoney(kept.totalCents)}, menos que o valor emprestado de ${formatMoney(terms.principalCents)}.` };
+    Object.assign(next, { installmentAmounts: operation.installmentAmounts, totalCents: kept.totalCents, interestCents: kept.interestCents, interestRateBps: kept.interestRateBps });
+  }
   const after: OperationEditSnapshot = { ...before, ...next, clientName: client.name, firstDueDate: next.firstDueDate ?? null };
   const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId));
   // O principal antigo volta ao disponível e o novo sai: só a diferença precisa caber no capital.
@@ -846,7 +853,7 @@ async function ledgerTermsOf(tx: TenantTransaction, tenantId: string, operation:
   return {
     modality, frequency, interestMode: interestModeOf(operation.calculationRule), principalCents: operation.principalCents, interestRateBps: operation.interestRateBps, interestCents: operation.interestCents,
     firstDueDate: operation.firstDueDate ?? renewals.find((renewal) => renewal.periodNumber === 2)?.previousDueDate ?? operation.dueDate,
-    installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, customDueDates: operation.installmentDueDates,
+    installmentCount: operation.installmentCount, installmentCents: operation.installmentCents, customDueDates: operation.installmentDueDates, customAmounts: operation.installmentAmounts,
     renewals: renewals.map((renewal) => ({ paymentId: renewal.paymentId, periodNumber: renewal.periodNumber, previousDueDate: renewal.previousDueDate, newDueDate: renewal.newDueDate, principalBaseCents: renewal.principalBaseCents, interestCents: renewal.interestCents })),
     settlementPaymentId: operation.settlementPaymentId, paymentOrder: operation.paymentOrder === "PRINCIPAL_FIRST" ? "PRINCIPAL_FIRST" : "INTEREST_FIRST",
     deferrals: deferrals.map((item) => ({ originalNumber: item.originalNumber, additionCents: item.additionCents, newDueDate: item.newDueDate, newAmountCents: item.newAmountCents })),

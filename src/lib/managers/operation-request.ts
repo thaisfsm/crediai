@@ -11,13 +11,15 @@ import { loadManagerCash } from "./queries";
 
 // Pedido de operação da gerente de contas: o mesmo formulário do dono, mas nada entra na carteira nem no capital até o dono aprovar.
 // Só os campos do formulário de operação são guardados (qualquer outro é descartado) e o cliente precisa ser dela.
-const FORM_KEYS = ["clientId", "modality", "frequency", "installmentFrequency", "interestMode", "principal", "interestAmount", "rate", "loanDate", "dueDate", "days", "firstDueDate", "loanAmount", "installment", "term", "customDueDates"] as const;
+const FORM_KEYS = ["clientId", "modality", "frequency", "installmentFrequency", "interestMode", "principal", "interestAmount", "rate", "loanDate", "dueDate", "days", "firstDueDate", "loanAmount", "installment", "term", "customDueDates", "customInstallmentAmounts"] as const;
+// Listas da prévia (vencimentos e valores combinados, em JSON) podem passar de 80 caracteres.
+const LONG_KEYS = new Set<string>(["customDueDates", "customInstallmentAmounts"]);
 
 export async function submitOperationRequest(tx: TenantTransaction, tenantId: string, manager: { id: string; name: string }, actor: AuditActor, data: FormData): Promise<CommandResult> {
   const form: Record<string, string> = {};
   for (const key of FORM_KEYS) {
     const value = data.get(key);
-    if (typeof value === "string" && value.trim()) form[key] = value.trim().slice(0, 80);
+    if (typeof value === "string" && value.trim()) form[key] = value.trim().slice(0, LONG_KEYS.has(key) ? 8000 : 80);
   }
   if (!form.clientId) return { ok: false, error: "Selecione o cliente." };
   const [client] = await tx.select({ id: clients.id, name: clients.name }).from(clients)

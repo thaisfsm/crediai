@@ -552,6 +552,9 @@ export const loanOperations = pgTable("loan_operation", {
   paymentOrder: text("payment_order").notNull().default("INTEREST_FIRST"),
   // Parcelado: vencimentos combinados com o cliente quando fogem da regra mensal/quinzenal (um por parcela, em ordem). Migração 0050.
   installmentDueDates: jsonb("installment_due_dates").$type<string[]>(),
+  // Parcelado: valores combinados por parcela, em centavos (ex.: 3 × R$ 922,00 e a 4ª por R$ 411,00), quando alguma parcela
+  // difere das demais. A soma é o total do contrato; gravados no cadastro e nunca recalculados. Vazio = parcelas iguais. Migração 0058.
+  installmentAmounts: jsonb("installment_amounts").$type<number[]>(),
   // Modalidade: SINGLE = pagamento único (com renovação pagando só os juros); INSTALLMENT = parcelado com parcela fixa (juros simples).
   modality: text("modality").notNull().default("SINGLE"),
   // Periodicidade do pagamento único: MONTHLY e BIWEEKLY (juros recorrentes sobre o principal em aberto) ou DAILY
@@ -583,6 +586,7 @@ export const loanOperations = pgTable("loan_operation", {
   check("loan_operation_renegotiated_not_self", sql`${table.renegotiatedIntoId} is null or ${table.renegotiatedIntoId} <> ${table.id}`),
   check("loan_operation_renegotiated_consistent", sql`(${table.status}::text = 'RENEGOTIATED') = (${table.renegotiatedIntoId} is not null and ${table.renegotiatedOn} is not null and ${table.renegotiatedAt} is not null and ${table.renegotiatedPrincipalCents} >= 0 and ${table.renegotiatedInterestCents} >= 0)`),
   check("loan_operation_installment_due_dates_valid", sql`${table.installmentDueDates} is null or (${table.modality} = 'INSTALLMENT' and jsonb_typeof(${table.installmentDueDates}) = 'array' and jsonb_array_length(${table.installmentDueDates}) = ${table.installmentCount})`),
+  check("loan_operation_installment_amounts_valid", sql`${table.installmentAmounts} is null or (${table.modality} = 'INSTALLMENT' and crediai_installment_amounts_total(${table.installmentAmounts}, ${table.installmentCount}) = ${table.totalCents})`),
   check("loan_operation_payment_order_valid", sql`${table.paymentOrder} in ('INTEREST_FIRST', 'PRINCIPAL_FIRST')`),
   check("loan_operation_principal_positive", sql`${table.principalCents} > 0`),
   check("loan_operation_rate_non_negative", sql`${table.interestRateBps} >= 0`),
@@ -592,7 +596,7 @@ export const loanOperations = pgTable("loan_operation", {
     or (${table.modality} = 'SINGLE' and ${table.frequency} = 'DAILY' and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
       and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents} and ${table.totalCents} < ${table.installmentCount} * ${table.installmentCents} + ${table.installmentCount})
     or (${table.modality} = 'INSTALLMENT' and ${table.frequency} in ('MONTHLY', 'BIWEEKLY') and ${table.installmentCount} >= 1 and ${table.installmentCents} > 0 and ${table.firstDueDate} is not null
-      and ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents})`),
+      and (${table.installmentAmounts} is not null or ${table.totalCents} >= ${table.installmentCount} * ${table.installmentCents}))`),
   ...tenantPolicies("loan_operation", table.tenantId),
 ]).enableRLS();
 
