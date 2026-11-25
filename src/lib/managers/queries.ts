@@ -1,11 +1,39 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withPlatformContext, withTenantContext } from "@/lib/auth/guards";
-import { accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, users } from "@/lib/db/schema";
+import { accountManagerAdjustments, accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, users } from "@/lib/db/schema";
 import { todayIso } from "@/lib/finance/format";
 import { buildPortfolio, type DeferralRecord, type OperationView, type RenewalRecord } from "@/lib/finance/portfolio";
 import { toDeferralRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "@/lib/finance/summaries";
 import { clientSituation, commissionOf, effectiveBps, managerCommission, type ClientSituation } from "./commission";
+
+// Lançamentos (débito/crédito) e fechamentos com o detalhe de cada um: o relatório de comissão mostra comissão, lançamentos e valor final.
+type Tx = Parameters<Parameters<typeof withTenantContext>[0]>[0];
+export type AdjustmentRow = { id: string; managerId: string; kind: "DEBIT" | "CREDIT"; description: string; amountCents: number; entryDate: string; payoutId: string | null; appliedAt: string | null };
+export type PayoutRow = { id: string; managerId: string; amountCents: number; paidOn: string; notes: string | null; debitCents: number; creditCents: number; finalCents: number; adjustments: AdjustmentRow[] };
+async function loadPayoutsAndAdjustments(tx: Tx, tenantId: string, managerId?: string) {
+  const payoutRows = await tx.select({
+    id: accountManagerPayouts.id, managerId: accountManagerPayouts.managerId, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes,
+    debitCents: accountManagerPayouts.debitCents, creditCents: accountManagerPayouts.creditCents,
+  }).from(accountManagerPayouts)
+    .where(and(eq(accountManagerPayouts.tenantId, tenantId), managerId ? eq(accountManagerPayouts.managerId, managerId) : undefined))
+    .orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
+  const adjustmentRows = await tx.select({
+    id: accountManagerAdjustments.id, managerId: accountManagerAdjustments.managerId, kind: accountManagerAdjustments.kind, description: accountManagerAdjustments.description,
+    amountCents: accountManagerAdjustments.amountCents, entryDate: accountManagerAdjustments.entryDate, payoutId: accountManagerAdjustments.payoutId, appliedAt: accountManagerAdjustments.appliedAt,
+  }).from(accountManagerAdjustments)
+    .where(and(eq(accountManagerAdjustments.tenantId, tenantId), managerId ? eq(accountManagerAdjustments.managerId, managerId) : undefined))
+    .orderBy(desc(accountManagerAdjustments.entryDate), desc(accountManagerAdjustments.createdAt));
+  const adjustments: AdjustmentRow[] = adjustmentRows.map((row) => ({ ...row, kind: row.kind === "CREDIT" ? "CREDIT" : "DEBIT", appliedAt: row.appliedAt?.toISOString() ?? null }));
+  const payouts: PayoutRow[] = payoutRows.map((row) => ({ ...row, finalCents: row.amountCents - row.debitCents + row.creditCents, adjustments: adjustments.filter((item) => item.payoutId === row.id) }));
+  return { payouts, adjustments };
+}
+const pendingTotals = (adjustments: AdjustmentRow[]) => {
+  const pending = adjustments.filter((item) => !item.payoutId);
+  const debitCents = pending.filter((item) => item.kind === "DEBIT").reduce((total, item) => total + item.amountCents, 0);
+  const creditCents = pending.filter((item) => item.kind === "CREDIT").reduce((total, item) => total + item.amountCents, 0);
+  return { count: pending.length, debitCents, creditCents, netCents: creditCents - debitCents };
+};
 
 // Todas as operações (todos os ciclos) dos clientes indicados por um gerente, já calculadas como no extrato. Cada consulta filtra
 // tenant_id e os clientes do gerente: o isolamento não depende do papel de banco (a produção ignora RLS).
@@ -133,10 +161,9 @@ function clientCards(clientRows: { id: string; name: string; bps: number | null 
 export async function loadManagerPanel() {
   const data = await withManagerContext(async (tx, { tenantId, manager, session }) => {
     const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, manager.id);
-    const payoutRows = await tx.select({ id: accountManagerPayouts.id, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes })
-      .from(accountManagerPayouts).where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
+    const { payouts: payoutRows, adjustments } = await loadPayoutsAndAdjustments(tx, tenantId, manager.id);
     const cash = await loadManagerCash(tx, tenantId, manager.id);
-    return { manager, userId: session.user.id, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, cash };
+    return { manager, userId: session.user.id, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, adjustments, cash };
   });
   const paidOutCents = data.payoutRows.reduce((total, payout) => total + payout.amountCents, 0);
   const summary = managerCommission(commissionGroups(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), paidOutCents);
@@ -152,6 +179,7 @@ export async function loadManagerPanel() {
     principalOpenCents: live.filter((operation) => operation.status === "OPEN").reduce((total, operation) => total + operation.principalRemainingCents, 0),
     clients: cards,
     payouts: data.payoutRows,
+    pendingAdjustments: data.adjustments.filter((item) => !item.payoutId), pending: pendingTotals(data.adjustments),
   };
 }
 export type ManagerPanel = Awaited<ReturnType<typeof loadManagerPanel>>;
@@ -176,8 +204,7 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
     }).from(accountManagers)
       .leftJoin(users, and(eq(users.id, accountManagers.userId), eq(users.tenantId, tenantId)))
       .where(eq(accountManagers.tenantId, tenantId)).orderBy(asc(accountManagers.name));
-    const payoutRows = await tx.select({ id: accountManagerPayouts.id, managerId: accountManagerPayouts.managerId, amountCents: accountManagerPayouts.amountCents, paidOn: accountManagerPayouts.paidOn, notes: accountManagerPayouts.notes })
-      .from(accountManagerPayouts).where(eq(accountManagerPayouts.tenantId, tenantId)).orderBy(desc(accountManagerPayouts.paidOn), desc(accountManagerPayouts.createdAt));
+    const { payouts: payoutRows, adjustments } = await loadPayoutsAndAdjustments(tx, tenantId);
     const unassigned = await tx.select({ id: clients.id, name: clients.name }).from(clients)
       .where(and(eq(clients.tenantId, tenantId), isNull(clients.accountManagerId), isNull(clients.archivedAt))).orderBy(asc(clients.name));
     const reservedRows = await tx.select({ managerId: operationRequests.managerId, total: sql<string>`coalesce(sum(${operationRequests.principalCents}), 0)` }).from(operationRequests)
@@ -185,7 +212,7 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
     const reservedBy = new Map(reservedRows.map((row) => [row.managerId, Number(row.total)]));
     const perManager = [];
     for (const manager of managerRows) perManager.push({ manager, ...(await loadManagerOperations(tx, tenantId, manager.id)) });
-    return { perManager, payoutRows, unassigned, reservedBy };
+    return { perManager, payoutRows, adjustments, unassigned, reservedBy };
   })();
   return {
     today: todayIso(),
@@ -195,10 +222,11 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
       const paidOutCents = payouts.reduce((total, payout) => total + payout.amountCents, 0);
       const summary = managerCommission(commissionGroups(clientRows, operations, manager.commissionBps, overrideBps), paidOutCents);
       const cards = clientCards(clientRows, operations, manager.commissionBps, overrideBps);
+      const adjustments = data.adjustments.filter((item) => item.managerId === manager.id);
       return {
         id: manager.id, name: manager.name, email: manager.email, active: manager.active, commissionBps: manager.commissionBps,
         hasLogin: Boolean(manager.userId), loginActive: manager.loginActive ?? false, mustChangePassword: manager.mustChangePassword ?? false, lastLoginAt: manager.lastLoginAt?.toISOString() ?? null,
-        summary, payouts, cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
+        summary, payouts, adjustments, pending: pendingTotals(adjustments), cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
         clients: cards.map((card) => ({ id: card.id, name: card.name, situation: card.situation, commissionBps: card.commissionBps, customBps: clientRows.find((client) => client.id === card.id)?.bps ?? null, interestReceivedCents: card.interestReceivedCents, commissionCents: card.commissionCents, contracts: card.operations })),
       };
     }),

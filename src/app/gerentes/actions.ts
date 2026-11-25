@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { generateTemporaryPassword, hashPassword } from "@/lib/admin/passwords";
 import { withTenantContext } from "@/lib/auth/guards";
-import { createManager, createManagerAccess, deleteManager, linkClient, registerPayout, resetManagerPassword, transferOperation, unlinkClient, updateManager, type AccessCommandResult, type CommandResult } from "@/lib/managers/commands";
+import { createAdjustment, createManager, createManagerAccess, deleteAdjustment, deleteManager, linkClient, registerPayout, resetManagerPassword, transferOperation, unlinkClient, updateManager, type AccessCommandResult, type CommandResult } from "@/lib/managers/commands";
 
 // Gerentes de contas, pelo dono da carteira (TENANT_USER). Tudo em withTenantContext: o tenant vem só da sessão. As regras e a
 // auditoria ficam em src/lib/managers/commands.ts (as mesmas usadas pelo MASTER). O gerente (ACCOUNT_MANAGER) nunca chega aqui:
@@ -27,6 +27,8 @@ export async function transferOperationAction(data: FormData): Promise<CommandRe
 }
 export async function deleteManagerAction(data: FormData): Promise<CommandResult> { return run((tx, tenantId, actor) => deleteManager(tx, tenantId, actor, data)); }
 export async function registerManagerPayoutAction(data: FormData): Promise<CommandResult> { return run((tx, tenantId, actor) => registerPayout(tx, tenantId, actor, data)); }
+export async function createAdjustmentAction(data: FormData): Promise<CommandResult> { return run((tx, tenantId, actor) => createAdjustment(tx, tenantId, actor, data)); }
+export async function deleteAdjustmentAction(data: FormData): Promise<CommandResult> { return run((tx, tenantId, actor) => deleteAdjustment(tx, tenantId, actor, data)); }
 
 async function access(data: FormData, command: typeof createManagerAccess): Promise<AccessResult> {
   const temporaryPassword = generateTemporaryPassword();

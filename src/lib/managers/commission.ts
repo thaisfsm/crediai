@@ -37,3 +37,12 @@ export function managerCommission(clients: { bps: number; operations: OperationL
     balanceCents: Math.max(0, earnedCents - paidOutCents), advanceCents: Math.max(0, paidOutCents - earnedCents),
   };
 }
+
+// Lançamentos do fechamento: DÉBITO abate e CRÉDITO soma ao valor pago ao gerente. A comissão quitada no fechamento continua sendo a que
+// sai do saldo a receber; o valor final pago = comissão − débitos + créditos (ex.: 2.000 − 200 + 100 = 1.900). Nunca negativo.
+export type AdjustmentKind = "DEBIT" | "CREDIT";
+export function closingTotals(commissionCents: number, adjustments: { kind: AdjustmentKind | string; amountCents: number }[]) {
+  const debitCents = adjustments.filter((item) => item.kind === "DEBIT").reduce((total, item) => total + item.amountCents, 0);
+  const creditCents = adjustments.filter((item) => item.kind === "CREDIT").reduce((total, item) => total + item.amountCents, 0);
+  return { commissionCents, debitCents, creditCents, finalCents: commissionCents - debitCents + creditCents };
+}

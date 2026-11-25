@@ -125,8 +125,8 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   await region.getByRole("button", { name: "Pagar comissão" }).click();
   // Conferência antes de pagar: contratos e comissões listados, com caixa para tirar um cliente do cálculo.
   await region.getByText("Conferir antes de pagar").waitFor();
-  await region.getByText("Comissões já pagas").waitFor();
-  assert.equal(await region.getByLabel("Valor pago (R$)").inputValue(), "30,00", "sugestão = comissão gerada (Ana 10,00 + Carla 20,00)");
+  await region.getByText("Relatório dos fechamentos").waitFor();
+  assert.equal(await region.getByLabel("Comissão deste fechamento (R$)").inputValue(), "30,00", "sugestão = comissão gerada (Ana 10,00 + Carla 20,00)");
   // Só entram os clientes/contratos com comissão gerada: o Beto (sem juros recebidos, comissão R$ 0) não aparece nem é marcado.
   assert.equal(await region.getByLabel("Incluir Beto Indicado no pagamento").count(), 0, "cliente sem comissão gerada fora da conferência");
   assert.equal(await region.locator(".payout-review").getByText("Beto Indicado").count(), 0);
@@ -134,9 +134,9 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   await region.getByLabel("Incluir Carla Indicada no pagamento").uncheck();
   await poll(`select 1`, 1);
   await owner.waitForTimeout(300);
-  assert.equal(await region.getByLabel("Valor pago (R$)").inputValue(), "10,00", "sem a Carla a sugestão cai para 10,00");
+  assert.equal(await region.getByLabel("Comissão deste fechamento (R$)").inputValue(), "10,00", "sem a Carla a sugestão cai para 10,00");
   await region.getByLabel("Incluir Carla Indicada no pagamento").check();
-  await region.getByLabel("Valor pago (R$)").fill("10,00");
+  await region.getByLabel("Comissão deste fechamento (R$)").fill("10,00");
   await region.getByRole("button", { name: "Registrar pagamento da comissão" }).click();
   await poll(`select coalesce(sum(amount_cents),0) from account_manager_payout where tenant_id='ten_roberio'`, 1000);
   // O servidor confere o saldo: acima da comissão a pagar (R$ 20,00) é recusado e nada é gravado (sem pagar em dobro).

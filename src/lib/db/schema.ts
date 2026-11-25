@@ -430,11 +430,46 @@ export const accountManagerPayouts = pgTable("account_manager_payout", {
   notes: text("notes"),
   createdByUserId: text("created_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Fechamento com lançamentos (migração 0059): amount_cents continua sendo a COMISSÃO quitada neste fechamento (é o que sai do saldo a
+  // receber); os débitos e créditos aplicados nele ficam somados aqui e o valor final pago = amount − débitos + créditos. Fechamentos
+  // anteriores ficam com 0 e 0 (valor final = amount, como sempre foi).
+  debitCents: bigint("debit_cents", { mode: "number" }).notNull().default(0),
+  creditCents: bigint("credit_cents", { mode: "number" }).notNull().default(0),
 }, (table) => [
   index("account_manager_payout_manager_idx").on(table.tenantId, table.managerId),
+  unique("account_manager_payout_tenant_manager_id_unique").on(table.tenantId, table.managerId, table.id),
   foreignKey({ name: "account_manager_payout_manager_same_tenant_fk", columns: [table.tenantId, table.managerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("restrict"),
   check("account_manager_payout_amount_positive", sql`${table.amountCents} > 0`),
+  check("account_manager_payout_adjustments_valid", sql`${table.debitCents} >= 0 and ${table.creditCents} >= 0 and ${table.amountCents} - ${table.debitCents} + ${table.creditCents} >= 0`),
   ...tenantPolicies("account_manager_payout", table.tenantId),
+]).enableRLS();
+
+// Lançamentos do fechamento de comissão (migração 0059): DÉBITO (ex.: adiantamento) abate e CRÉDITO (ex.: bônus) soma ao valor pago ao
+// gerente. Pendente (payout_id nulo) até o próximo fechamento, que aplica todos os pendentes do gerente de uma vez; aplicado fica ligado
+// ao fechamento e não muda mais (gatilho no banco). Pendente pode ser excluído.
+export const accountManagerAdjustments = pgTable("account_manager_adjustment", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  managerId: text("manager_id").notNull(),
+  kind: text("kind").notNull(),
+  description: text("description").notNull(),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  entryDate: date("entry_date", { mode: "string" }).notNull(),
+  payoutId: text("payout_id"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("account_manager_adjustment_manager_idx").on(table.tenantId, table.managerId),
+  index("account_manager_adjustment_payout_idx").on(table.tenantId, table.payoutId),
+  foreignKey({ name: "account_manager_adjustment_manager_same_tenant_fk", columns: [table.tenantId, table.managerId], foreignColumns: [accountManagers.tenantId, accountManagers.id] }).onDelete("no action"),
+  // O fechamento tem de ser do MESMO gerente e do mesmo tenant.
+  foreignKey({ name: "account_manager_adjustment_payout_same_manager_fk", columns: [table.tenantId, table.managerId, table.payoutId], foreignColumns: [accountManagerPayouts.tenantId, accountManagerPayouts.managerId, accountManagerPayouts.id] }).onDelete("no action"),
+  check("account_manager_adjustment_kind_valid", sql`${table.kind} in ('DEBIT', 'CREDIT')`),
+  check("account_manager_adjustment_amount_positive", sql`${table.amountCents} > 0`),
+  check("account_manager_adjustment_description_not_blank", sql`length(trim(${table.description})) > 0`),
+  check("account_manager_adjustment_applied_pair", sql`(${table.payoutId} is null) = (${table.appliedAt} is null)`),
+  ...tenantPolicies("account_manager_adjustment", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
 export const clients = pgTable("client", {
@@ -1327,8 +1362,8 @@ export const adminAuditLogs = pgTable("admin_audit_log", {
   pgPolicy("admin_audit_log_insert_tenant_operations", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} = 'loan_operation'` }),
   // Contas bancárias e documentos do investidor (migração 0024), também só no próprio tenant.
   // Gerentes de contas e comissões pagas a eles (migração 0034), também só no próprio tenant.
-  pgPolicy("admin_audit_log_insert_tenant_managers", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('account_manager', 'account_manager_payout')` }),
+  pgPolicy("admin_audit_log_insert_tenant_managers", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('account_manager', 'account_manager_payout', 'account_manager_adjustment')` }),
   pgPolicy("admin_audit_log_insert_tenant_investor_records", { for: "insert", withCheck: sql`${roleSetting} = 'TENANT_USER' and ${table.tenantId} = ${tenantSetting} and ${table.entity} in ('investor_bank_account', 'investor_document')` }),
 ]).enableRLS();
 
-export const schema = { accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalApplicantSessions, proposalApplicants, proposalLinks, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
+export const schema = { accountManagerAdjustments, accountManagerPayouts, accountManagers, accounts, adminAuditLogs, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalApplicantSessions, proposalApplicants, proposalLinks, investmentContractors, investmentContracts, investmentDocuments, investmentRevisions, investmentScheduleItems, investments, installmentDeferrals, investors, loanOperationRevisions, loanOperations, loanRenewals, operationRequests, paymentRevisions, payments, plans, sessions, subscriptionCharges, subscriptions, tenants, users, verifications, walletCycles, wallets };
