@@ -7,6 +7,7 @@ import { withTenantContext, type TenantTransaction } from "@/lib/auth/guards";
 import { PHASE_KEYS, type ProposalPhase } from "@/lib/credit/phases";
 import { newLinkToken } from "@/lib/credit/link-token";
 import { respondToOffer } from "@/lib/credit/acceptance";
+import { upsertClientFromProposal } from "@/lib/credit/client-data";
 import { evaluateProposal, type EnginePolicy } from "@/lib/credit/engine";
 import { cpfsWithOperations, openExposureByCpf } from "@/lib/credit/exposure";
 import { reviewOf } from "@/lib/credit/reviews";
@@ -254,7 +255,7 @@ export async function approveOperationRequestAction(requestId: string): Promise<
 }
 
 // Esteira de crédito: o dono cadastra uma proposta (o cliente também poderá enviar pelo link) e a leva de fase em fase.
-async function auditProposal(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], session: Parameters<Parameters<typeof withTenantContext>[0]>[1]["session"], tenantId: string, action: "CREDIT_PROPOSAL_REGISTERED" | "CREDIT_PROPOSAL_MOVED" | "CREDIT_PROPOSAL_REJECTED" | "CREDIT_PROPOSAL_REVIEWED", proposalId: string, description: string, after: Record<string, unknown>) {
+async function auditProposal(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], session: Parameters<Parameters<typeof withTenantContext>[0]>[1]["session"], tenantId: string, action: "CREDIT_PROPOSAL_REGISTERED" | "CREDIT_PROPOSAL_MOVED" | "CREDIT_PROPOSAL_REJECTED" | "CREDIT_PROPOSAL_REVIEWED" | "CREDIT_PROPOSAL_FILL_LINK_CHANGED", proposalId: string, description: string, after: Record<string, unknown>) {
   const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
   await recordAdminAudit(tx, session, { action, entity: "wallet", entityId: proposalId, tenantId, tenantName: tenant?.name ?? null, description, before: null, after });
 }
@@ -402,8 +403,11 @@ export async function submitDraftProposalAction(proposalId: string): Promise<Act
     if (proposal.status !== "DRAFT") return { ok: false, error: "Esta proposta já foi enviada para a esteira." };
     const docs = await tx.select({ kind: creditProposalDocuments.kind }).from(creditProposalDocuments).where(and(eq(creditProposalDocuments.proposalId, proposal.id), eq(creditProposalDocuments.tenantId, tenantId)));
     if (PROPOSAL_DOCUMENT_KINDS.some((kind) => !docs.some((doc) => doc.kind === kind))) return { ok: false, error: "Faltam documentos obrigatórios. O cliente precisa anexá-los pelo link." };
-    await tx.update(creditProposals).set({ status: "OPEN", phase: "RECEIVED", phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
-    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposal.id, `Proposta de ${proposal.applicantName} (enviada pelo link) levada à fase "Proposta recebida" pelo dono.`, { phase: "RECEIVED", via: "OWNER_FROM_DRAFT" });
+    // O que o cliente já preencheu do cadastro completo vai para Clientes (cria ou atualiza pelo CPF, sem duplicar).
+    const client = proposal.clientData && Object.keys(proposal.clientData).length > 0 ? await upsertClientFromProposal(tx, tenantId, proposal) : null;
+    if (client && !client.ok) return client;
+    await tx.update(creditProposals).set({ status: "OPEN", phase: "RECEIVED", phaseChangedAt: sql`now()`, ...(client ? { clientId: client.clientId } : {}) }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REGISTERED", proposal.id, `Proposta de ${proposal.applicantName} (enviada pelo link) levada à fase "Proposta recebida" pelo dono.`, { phase: "RECEIVED", via: "OWNER_FROM_DRAFT", clientId: client?.clientId ?? null });
     return { ok: true, message: `Proposta de ${proposal.applicantName} enviada para a fase "Proposta recebida".` };
   });
   if (result.ok) revalidatePath("/");
@@ -421,6 +425,30 @@ export async function rejectCreditProposalAction(proposalId: string, reason: str
     await tx.update(creditProposals).set({ status: "REJECTED", decisionNote: note, phaseChangedAt: sql`now()` }).where(and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId)));
     await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_REJECTED", proposal.id, `Proposta de ${proposal.applicantName} reprovada: ${note}`, { phase: proposal.phase, note });
     return { ok: true, message: "Proposta reprovada." };
+  });
+  if (result.ok) revalidatePath("/");
+  return result;
+}
+
+// Link individual para o cliente completar o cadastro de uma proposta cadastrada pelo dono: nome, CPF, telefone e e-mail já vêm
+// preenchidos. "create" gera um link novo (o anterior para de funcionar, a sessão aberta cai e o cadastro enviado volta a ser editável);
+// "disable" desativa. Só propostas do dono (as do link da carteira o cliente já preenche na conta dele) e em andamento.
+export async function manageProposalFillLinkAction(proposalId: string, mode: string): Promise<ActionResult> {
+  if (mode !== "create" && mode !== "disable") return { ok: false, error: "Ação inválida." };
+  const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.id, String(proposalId)), eq(creditProposals.tenantId, tenantId))).for("update");
+    if (!proposal) return { ok: false, error: "Proposta não encontrada nesta carteira." };
+    if (proposal.source !== "OWNER") return { ok: false, error: "Esta proposta veio do link da carteira: o cliente completa o cadastro na conta dele." };
+    if (proposal.status !== "OPEN") return { ok: false, error: "Esta proposta já foi reprovada." };
+    const where = and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId));
+    if (mode === "disable") {
+      if (!proposal.fillToken) return { ok: false, error: "Esta proposta não tem link ativo." };
+      await tx.update(creditProposals).set({ fillToken: null, fillTokenExpiresAt: null, fillSessionHash: null }).where(where);
+    } else {
+      await tx.update(creditProposals).set({ fillToken: newLinkToken(), fillTokenExpiresAt: sql`now() + interval '30 days'`, fillSessionHash: null, fillFailedAttempts: 0, fillLockedUntil: null, clientDataSubmittedAt: null }).where(where);
+    }
+    await auditProposal(tx, session, tenantId, "CREDIT_PROPOSAL_FILL_LINK_CHANGED", proposal.id, mode === "disable" ? `Link de cadastro da proposta de ${proposal.applicantName} desativado.` : `Link de cadastro gerado para ${proposal.applicantName} completar a proposta.`, { mode });
+    return { ok: true, message: mode === "disable" ? "Link desativado." : "Link pronto. Copie e envie ao cliente: ele confirma o CPF e completa o cadastro." };
   });
   if (result.ok) revalidatePath("/");
   return result;

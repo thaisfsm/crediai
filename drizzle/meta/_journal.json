@@ -414,6 +414,13 @@
       "when": 1795638354859,
       "tag": "0059_lancamentos_comissao_gerente",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1795647933735,
+      "tag": "0060_formulario_publico_cliente",
+      "breakpoints": true
     }
   ]
 }

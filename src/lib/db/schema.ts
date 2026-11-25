@@ -240,10 +240,23 @@ export const creditProposals = pgTable("credit_proposal", {
   // Aceite do cliente (fase 7, migração 0045): data/hora e por onde veio (APPLICANT = portal do cliente, OWNER = registrado pelo dono). Só existe com oferta salva.
   acceptedAt: timestamp("accepted_at", { withTimezone: true }),
   acceptedVia: text("accepted_via"),
+  // Cadastro completo preenchido pelo cliente no formulário público (migração 0060): os campos do cadastro de Clientes,
+  // guardados como rascunho até o envio; no envio o cliente é criado ou atualizado pelo CPF (client_id) e a data fica registrada.
+  clientData: jsonb("client_data").$type<Record<string, string>>(),
+  clientDataSubmittedAt: timestamp("client_data_submitted_at", { withTimezone: true }),
+  clientId: text("client_id"),
+  // Link individual para o cliente completar uma proposta cadastrada pelo dono: segredo de 192 bits, com validade; abrir exige
+  // confirmar o CPF da proposta (5 erros travam 15 minutos). A sessão do cliente guarda só o hash.
+  fillToken: text("fill_token"),
+  fillTokenExpiresAt: timestamp("fill_token_expires_at", { withTimezone: true }),
+  fillSessionHash: text("fill_session_hash"),
+  fillFailedAttempts: integer("fill_failed_attempts").notNull().default(0),
+  fillLockedUntil: timestamp("fill_locked_until", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   phaseChangedAt: timestamp("phase_changed_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("credit_proposal_tenant_phase_idx").on(table.tenantId, table.phase),
+  uniqueIndex("credit_proposal_fill_token_unique").on(table.fillToken).where(sql`${table.fillToken} is not null`),
   check("credit_proposal_phase_valid", sql`${table.phase} in ('RECEIVED','IDENTITY','DOCUMENTS','CAPACITY','ENGINE','APPROVAL','ACCEPTANCE')`),
   check("credit_proposal_status_valid", sql`${table.status} in ('DRAFT','OPEN','REJECTED')`),
   check("credit_proposal_source_valid", sql`${table.source} in ('OWNER','APPLICANT')`),

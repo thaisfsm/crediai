@@ -20,6 +20,7 @@ export async function respondToOffer(tx: TenantTransaction, tenantId: string, pr
   const where = and(eq(creditProposals.id, proposal.id), eq(creditProposals.tenantId, tenantId));
   if (decision === "accept") {
     await tx.update(creditProposals).set({ acceptedAt: sql`now()`, acceptedVia: via }).where(where);
+    // Cadastro completo já enviado pelo cliente: o cliente já existe em Clientes (proposal.clientId) e é encontrado pelo CPF abaixo.
     const [existing] = await tx.select({ id: clients.id }).from(clients).where(and(eq(clients.tenantId, tenantId), eq(clients.document, proposal.cpf))).limit(1);
     let clientId = existing?.id ?? null;
     let clientCreated = false;
@@ -28,6 +29,7 @@ export async function respondToOffer(tx: TenantTransaction, tenantId: string, pr
       const inserted = await tx.insert(clients).values({ id: clientId, tenantId, name: proposal.applicantName, document: proposal.cpf, phone: proposal.phone, whatsapp: proposal.phone, email: proposal.email }).onConflictDoNothing().returning({ id: clients.id });
       clientCreated = inserted.length > 0;
     }
+    if ((existing || clientCreated) && clientId && proposal.clientId !== clientId) await tx.update(creditProposals).set({ clientId }).where(where);
     await recordAdminAudit(tx, actor, { action: "CREDIT_PROPOSAL_ACCEPTED", entity: "wallet", entityId: proposal.id, tenantId, tenantName: tenant?.name ?? null, description: `Oferta de ${formatMoney(proposal.offerCents)} aceita por ${proposal.applicantName}.${clientCreated ? " Cliente cadastrado automaticamente." : ""}`, before: null, after: { ...offer, clientId, clientCreated } });
     return { ok: true, message: "Oferta aceita. Obrigado!" };
   }
