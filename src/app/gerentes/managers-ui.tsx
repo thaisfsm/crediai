@@ -50,7 +50,7 @@ export function PayoutReport({ payouts }: { payouts: Manager["payouts"] }) {
         <tr key={payout.id}>
           <td data-label="Data">{dateBr(payout.paidOn)}</td>
           <td data-label="Comissão">{formatMoney(payout.amountCents)}</td>
-          <td data-label="Lançamentos">{payout.adjustments.length === 0 ? "—" : (
+          <td data-label="Lançamentos" className="adjustments-cell">{payout.adjustments.length === 0 ? "—" : (
             <ul className="adjustment-lines">{payout.adjustments.map((item) => <li key={item.id}><KindChip kind={item.kind} /> {item.description} <strong>{signed(item.kind, item.amountCents)}</strong></li>)}</ul>
           )}</td>
           <td data-label="Valor final"><strong>{formatMoney(payout.finalCents)}</strong></td>
