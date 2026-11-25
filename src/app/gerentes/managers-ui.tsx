@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { createContext, Fragment, useContext, useState, type FormEvent } from "react";
-import { formatMoney, todayIso } from "@/lib/finance/format";
+import { formatMoney, parseMoneyToCents, todayIso } from "@/lib/finance/format";
 import type { ManagersPage } from "@/lib/managers/queries";
 import { MoneyInput } from "../money-input";
 import { EmptyPanel, Feedback, PageHeading, useFormAction } from "../portfolio-pages";
@@ -18,6 +18,8 @@ export type ManagerActions = {
   unlinkClient: (data: FormData) => Promise<Result>;
   deleteManager: (data: FormData) => Promise<Result>;
   registerPayout: (data: FormData) => Promise<Result>;
+  createAdjustment: (data: FormData) => Promise<Result>;
+  deleteAdjustment: (data: FormData) => Promise<Result>;
   createAccess: (data: FormData) => Promise<AccessResult>;
   resetPassword: (data: FormData) => Promise<AccessResult>;
 };
@@ -33,6 +35,80 @@ type Manager = ManagersPage["managers"][number];
 const percent = (bps: number) => `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 const percentInput = (bps: number) => (bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2, useGrouping: false });
 const SITUATION: Record<string, string> = { OVERDUE: "Em atraso", ON_TIME: "Em dia", PAID: "Quitado", NO_OPERATIONS: "Sem operações" };
+const dateBr = (iso: string) => iso.split("-").reverse().join("/");
+type Adjustment = Manager["adjustments"][number];
+const KindChip = ({ kind }: { kind: string }) => <span className={`status-chip ${kind === "CREDIT" ? "status-paid" : "status-late"}`}><i />{kind === "CREDIT" ? "Crédito" : "Débito"}</span>;
+const signed = (kind: string, cents: number) => `${kind === "CREDIT" ? "+" : "−"} ${formatMoney(cents)}`;
+
+// Relatório dos fechamentos: comissão quitada, cada lançamento aplicado (descrição, débito/crédito e valor) e o valor final pago.
+export function PayoutReport({ payouts }: { payouts: Manager["payouts"] }) {
+  if (payouts.length === 0) return <p>Nenhum fechamento de comissão registrado ainda.</p>;
+  return (
+    <table className="data-table fit-table payout-report">
+      <thead><tr><th>Data</th><th>Comissão</th><th>Lançamentos aplicados</th><th>Valor final pago</th><th>Observação</th></tr></thead>
+      <tbody>{payouts.map((payout) => (
+        <tr key={payout.id}>
+          <td data-label="Data">{dateBr(payout.paidOn)}</td>
+          <td data-label="Comissão">{formatMoney(payout.amountCents)}</td>
+          <td data-label="Lançamentos">{payout.adjustments.length === 0 ? "—" : (
+            <ul className="adjustment-lines">{payout.adjustments.map((item) => <li key={item.id}><KindChip kind={item.kind} /> {item.description} <strong>{signed(item.kind, item.amountCents)}</strong></li>)}</ul>
+          )}</td>
+          <td data-label="Valor final"><strong>{formatMoney(payout.finalCents)}</strong></td>
+          <td data-label="Observação">{payout.notes ?? "—"}</td>
+        </tr>
+      ))}</tbody>
+    </table>
+  );
+}
+
+// Lançamentos do gerente: novo débito/crédito (fica pendente para o próximo fechamento) e o histórico com a situação de cada um.
+function AdjustmentsPanel({ manager }: { manager: Manager }) {
+  const { actions } = useScope();
+  const router = useRouter();
+  const create = useFormAction(actions.createAdjustment, () => router.refresh());
+  const remove = useFormAction(actions.deleteAdjustment, () => router.refresh(), false);
+  const paidOn = new Map(manager.payouts.map((payout) => [payout.id, payout.paidOn]));
+  const pending = manager.adjustments.filter((item) => !item.payoutId);
+  return (
+    <div className="adjustments-panel">
+      <h3>Lançamentos do fechamento</h3>
+      <p><small>Débito abate e crédito soma ao valor pago no fechamento. Cada lançamento fica pendente e entra sozinho no próximo fechamento de comissão deste gerente (uma vez só).</small></p>
+      <form className="form-grid" onSubmit={create.onSubmit}>
+        <input type="hidden" name="managerId" value={manager.id} /><TenantField />
+        <label className="field"><span>Tipo</span><select name="kind" defaultValue="DEBIT" required><option value="DEBIT">Débito (abate)</option><option value="CREDIT">Crédito (soma)</option></select></label>
+        <label className="field"><span>Valor (R$)</span><MoneyInput name="amount" required placeholder="200,00" /></label>
+        <label className="field"><span>Data</span><input name="entryDate" type="date" defaultValue={todayIso()} required /></label>
+        <label className="field field-wide"><span>Descrição</span><input name="description" required maxLength={200} placeholder="Ex.: adiantamento, bônus" /></label>
+        <div className="form-actions"><button className="primary-button" disabled={create.pending}><Icon name="check" size={15} /> {create.pending ? "Registrando…" : "Registrar lançamento"}</button></div>
+        <Feedback feedback={create.feedback} />
+      </form>
+      {manager.adjustments.length === 0 ? <p>Nenhum lançamento registrado para este gerente.</p> : (
+        <table className="data-table fit-table">
+          <thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th>Valor</th><th>Situação</th><th /></tr></thead>
+          <tbody>{manager.adjustments.map((item: Adjustment) => (
+            <tr key={item.id}>
+              <td data-label="Data">{dateBr(item.entryDate)}</td><td data-label="Descrição">{item.description}</td><td data-label="Tipo"><KindChip kind={item.kind} /></td>
+              <td data-label="Valor"><strong>{signed(item.kind, item.amountCents)}</strong></td>
+              <td data-label="Situação">{item.payoutId
+                ? <span className="status-chip status-active"><i />Aplicado no fechamento de {dateBr(paidOn.get(item.payoutId) ?? "")}</span>
+                : <span className="status-chip status-due"><i />Pendente · próximo fechamento</span>}</td>
+              <td>{!item.payoutId && (
+                <form onSubmit={remove.onSubmit} className="inline-form">
+                  <input type="hidden" name="adjustmentId" value={item.id} /><TenantField />
+                  <button className="outline-button" disabled={remove.pending} aria-label={`Excluir lançamento ${item.description}`}>Excluir</button>
+                </form>
+              )}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      {pending.length > 0 && <p><small>Pendentes: {pending.length} · débitos {formatMoney(manager.pending.debitCents)} · créditos {formatMoney(manager.pending.creditCents)}.</small></p>}
+      <Feedback feedback={remove.feedback} />
+    </div>
+  );
+}
+
+type ExtraRow = { key: number; kind: "DEBIT" | "CREDIT"; description: string; amount: string };
 
 function TemporaryPassword({ result, onClose }: { result: Extract<AccessResult, { ok: true }>; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
@@ -105,7 +181,9 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
 function PayoutForm({ manager }: { manager: Manager }) {
   const { actions } = useScope();
   const router = useRouter();
-  const form = useFormAction(actions.registerPayout, () => router.refresh());
+  const [typed, setTyped] = useState<{ base: number; value: string } | null>(null);
+  const [extras, setExtras] = useState<ExtraRow[]>([]);
+  const form = useFormAction(actions.registerPayout, () => { setExtras([]); setTyped(null); router.refresh(); });
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const toggle = (clientId: string) => setExcluded((current) => { const next = new Set(current); if (next.has(clientId)) next.delete(clientId); else next.add(clientId); return next; });
   const payable = manager.clients
@@ -118,9 +196,20 @@ function PayoutForm({ manager }: { manager: Manager }) {
   const suggestedCents = Math.min(balanceCents, Math.max(0, selectedCents - manager.summary.paidOutCents));
   const blocked = payable.length === 0 ? "Nenhum contrato deste gerente tem comissão gerada ainda (sem juros recebidos). Não há o que pagar."
     : balanceCents <= 0 ? "Toda a comissão gerada deste gerente já foi paga. Não há o que pagar agora." : null;
+  // Valor da comissão digitado (acompanha a sugestão até a pessoa mudar) e lançamentos só deste fechamento, para mostrar o valor final.
+  const suggestedInput = suggestedCents > 0 ? (suggestedCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : "";
+  const amountValue = typed && typed.base === suggestedCents ? typed.value : suggestedInput;
+  const setExtra = (key: number, patch: Partial<ExtraRow>) => setExtras((rows) => rows.map((row) => row.key === key ? { ...row, ...patch } : row));
+  const pending = manager.adjustments.filter((item) => !item.payoutId);
+  const commissionCents = parseMoneyToCents(amountValue) ?? 0;
+  const lines = [...pending.map((item) => ({ kind: item.kind, amountCents: item.amountCents })), ...extras.map((row) => ({ kind: row.kind, amountCents: parseMoneyToCents(row.amount) ?? 0 }))];
+  const debitCents = lines.filter((line) => line.kind === "DEBIT").reduce((total, line) => total + line.amountCents, 0);
+  const creditCents = lines.filter((line) => line.kind === "CREDIT").reduce((total, line) => total + line.amountCents, 0);
+  const finalCents = commissionCents - debitCents + creditCents;
   return (
     <form className="form-grid" onSubmit={form.onSubmit}>
       <input type="hidden" name="managerId" value={manager.id} /><TenantField />
+      <input type="hidden" name="pendingIds" value={pending.map((item) => item.id).join(",")} />
       <div className="field-wide payout-review">
         <h3>Conferir antes de pagar</h3>
         {payable.length === 0 ? <p>{manager.clients.length === 0 ? "Nenhum cliente indicado ainda." : "Nenhum contrato com comissão gerada."}</p> : (
@@ -143,21 +232,41 @@ function PayoutForm({ manager }: { manager: Manager }) {
           </table>
         )}
         {hidden > 0 && payable.length > 0 && <p><small>{hidden} {hidden === 1 ? "cliente sem comissão gerada não aparece" : "clientes sem comissão gerada não aparecem"} aqui (ainda sem juros recebidos).</small></p>}
-        <h3>Comissões já pagas</h3>
-        {manager.payouts.length === 0 ? <p>Nenhum pagamento de comissão registrado ainda.</p> : (
-          <table className="data-table fit-table">
-            <thead><tr><th>Data</th><th>Valor</th><th>Observação</th></tr></thead>
-            <tbody>{manager.payouts.map((payout) => <tr key={payout.id}><td>{payout.paidOn.split("-").reverse().join("/")}</td><td>{formatMoney(payout.amountCents)}</td><td>{payout.notes ?? "—"}</td></tr>)}</tbody>
-          </table>
-        )}
+        <h3>Relatório dos fechamentos</h3>
+        <PayoutReport payouts={manager.payouts} />
         {blocked ? <p className="form-feedback form-feedback-error" role="status">{blocked}</p> : (
           <p><small>Marcados: {included.length} de {payable.length} · comissão gerada {formatMoney(selectedCents)} − já paga {formatMoney(manager.summary.paidOutCents)} = <strong>{formatMoney(suggestedCents)}</strong> a pagar (máximo {formatMoney(balanceCents)}). Desmarcar um cliente só tira ele da conta sugerida; nada é gravado até você confirmar.</small></p>
         )}
       </div>
-      <label className="field"><span>Valor pago (R$)</span><MoneyInput key={suggestedCents} name="amount" defaultValue={suggestedCents > 0 ? (suggestedCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder={(balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required disabled={Boolean(blocked)} /></label>
+      <label className="field"><span>Comissão deste fechamento (R$)</span><MoneyInput name="amount" value={amountValue} onChange={(event) => setTyped({ base: suggestedCents, value: event.currentTarget.value })} placeholder={(balanceCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })} required disabled={Boolean(blocked)} /></label>
       <label className="field"><span>Data</span><input name="paidOn" type="date" defaultValue={todayIso()} max={todayIso()} required disabled={Boolean(blocked)} /></label>
       <label className="field field-wide"><span>Observação</span><input name="notes" maxLength={300} placeholder="Opcional" disabled={Boolean(blocked)} /></label>
-      <div className="form-actions"><button className="primary-button" disabled={form.pending || Boolean(blocked)}><Icon name="check" size={15} /> {form.pending ? "Registrando…" : "Registrar pagamento da comissão"}</button></div>
+      <div className="field-wide payout-review closing-adjustments">
+        <h3>Lançamentos deste fechamento</h3>
+        {pending.length === 0 ? <p><small>Nenhum lançamento pendente para este gerente.</small></p> : (
+          <>
+            <p><small>Todos os pendentes entram automaticamente neste fechamento:</small></p>
+            <ul className="adjustment-lines">{pending.map((item) => <li key={item.id}><KindChip kind={item.kind} /> {dateBr(item.entryDate)} · {item.description} <strong>{signed(item.kind, item.amountCents)}</strong></li>)}</ul>
+          </>
+        )}
+        {extras.map((row, index) => (
+          <div key={row.key} className="closing-extra-row">
+            <label className="field"><span>Tipo</span><select name="extraKind" value={row.kind} onChange={(event) => setExtra(row.key, { kind: event.currentTarget.value === "CREDIT" ? "CREDIT" : "DEBIT" })} disabled={Boolean(blocked)}><option value="DEBIT">Débito (abate)</option><option value="CREDIT">Crédito (soma)</option></select></label>
+            <label className="field"><span>Descrição</span><input name="extraDescription" value={row.description} onChange={(event) => setExtra(row.key, { description: event.currentTarget.value })} maxLength={200} placeholder="Ex.: bônus" required disabled={Boolean(blocked)} /></label>
+            <label className="field"><span>Valor (R$)</span><MoneyInput name="extraAmount" value={row.amount} onChange={(event) => setExtra(row.key, { amount: event.currentTarget.value })} placeholder="100,00" required disabled={Boolean(blocked)} /></label>
+            <button type="button" className="outline-button" onClick={() => setExtras((rows) => rows.filter((item) => item.key !== row.key))} aria-label={`Remover lançamento ${index + 1} deste fechamento`}>Remover</button>
+          </div>
+        ))}
+        {!blocked && <button type="button" className="outline-button" onClick={() => setExtras((rows) => [...rows, { key: Date.now() + rows.length, kind: "DEBIT", description: "", amount: "" }])}>+ Lançamento só neste fechamento</button>}
+        <dl className="detail-grid closing-totals">
+          <div><dt>Comissão</dt><dd>{formatMoney(commissionCents)}</dd></div>
+          <div><dt>Débitos</dt><dd>− {formatMoney(debitCents)}</dd></div>
+          <div><dt>Créditos</dt><dd>+ {formatMoney(creditCents)}</dd></div>
+          <div><dt>Valor final a pagar</dt><dd><strong>{formatMoney(finalCents)}</strong></dd></div>
+        </dl>
+        {finalCents < 0 && !blocked && <p className="form-feedback form-feedback-error" role="status">Os débitos passam da comissão mais os créditos: o valor final não pode ficar negativo.</p>}
+      </div>
+      <div className="form-actions"><button className="primary-button" disabled={form.pending || Boolean(blocked) || finalCents < 0}><Icon name="check" size={15} /> {form.pending ? "Registrando…" : "Registrar pagamento da comissão"}</button></div>
       <Feedback feedback={form.feedback} />
     </form>
   );
@@ -232,6 +341,7 @@ function DeleteManager({ manager }: { manager: Manager }) {
 function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: ManagersPage["unassigned"] }) {
   const [editing, setEditing] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [entries, setEntries] = useState(false);
   const { summary } = manager;
   return (
     <section className="panel form-panel" aria-label={`Gerente ${manager.name}`}>
@@ -241,8 +351,9 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
           <p>Comissão sobre os juros recebidos, definida por cliente · {manager.clients.length} {manager.clients.length === 1 ? "cliente indicado" : "clientes indicados"}</p>
         </div>
         <div className="heading-actions">
-          <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); }}>{editing ? "Fechar" : "Editar"}</button>
-          <button type="button" className="outline-button" onClick={() => { setPaying(!paying); setEditing(false); }}>{paying ? "Fechar" : "Pagar comissão"}</button>
+          <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); setEntries(false); }}>{editing ? "Fechar" : "Editar"}</button>
+          <button type="button" className="outline-button" onClick={() => { setEntries(!entries); setEditing(false); setPaying(false); }}>{entries ? "Fechar" : `Lançamentos${manager.pending.count > 0 ? ` (${manager.pending.count})` : ""}`}</button>
+          <button type="button" className="outline-button" onClick={() => { setPaying(!paying); setEditing(false); setEntries(false); }}>{paying ? "Fechar" : "Pagar comissão"}</button>
           <DeleteManager manager={manager} />
         </div>
       </div>
@@ -255,8 +366,10 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
         <div><dt>Já paga</dt><dd>{formatMoney(summary.paidOutCents)}</dd></div>
         <div><dt>A pagar agora</dt><dd><strong>{formatMoney(summary.balanceCents)}</strong>{summary.advanceCents > 0 && <small> (adiantado {formatMoney(summary.advanceCents)})</small>}</dd></div>
         <div><dt>Prevista (juros a receber)</dt><dd>{formatMoney(summary.expectedCents)}</dd></div>
+        <div><dt>Lançamentos pendentes</dt><dd>{manager.pending.count === 0 ? "Nenhum" : <>{manager.pending.netCents < 0 ? "−" : "+"} {formatMoney(Math.abs(manager.pending.netCents))} <small>({manager.pending.count})</small></>}</dd></div>
       </dl>
       {editing && <ManagerEdit manager={manager} onDone={() => setEditing(false)} />}
+      {entries && <AdjustmentsPanel manager={manager} />}
       {paying && <PayoutForm manager={manager} />}
       <AccessBox manager={manager} />
       {manager.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente indicado por este gerente ainda." /> : (

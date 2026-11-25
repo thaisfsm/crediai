@@ -1394,3 +1394,15 @@ button { color:inherit; }
 .form-grid-single > .client-span-3 { grid-column:1 / -1; }
 @media (max-width:960px) { .form-grid-single { grid-template-columns:repeat(2,minmax(0,1fr)); } .form-grid-single > .client-span-1, .form-grid-single > .client-span-2, .form-grid-single > .client-span-3 { grid-column:1 / -1; } }
 @media (max-width:640px) { .form-grid-single { grid-template-columns:minmax(0,1fr); } }
+
+/* Lançamentos do fechamento de comissão (gerentes) */
+.adjustment-lines { list-style:none; margin:0; padding:0; display:grid; gap:4px; }
+.adjustment-lines li { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.adjustments-panel { display:grid; gap:10px; margin:12px 0; }
+.closing-adjustments { display:grid; gap:8px; }
+.closing-extra-row { display:grid; grid-template-columns: minmax(120px, 160px) minmax(0, 1fr) minmax(110px, 160px) auto; gap:8px; align-items:end; }
+.closing-totals { margin-top:4px; }
+@media (max-width: 640px) { .closing-extra-row { grid-template-columns: 1fr; } }
+/* Gerente com 4 ações (Editar, Lançamentos, Pagar comissão, Excluir): quebram linha no celular em vez de passar da tela. */
+@media (max-width: 760px) { section[aria-label^="Gerente "] .panel-header { flex-wrap: wrap; } section[aria-label^="Gerente "] .heading-actions { flex-wrap: wrap; justify-content: flex-start; width: 100%; } }
+.adjustments-panel .status-chip, .payout-report .status-chip { white-space: normal; }

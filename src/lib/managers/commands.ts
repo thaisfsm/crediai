@@ -1,10 +1,11 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
+import { accountManagerAdjustments, accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
 import { formatMoney, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
+import { closingTotals, type AdjustmentKind } from "./commission";
 import { loadManagerCommissionSummary } from "./queries";
 
 // Regras de gravação dos gerentes de contas, usadas pelo dono da carteira (/gerentes, withTenantContext) e pelo MASTER
@@ -158,31 +159,118 @@ export async function transferOperation(tx: TenantTransaction, tenantId: string,
   return { ok: true, message: `Contrato transferido para ${manager.name} com ${bpsLabel(bps)} de comissão.` };
 }
 
-// Comissão efetivamente paga ao gerente (só registra; reduz o saldo a receber dele).
+const KIND_LABEL: Record<AdjustmentKind, string> = { DEBIT: "débito", CREDIT: "crédito" };
+const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+type AdjustmentInput = { kind: AdjustmentKind; description: string; amountCents: number };
+function readAdjustment(kindRaw: string, descriptionRaw: string, amountRaw: string): { ok: true; value: AdjustmentInput } | { ok: false; error: string } {
+  const kind = kindRaw === "DEBIT" || kindRaw === "CREDIT" ? kindRaw : null;
+  if (!kind) return { ok: false, error: "Escolha o tipo do lançamento: débito ou crédito." };
+  const description = descriptionRaw.trim().slice(0, 200);
+  if (!description) return { ok: false, error: "Informe a descrição do lançamento (por exemplo: adiantamento, bônus)." };
+  const amountCents = parseMoneyToCents(amountRaw);
+  if (amountCents === null || amountCents <= 0 || amountCents > 100_000_000_000) return { ok: false, error: "Informe o valor do lançamento em reais, maior que zero." };
+  return { ok: true, value: { kind, description, amountCents } };
+}
+
+// Novo lançamento (débito ou crédito) de um gerente: fica PENDENTE e entra sozinho no próximo fechamento de comissão dele.
+export async function createAdjustment(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const managerId = text(data, "managerId", 80);
+  const read = readAdjustment(text(data, "kind", 10), text(data, "description", 200), text(data, "amount", 20));
+  if (!read.ok) return read;
+  const entryDate = text(data, "entryDate", 10) || todayIso();
+  if (!validDate(entryDate)) return { ok: false, error: "Data do lançamento inválida." };
+  const manager = await ownManager(tx, tenantId, managerId);
+  if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  const adjustmentId = id("mga");
+  await tx.insert(accountManagerAdjustments).values({ id: adjustmentId, tenantId, managerId: manager.id, ...read.value, entryDate, createdByUserId: actor.user.id });
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_ADJUSTMENT_CREATED", entity: "account_manager_adjustment", entityId: adjustmentId, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Lançamento de ${KIND_LABEL[read.value.kind]} de ${formatMoney(read.value.amountCents)} para ${manager.name} (${read.value.description}), pendente para o próximo fechamento.`,
+    after: { managerId: manager.id, kind: read.value.kind, amountCents: read.value.amountCents, entryDate },
+  });
+  return { ok: true, message: `Lançamento de ${KIND_LABEL[read.value.kind]} de ${formatMoney(read.value.amountCents)} registrado. Ele entra no próximo fechamento de ${manager.name}.` };
+}
+
+// Exclui um lançamento ainda PENDENTE (o aplicado faz parte de um fechamento e não se apaga; o banco também recusa).
+export async function deleteAdjustment(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const adjustmentId = text(data, "adjustmentId", 80);
+  const [row] = await tx.select().from(accountManagerAdjustments)
+    .where(and(eq(accountManagerAdjustments.id, adjustmentId), eq(accountManagerAdjustments.tenantId, tenantId))).for("update");
+  if (!row) return { ok: false, error: "Lançamento não encontrado nesta carteira." };
+  if (row.payoutId) return { ok: false, error: "Este lançamento já foi aplicado em um fechamento e não pode ser excluído." };
+  await tx.delete(accountManagerAdjustments).where(and(eq(accountManagerAdjustments.id, row.id), eq(accountManagerAdjustments.tenantId, tenantId), isNull(accountManagerAdjustments.payoutId)));
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_ADJUSTMENT_DELETED", entity: "account_manager_adjustment", entityId: row.id, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Lançamento pendente de ${KIND_LABEL[row.kind as AdjustmentKind] ?? row.kind} de ${formatMoney(row.amountCents)} excluído (${row.description}).`,
+    before: { managerId: row.managerId, kind: row.kind, amountCents: row.amountCents, entryDate: row.entryDate },
+  });
+  return { ok: true, message: "Lançamento pendente excluído." };
+}
+
+// Fechamento da comissão do gerente: registra a comissão quitada (reduz o saldo a receber dele) e aplica, na mesma transação, TODOS os
+// lançamentos pendentes dele mais os lançamentos digitados só para este fechamento. Valor final pago = comissão − débitos + créditos.
+// O formulário manda os pendentes que a pessoa viu (pendingIds): se mudaram nesse meio-tempo, nada é gravado.
 export async function registerPayout(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
   const managerId = text(data, "managerId", 80);
   const cents = parseMoneyToCents(text(data, "amount", 20));
   const paidOn = text(data, "paidOn", 10) || todayIso();
   const notes = text(data, "notes", 300) || null;
-  if (cents === null || cents <= 0) return { ok: false, error: "Informe o valor pago, maior que zero." };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn) || new Date(`${paidOn}T00:00:00Z`).toISOString().slice(0, 10) !== paidOn) return { ok: false, error: "Data de pagamento inválida." };
+  if (cents === null || cents <= 0) return { ok: false, error: "Informe o valor da comissão, maior que zero." };
+  if (!validDate(paidOn)) return { ok: false, error: "Data de pagamento inválida." };
   if (paidOn > todayIso()) return { ok: false, error: "A data do pagamento não pode ser futura." };
+  // Lançamentos só deste fechamento (linhas em branco são ignoradas).
+  const kinds = data.getAll("extraKind").map(String), descriptions = data.getAll("extraDescription").map(String), amounts = data.getAll("extraAmount").map(String);
+  const extras: AdjustmentInput[] = [];
+  for (let index = 0; index < Math.min(Math.max(kinds.length, descriptions.length, amounts.length), 20); index += 1) {
+    if (!(descriptions[index] ?? "").trim() && !(amounts[index] ?? "").trim()) continue;
+    const read = readAdjustment(kinds[index] ?? "", descriptions[index] ?? "", amounts[index] ?? "");
+    if (!read.ok) return { ok: false, error: `Lançamento ${index + 1} deste fechamento: ${read.error}` };
+    extras.push(read.value);
+  }
   const manager = await ownManager(tx, tenantId, managerId);
   if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
-  // Trava o gerente até o fim da transação: dois pagamentos ao mesmo tempo não passam pela conferência do saldo juntos.
+  // Trava o gerente até o fim da transação: dois fechamentos ao mesmo tempo não passam pela conferência do saldo nem pegam os mesmos
+  // lançamentos pendentes juntos.
   await tx.execute(sql`select 1 from ${accountManagers} where ${accountManagers.id} = ${manager.id} and ${accountManagers.tenantId} = ${tenantId} for update`);
   // Só se paga comissão gerada (contratos com juros recebidos) e ainda não paga: nada de pagamento sem comissão nem em dobro.
   const summary = await loadManagerCommissionSummary(tx, tenantId, manager.id, manager.commissionBps);
   if (summary.earnedCents <= 0) return { ok: false, error: "Nenhum contrato deste gerente tem comissão gerada ainda. Nada a pagar." };
   if (summary.balanceCents <= 0) return { ok: false, error: "Toda a comissão gerada deste gerente já foi paga. Nada a pagar." };
   if (cents > summary.balanceCents) return { ok: false, error: `O valor passa da comissão a pagar (${formatMoney(summary.balanceCents)}). Confira o valor.` };
+  const pending = await tx.select().from(accountManagerAdjustments)
+    .where(and(eq(accountManagerAdjustments.tenantId, tenantId), eq(accountManagerAdjustments.managerId, manager.id), isNull(accountManagerAdjustments.payoutId)))
+    .orderBy(asc(accountManagerAdjustments.entryDate), asc(accountManagerAdjustments.createdAt)).for("update");
+  if (data.has("pendingIds")) {
+    const seen = new Set(text(data, "pendingIds", 4000).split(",").filter(Boolean));
+    if (seen.size !== pending.length || pending.some((row) => !seen.has(row.id))) {
+      return { ok: false, error: "Os lançamentos pendentes deste gerente mudaram desde que a tela foi aberta (outro fechamento ou lançamento). Atualize a página e confira de novo." };
+    }
+  }
+  const totals = closingTotals(cents, [...pending, ...extras]);
+  if (totals.finalCents < 0) {
+    return { ok: false, error: `Os débitos (${formatMoney(totals.debitCents)}) passam da comissão mais os créditos (${formatMoney(cents + totals.creditCents)}). O valor final não pode ficar negativo.` };
+  }
   const payoutId = id("mgp");
-  await tx.insert(accountManagerPayouts).values({ id: payoutId, tenantId, managerId: manager.id, amountCents: cents, paidOn, notes, createdByUserId: actor.user.id });
+  await tx.insert(accountManagerPayouts).values({ id: payoutId, tenantId, managerId: manager.id, amountCents: cents, paidOn, notes, createdByUserId: actor.user.id, debitCents: totals.debitCents, creditCents: totals.creditCents });
+  if (pending.length > 0) {
+    // Só os que ainda estão pendentes (payout_id nulo): um lançamento nunca é aplicado duas vezes.
+    const applied = await tx.update(accountManagerAdjustments).set({ payoutId, appliedAt: sql`now()` })
+      .where(and(eq(accountManagerAdjustments.tenantId, tenantId), eq(accountManagerAdjustments.managerId, manager.id), isNull(accountManagerAdjustments.payoutId), inArray(accountManagerAdjustments.id, pending.map((row) => row.id))))
+      .returning({ id: accountManagerAdjustments.id });
+    if (applied.length !== pending.length) throw new Error("Lançamentos pendentes mudaram durante o fechamento.");
+  }
+  if (extras.length > 0) {
+    await tx.insert(accountManagerAdjustments).values(extras.map((extra) => ({ id: id("mga"), tenantId, managerId: manager.id, ...extra, entryDate: paidOn, payoutId, appliedAt: sql`now()`, createdByUserId: actor.user.id })));
+  }
+  const applied = pending.length + extras.length;
   await recordAdminAudit(tx, actor, {
     action: "MANAGER_COMMISSION_PAID", entity: "account_manager_payout", entityId: payoutId, tenantId, tenantName: await tenantName(tx, tenantId),
-    description: `Comissão de ${formatMoney(cents)} paga a ${manager.name} em ${paidOn}.`, after: { managerId: manager.id, amountCents: cents, paidOn },
+    description: applied === 0 ? `Comissão de ${formatMoney(cents)} paga a ${manager.name} em ${paidOn}.`
+      : `Fechamento de ${manager.name} em ${paidOn}: comissão ${formatMoney(cents)} − débitos ${formatMoney(totals.debitCents)} + créditos ${formatMoney(totals.creditCents)} = ${formatMoney(totals.finalCents)} pago (${applied} lançamento(s) aplicado(s)).`,
+    after: { managerId: manager.id, amountCents: cents, paidOn, debitCents: totals.debitCents, creditCents: totals.creditCents, finalCents: totals.finalCents, adjustmentsApplied: applied },
   });
-  return { ok: true, message: `Pagamento de ${formatMoney(cents)} registrado para ${manager.name}.` };
+  return { ok: true, message: applied === 0 ? `Pagamento de ${formatMoney(cents)} registrado para ${manager.name}.`
+    : `Fechamento registrado para ${manager.name}: comissão ${formatMoney(cents)}, ${applied} lançamento(s) aplicado(s), valor final ${formatMoney(totals.finalCents)}.` };
 }
 
 // Login de leitura do gerente (papel ACCOUNT_MANAGER, no tenant), com senha provisória (o hash vem pronto de quem chama).
@@ -233,6 +321,8 @@ export async function deleteManager(tx: TenantTransaction, tenantId: string, act
   const [paid] = await tx.select({ id: accountManagerPayouts.id }).from(accountManagerPayouts)
     .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).limit(1);
   if (paid) return { ok: false, error: `${manager.name} já recebeu comissão registrada e não pode ser excluído (o histórico financeiro fica). Desative o gerente.` };
+  // Lançamentos ainda pendentes (sem fechamento) saem junto com o gerente.
+  await tx.delete(accountManagerAdjustments).where(and(eq(accountManagerAdjustments.tenantId, tenantId), eq(accountManagerAdjustments.managerId, manager.id), isNull(accountManagerAdjustments.payoutId)));
   // Contratos transferidos para ele voltam a valer o gerente do cliente (a comissão já paga continua no histórico).
   const returned = await tx.update(loanOperations).set({ accountManagerId: null, accountManagerBps: null, updatedAt: sql`now()` })
     .where(and(eq(loanOperations.tenantId, tenantId), eq(loanOperations.accountManagerId, manager.id))).returning({ id: loanOperations.id });

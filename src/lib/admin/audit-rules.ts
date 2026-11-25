@@ -52,6 +52,7 @@ export const AUDIT_ACTIONS = {
   MANAGER_CLIENT_UNLINKED: "Cliente indicado desvinculado de gerente de contas",
   MANAGER_OPERATION_TRANSFERRED: "Contrato transferido para gerente de contas",
   MANAGER_COMMISSION_PAID: "Comissão paga a gerente de contas",
+  MANAGER_ADJUSTMENT_CREATED: "Lançamento no fechamento de comissão", MANAGER_ADJUSTMENT_DELETED: "Lançamento pendente de comissão excluído",
   MANAGER_ACCESS_CREATED: "Acesso de leitura criado para gerente de contas",
   MANAGER_PASSWORD_RESET: "Senha de gerente de contas redefinida",
   MANAGER_DELETED: "Gerente de contas excluído",
@@ -77,7 +78,7 @@ export const AUDIT_ENTITIES: Record<string, string> = {
   investment_contract: "Contrato gerado", investment_contractor: "Empresa contratante",
   capital_movement: "Movimentação financeira", wallet: "Carteira", investment_payment: "Pagamento a investidor",
   investor_bank_account: "Conta bancária do investidor", investor_document: "Documento do investidor",
-  account_manager: "Gerente de contas", account_manager_payout: "Comissão paga ao gerente",
+  account_manager: "Gerente de contas", account_manager_payout: "Comissão paga ao gerente", account_manager_adjustment: "Lançamento de comissão do gerente",
 };
 
 // Nunca gravar segredos: qualquer chave com estes nomes é descartada do antes/depois.
