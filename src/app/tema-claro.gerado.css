@@ -467,3 +467,5 @@
 :root[data-theme="light"] .delinquency-band-pdd { border-color:rgba(187,27,34,0.315); }
 :root[data-theme="light"] .delinquency-band-active { border-color:rgba(27,187,179,0.585); box-shadow:0 0 0 1px rgba(29,201,192,0.18), 0 8px 26px rgba(15,35,55,0.056); }
 :root[data-theme="light"] .delinquency-pdd-tag { border:1px solid rgba(187,27,34,0.405); }
+:root[data-theme="light"] .closing-totals > div { background:rgba(16,42,66,0.025); border:1px solid rgba(16,42,66,0.08); }
+:root[data-theme="light"] .closing-totals > div:last-child { border-color:rgba(39,175,173,0.315); }
