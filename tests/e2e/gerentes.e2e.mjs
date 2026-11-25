@@ -638,13 +638,28 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   await page.getByLabel(/Valor que você precisa/).fill("5.000,00");
   await page.getByLabel(/Prazo desejado/).fill("12");
   await page.getByRole("button", { name: /Salvar e continuar/ }).click();
-  await page.getByRole("heading", { name: /Passo 2 de 3/ }).waitFor();
+  await page.getByRole("heading", { name: /Etapa 2 de 8/ }).waitFor();
   assert.equal(await one(`select status from credit_proposal where source='APPLICANT'`), "DRAFT");
-  assert.equal(await page.getByRole("button", { name: /Envie os 4 documentos/ }).isDisabled(), true);
+  // Cadastro completo em etapas (formulário público com os campos de Clientes): os obrigatórios são data de nascimento e endereço.
+  await page.getByLabel(/Data de nascimento/).fill("03/02/1990");
+  await page.getByRole("button", { name: /Salvar e continuar/ }).click();
+  await page.getByRole("heading", { name: /Etapa 3 de 8/ }).waitFor();
+  await page.getByLabel("CEP").fill("01310100");
+  await page.getByLabel("Logradouro").fill("Avenida Paulista");
+  await page.getByLabel("Número").fill("1000");
+  await page.getByLabel("Bairro").fill("Bela Vista");
+  await page.getByLabel("Cidade").fill("São Paulo");
+  await page.getByLabel("Estado").selectOption("SP");
+  await page.getByRole("button", { name: /Salvar e continuar/ }).click();
+  await page.getByRole("heading", { name: /Etapa 4 de 8/ }).waitFor();
+  await page.getByRole("button", { name: "Ver resumo e enviar" }).click();
+  await page.getByText(/ainda NÃO foi enviada/).waitFor();
+  assert.equal(await page.getByRole("button", { name: /Complete o que falta/ }).isDisabled(), true);
+  await page.getByRole("button", { name: /^Etapa 7: Documentos/ }).click();
+  await page.getByRole("heading", { name: /Etapa 7 de 8/ }).waitFor();
   // Arquivo que não é PDF/imagem é recusado; PDFs válidos entram um a um.
   await page.getByLabel("Comprovante de residência").setInputFiles({ name: "x.txt", mimeType: "text/plain", buffer: Buffer.from("texto") });
   await page.getByText(/Envie um PDF ou uma imagem/).waitFor();
-  await page.getByText(/ainda NÃO foi enviada/).waitFor();
   // Foto de celular com mais de 4 MB (caso da Patricia): o navegador reduz antes de enviar e o documento entra.
   const bigPhoto = noisePng(1300, 1300);
   assert.equal(bigPhoto.length > 4 * 1024 * 1024, true, "foto de teste maior que o limite");
@@ -652,9 +667,9 @@ test("G16. portal do cliente: link da carteira, conta própria, dados + 4 docume
   for (const [index, label] of labels.entries()) {
     await page.getByLabel(label).setInputFiles(index === 0 ? { name: "rg-celular.png", mimeType: "image/png", buffer: bigPhoto } : pdf(`doc${index}.pdf`));
     await poll(`select count(*) from credit_proposal_document`, index + 1);
-    if (index < 3) assert.equal(await page.getByRole("button", { name: /Envie os 4 documentos/ }).isDisabled(), true);
   }
   assert.equal(await one(`select content_type||'/'||(size_bytes < 4194304) from credit_proposal_document where kind='ID_DOCUMENT'`), "image/jpeg/true", "foto reduzida para JPEG abaixo do limite");
+  await page.getByRole("button", { name: "Continuar" }).click();
   await page.getByRole("button", { name: "Enviar proposta" }).waitFor();
   // Rascunho: fora das fases, mas o dono vê em "Em preenchimento pelo link" o que falta; outra carteira não vê nada.
   const draftView = await signIn("roberio@teste.local", PASSWORD, { width: 1600, height: 1000 });

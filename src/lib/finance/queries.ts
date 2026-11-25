@@ -1,4 +1,5 @@
 import "server-only";
+import { filledSteps } from "@/lib/credit/client-data-steps";
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalLinks, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
@@ -102,7 +103,7 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       .where(and(eq(creditProposalReviews.tenantId, tenantId), inArray(creditProposalReviews.proposalId, proposalRows.map((row) => row.id))));
     // Propostas que o cliente começou pelo link e ainda não enviou (rascunho): só o dono vê, para saber quem travou e em que passo.
     const draftRows = scope ? [] : await tx.select({ id: creditProposals.id, applicantName: creditProposals.applicantName, email: creditProposals.email, phone: creditProposals.phone,
-      requestedCents: creditProposals.requestedCents, termMonths: creditProposals.termMonths, createdAt: creditProposals.createdAt })
+      requestedCents: creditProposals.requestedCents, termMonths: creditProposals.termMonths, createdAt: creditProposals.createdAt, clientData: creditProposals.clientData })
       .from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.status, "DRAFT"))).orderBy(desc(creditProposals.createdAt)).limit(100);
     const draftDocumentRows = draftRows.length === 0 ? [] : await tx.select({ proposalId: creditProposalDocuments.proposalId, kind: creditProposalDocuments.kind })
       .from(creditProposalDocuments).where(and(eq(creditProposalDocuments.tenantId, tenantId), inArray(creditProposalDocuments.proposalId, draftRows.map((row) => row.id))));
@@ -197,11 +198,14 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
       offer: row.offerCents === null || row.offerTermMonths === null || row.offerRateBps === null ? null : { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps) },
       engine: evaluateProposal({ requestedCents: row.offerCents ?? row.requestedCents, termMonths: row.offerTermMonths ?? row.termMonths, rateBps: row.offerRateBps }, { maxExposurePerCpfCents: data.policyRow?.maxExposurePerCpfCents ?? null, maxTermMonths: data.policyRow?.maxTermMonths ?? null, maxContractCents: data.policyRow?.maxContractCents ?? null, minRateBps: data.policyRow?.minRateBps ?? null, maxNewClientCents: data.policyRow?.maxNewClientCents ?? null, minContractCents: data.policyRow?.minContractCents ?? null }, data.exposureByCpf.get(row.cpf.replace(/\D/g, "")) ?? 0, !data.knownCpfs.has(row.cpf.replace(/\D/g, ""))),
       installmentCents: row.negotiatedInstallmentCents, acceptedAt: row.acceptedAt?.toISOString() ?? null, acceptedVia: row.acceptedVia,
+      // Link individual para o cliente completar o cadastro (só propostas do dono) e o cadastro completo enviado por ele.
+      fillLink: row.fillToken && row.fillTokenExpiresAt && row.fillTokenExpiresAt > new Date() ? { token: row.fillToken, expiresAt: row.fillTokenExpiresAt.toISOString() } : null,
+      clientDataSubmittedAt: row.clientDataSubmittedAt?.toISOString() ?? null, clientId: row.clientId, clientDataSteps: filledSteps(row.clientData).length,
       source: row.source, monthlyIncomeCents: row.monthlyIncomeCents, documents: data.proposalDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => ({ id: doc.id, kind: doc.kind, fileName: doc.fileName })),
     })),
     draftProposals: data.draftRows.map((row) => ({
       id: row.id, applicantName: row.applicantName, email: row.email, phone: row.phone, requestedCents: row.requestedCents, termMonths: row.termMonths,
-      createdAt: row.createdAt.toISOString(), documentKinds: data.draftDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => doc.kind),
+      createdAt: row.createdAt.toISOString(), clientDataSteps: filledSteps(row.clientData).length, documentKinds: data.draftDocumentRows.filter((doc) => doc.proposalId === row.id).map((doc) => doc.kind),
     })),
     proposalLink: data.linkRow?.enabled ? data.linkRow.token : null,
     // Gerentes de contas e quem responde por cada contrato: o gerente do contrato (transferido) ou, sem ele, o do cliente.

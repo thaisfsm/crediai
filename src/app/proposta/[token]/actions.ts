@@ -3,9 +3,11 @@
 import { and, eq, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
-import { creditProposalDocuments, creditProposals, proposalApplicants } from "@/lib/db/schema";
-import { PROPOSAL_DOCUMENT_KINDS, PROPOSAL_DOCUMENT_MAX_BYTES, type ProposalDocumentKind } from "@/lib/credit/documents";
-import { detectDocumentType } from "@/lib/credit/file-type";
+import { creditProposals, proposalApplicants } from "@/lib/db/schema";
+import { PROPOSAL_DOCUMENT_MAX_BYTES } from "@/lib/credit/documents";
+import { finalizeClientData, saveClientStep, storeProposalDocument } from "@/lib/credit/client-data";
+import { isClientDataStep } from "@/lib/credit/client-data-steps";
+import { recordAdminAudit } from "@/lib/admin/audit";
 import { respondToOffer } from "@/lib/credit/acceptance";
 import { endApplicantSession, lockPolicy, passwordTools, requireApplicant, startApplicantSession, withLinkTenant } from "@/lib/credit/portal";
 import { normalizeCpf, normalizePhone, parseMoneyToCents } from "@/lib/finance/format";
@@ -86,49 +88,62 @@ export async function saveProposalDraftAction(token: string, data: FormData): Pr
     if (current && current.status !== "DRAFT") return { ok: false, error: "Sua proposta já foi enviada e está em análise." };
     if (current) await tx.update(creditProposals).set(values).where(eq(creditProposals.id, current.id));
     else await tx.insert(creditProposals).values({ id: newId("prp"), tenantId, source: "APPLICANT", applicantId: applicant.id, status: "DRAFT", ...values });
-    return { ok: true, message: "Dados salvos. Sua proposta ainda não foi enviada: anexe os 4 documentos abaixo e toque em Enviar proposta." };
+    return { ok: true, message: "Dados salvos. Sua proposta ainda não foi enviada: complete as próximas etapas, anexe os 4 documentos e toque em Enviar proposta." };
   });
   if (result?.ok) revalidatePath(`/proposta/${token}`);
   return result ?? { ok: false, error: LINK_ERROR };
 }
 
-// Passo 2: um documento por vez (limite de 4 MB por arquivo). Enviar de novo substitui o anterior.
+// Documentos: um por vez (limite de 4 MB por arquivo). Enviar de novo substitui o anterior.
 export async function uploadProposalDocumentAction(token: string, data: FormData): Promise<Result> {
   const applicant = await requireApplicant(token).catch(() => null);
   if (!applicant) return { ok: false, error: "Sua sessão expirou. Entre de novo." };
-  const kind = text(data, "kind", 30) as ProposalDocumentKind;
-  if (!PROPOSAL_DOCUMENT_KINDS.includes(kind)) return { ok: false, error: "Documento inválido." };
   const file = data.get("file");
   if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Escolha o arquivo." };
   if (file.size > PROPOSAL_DOCUMENT_MAX_BYTES) return { ok: false, error: "O arquivo pode ter no máximo 4 MB." };
   const content = Buffer.from(await file.arrayBuffer());
-  const contentType = detectDocumentType(content);
-  if (!contentType) return { ok: false, error: "Envie um PDF ou uma imagem (JPG, PNG ou WEBP)." };
-  const fileName = file.name.replace(/[\\/\r\n"]/g, "_").slice(0, 160) || "documento";
   const result = await withLinkTenant(token, async (tx, tenantId): Promise<Result> => {
     const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.applicantId, applicant.id))).for("update");
     if (!proposal) return { ok: false, error: "Preencha primeiro os dados da proposta." };
     if (proposal.status !== "DRAFT") return { ok: false, error: "Sua proposta já foi enviada e está em análise." };
-    await tx.delete(creditProposalDocuments).where(and(eq(creditProposalDocuments.proposalId, proposal.id), eq(creditProposalDocuments.kind, kind)));
-    await tx.insert(creditProposalDocuments).values({ id: newId("pdc"), tenantId, proposalId: proposal.id, kind, fileName, contentType, sizeBytes: content.length, content });
-    return { ok: true, message: "Documento recebido." };
+    return storeProposalDocument(tx, tenantId, proposal, text(data, "kind", 30), { name: file.name, content });
   });
   if (result?.ok) revalidatePath(`/proposta/${token}`);
   return result ?? { ok: false, error: LINK_ERROR };
 }
 
-// Passo 3: só grava a proposta (DRAFT -> OPEN, fase "Proposta recebida") com todos os campos e os 4 documentos.
-export async function submitProposalAction(token: string): Promise<Result> {
+// Etapas do cadastro completo (as mesmas do cadastro de Clientes): cada uma é salva no rascunho, para continuar depois.
+export async function saveApplicantStepAction(token: string, step: string, data: FormData): Promise<Result> {
+  if (!isClientDataStep(step)) return { ok: false, error: "Etapa inválida." };
   const applicant = await requireApplicant(token).catch(() => null);
   if (!applicant) return { ok: false, error: "Sua sessão expirou. Entre de novo." };
   const result = await withLinkTenant(token, async (tx, tenantId): Promise<Result> => {
     const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.applicantId, applicant.id))).for("update");
     if (!proposal) return { ok: false, error: "Preencha primeiro os dados da proposta." };
+    if (proposal.status !== "DRAFT") return { ok: false, error: "Sua proposta já foi enviada e está em análise." };
+    return saveClientStep(tx, tenantId, proposal, step, data);
+  });
+  if (result?.ok) revalidatePath(`/proposta/${token}`);
+  return result ?? { ok: false, error: LINK_ERROR };
+}
+
+// Envio: só grava a proposta (DRAFT -> OPEN, fase "Proposta recebida") com os campos obrigatórios e os 4 documentos, e
+// cria ou atualiza o cliente em Clientes pelo CPF com o cadastro completo (sem duplicar).
+export async function submitProposalAction(token: string): Promise<Result> {
+  const applicant = await requireApplicant(token).catch(() => null);
+  if (!applicant) return { ok: false, error: "Sua sessão expirou. Entre de novo." };
+  const result = await withLinkTenant(token, async (tx, tenantId, tenantName): Promise<Result> => {
+    const [proposal] = await tx.select().from(creditProposals).where(and(eq(creditProposals.tenantId, tenantId), eq(creditProposals.applicantId, applicant.id))).for("update");
+    if (!proposal) return { ok: false, error: "Preencha primeiro os dados da proposta." };
     if (proposal.status !== "DRAFT") return { ok: false, error: "Sua proposta já foi enviada." };
-    const docs = await tx.select({ kind: creditProposalDocuments.kind }).from(creditProposalDocuments).where(eq(creditProposalDocuments.proposalId, proposal.id));
-    const missing = PROPOSAL_DOCUMENT_KINDS.filter((kind) => !docs.some((doc) => doc.kind === kind));
-    if (missing.length > 0) return { ok: false, error: "Faltam documentos obrigatórios para enviar a proposta." };
+    const client = await finalizeClientData(tx, tenantId, proposal);
+    if (!client.ok) return client;
     await tx.update(creditProposals).set({ status: "OPEN", phase: "RECEIVED", phaseChangedAt: sql`now()` }).where(eq(creditProposals.id, proposal.id));
+    await recordAdminAudit(tx, { user: { id: applicant.id, name: applicant.name, email: applicant.email } }, {
+      action: "CREDIT_PROPOSAL_CLIENT_DATA_SUBMITTED", entity: "wallet", entityId: proposal.id, tenantId, tenantName,
+      description: `Proposta e cadastro completo enviados por ${proposal.applicantName} pelo link da carteira. Cliente ${client.created ? "cadastrado" : "atualizado"} em Clientes.`,
+      before: null, after: { clientId: client.clientId, clientCreated: client.created, via: "TENANT_LINK" },
+    });
     return { ok: true, message: "Proposta enviada! Você será avisado sobre os próximos passos." };
   });
   if (result?.ok) revalidatePath(`/proposta/${token}`);

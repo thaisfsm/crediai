@@ -27,7 +27,8 @@ export default async function ProposalPortalPage({ params }: { params: Promise<{
         ? { cents: row.offerCents, termMonths: row.offerTermMonths, rateBps: row.offerRateBps, ...offerSummary(row.offerCents, row.offerTermMonths, row.offerRateBps), acceptedAt: row.acceptedAt?.toISOString() ?? null }
         : null,
       status: row.status, phaseLabel: PROPOSAL_PHASES.find((phase) => phase.key === row.phase)?.label ?? row.phase, decisionNote: row.decisionNote,
-      values: { name: row.applicantName, cpf: row.cpf, phone: row.phone ?? "", requested: centsToInput(row.requestedCents), income: row.monthlyIncomeCents ? centsToInput(row.monthlyIncomeCents) : "", termMonths: String(row.termMonths) },
+      values: { name: row.applicantName, cpf: row.cpf, phone: row.phone ?? "", email: row.email ?? applicant.email, requested: centsToInput(row.requestedCents), income: row.monthlyIncomeCents ? centsToInput(row.monthlyIncomeCents) : "", termMonths: String(row.termMonths), requestedCents: row.requestedCents, incomeCents: row.monthlyIncomeCents },
+      clientData: row.clientData ?? {},
       documents: docs,
     };
   });

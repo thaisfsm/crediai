@@ -3,34 +3,15 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
-import { formatMoney, formatRate, maskCpf, maskPhone } from "@/lib/finance/format";
-import { MoneyInput } from "@/app/money-input";
-import { loginApplicantAction, logoutApplicantAction, registerApplicantAction, saveProposalDraftAction, submitProposalAction, respondToOfferAction, uploadProposalDocumentAction } from "./actions";
+import { formatMoney, formatRate } from "@/lib/finance/format";
+import type { ClientData } from "@/lib/credit/client-data-steps";
+import { ClientDataWizard } from "../client-data-wizard";
+import { loginApplicantAction, logoutApplicantAction, registerApplicantAction, saveApplicantStepAction, saveProposalDraftAction, submitProposalAction, respondToOfferAction, uploadProposalDocumentAction } from "./actions";
 
 type Result = { ok: true; message: string } | { ok: false; error: string };
 
-// Foto de celular costuma passar de 4 MB (limite do envio). Imagens grandes são reduzidas no próprio aparelho antes de subir.
-const UPLOAD_LIMIT = 4 * 1024 * 1024;
-const SHRINK_ABOVE = 1.5 * 1024 * 1024;
-async function shrinkImage(file: File): Promise<File> {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size <= SHRINK_ABOVE) return file;
-  try {
-    const bitmap = await createImageBitmap(file);
-    for (const [side, quality] of [[2000, 0.82], [1600, 0.72], [1200, 0.65]] as const) {
-      const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(bitmap.width * scale);
-      canvas.height = Math.round(bitmap.height * scale);
-      canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-      if (blob && blob.size <= UPLOAD_LIMIT - 64 * 1024) return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
-    }
-  } catch { /* navegador sem suporte: tenta enviar o original */ }
-  return file;
-}
 type Offer = { cents: number; termMonths: number; rateBps: number; interestCents: number; totalCents: number; installmentCents: number; acceptedAt: string | null };
-type Proposal = { offer: Offer | null; status: string; phaseLabel: string; decisionNote: string | null; values: { name: string; cpf: string; phone: string; requested: string; income: string; termMonths: string }; documents: { kind: string; fileName: string }[] } | null;
+type Proposal = { offer: Offer | null; status: string; phaseLabel: string; decisionNote: string | null; values: { name: string; cpf: string; phone: string; email: string; requested: string; income: string; termMonths: string; requestedCents: number; incomeCents: number | null }; clientData: ClientData; documents: { kind: string; fileName: string }[] } | null;
 
 export function PortalClient({ token, tenantName, applicant, proposal }: { token: string; tenantName: string; applicant: { name: string; email: string } | null; proposal: Proposal }) {
   const router = useRouter();
@@ -88,8 +69,6 @@ export function PortalClient({ token, tenantName, applicant, proposal }: { token
   }
 
   const sent = proposal && proposal.status !== "DRAFT";
-  const have = new Set(proposal?.documents.map((doc) => doc.kind));
-  const allDocs = PROPOSAL_DOCUMENTS.every((doc) => have.has(doc.kind));
   const header = <>
     {brand}
     <div className="auth-kicker"><i /> PROPOSTA DE CRÉDITO · {tenantName}</div>
@@ -137,46 +116,15 @@ export function PortalClient({ token, tenantName, applicant, proposal }: { token
   const v = proposal?.values;
   return <main className="auth-page"><section className="auth-card auth-card-login proposal-card">
     {header}
-    <p>Passo 1 de 3: seus dados e o crédito que você precisa.</p>
-    <form onSubmit={submit((data) => saveProposalDraftAction(token, data))}>
-      <label>Nome completo<input name="name" required maxLength={120} defaultValue={v?.name ?? applicant.name} /></label>
-      <label>CPF<input name="cpf" inputMode="numeric" required maxLength={14} defaultValue={v ? maskCpf(v.cpf) : ""} onChange={(event) => { event.currentTarget.value = maskCpf(event.currentTarget.value); }} /></label>
-      <label>Telefone com DDD<input name="phone" inputMode="tel" required maxLength={16} defaultValue={v ? maskPhone(v.phone) : ""} onChange={(event) => { event.currentTarget.value = maskPhone(event.currentTarget.value); }} /></label>
-      <label>Renda mensal (R$)<MoneyInput name="income" required defaultValue={v?.income ?? ""} /></label>
-      <label>Valor que você precisa (R$)<MoneyInput name="requested" required defaultValue={v?.requested ?? ""} /></label>
-      <label>Prazo desejado (meses)<input name="termMonths" inputMode="numeric" required maxLength={3} defaultValue={v?.termMonths ?? ""} /></label>
-      <button className="auth-submit auth-submit-login" disabled={busy}>{busy ? "Aguarde…" : proposal ? "Salvar alterações" : "Salvar e continuar"}<span>→</span></button>
-    </form>
-    {proposal && <>
-      <h2>Passo 2 de 3: documentos (PDF ou imagem, até 4 MB cada)</h2>
-      <ul className="proposal-docs">{PROPOSAL_DOCUMENTS.map((doc) => (
-        <li key={doc.kind}>
-          <span>{have.has(doc.kind) ? "✓" : "○"} {doc.label}</span>
-          <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" aria-label={doc.label} disabled={busy} onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            if (!file) return;
-            void run(async () => {
-              const ready = await shrinkImage(file);
-              if (ready.size > UPLOAD_LIMIT) return { ok: false, error: `"${doc.label}": o arquivo tem mais de 4 MB. Tire uma foto do documento ou envie um PDF menor.` };
-              const data = new FormData();
-              data.set("kind", doc.kind);
-              data.set("file", ready);
-              try {
-                const result = await uploadProposalDocumentAction(token, data);
-                return result.ok ? { ok: true, message: `${doc.label}: recebido.` } : result;
-              } catch {
-                return { ok: false, error: `Não foi possível enviar "${doc.label}". Verifique a internet e tente de novo; se continuar, tire uma foto do documento.` };
-              }
-            });
-          }} />
-        </li>
-      ))}</ul>
-      <h2>Passo 3 de 3: enviar</h2>
-      {!allDocs && <p className="auth-error" role="status">Sua proposta ainda NÃO foi enviada. Faltam {PROPOSAL_DOCUMENTS.filter((doc) => !have.has(doc.kind)).length} documento(s).</p>}
-      <button className="auth-submit auth-submit-login" disabled={busy || !allDocs} onClick={() => void run(() => submitProposalAction(token))}>{busy ? "Aguarde…" : allDocs ? "Enviar proposta" : "Envie os 4 documentos para continuar"}<span>→</span></button>
-    </>}
-    {note}
-    {logout}
+    <ClientDataWizard
+      proposal={{ exists: Boolean(proposal), name: v?.name ?? applicant.name, cpf: v?.cpf ?? "", phone: v?.phone ?? "", email: v?.email ?? applicant.email, income: v?.income ?? "", requested: v?.requested ?? "", termMonths: v?.termMonths ?? "", requestedCents: v?.requestedCents ?? null, incomeCents: v?.incomeCents ?? null, ownerProposal: false }}
+      clientData={proposal?.clientData ?? {}} documents={proposal?.documents ?? []}
+      actions={{
+        saveProposal: (data) => saveProposalDraftAction(token, data),
+        saveStep: (step, data) => saveApplicantStepAction(token, step, data),
+        upload: (data) => uploadProposalDocumentAction(token, data),
+        submit: () => submitProposalAction(token),
+      }}
+      footer={<>{note}{logout}</>} />
   </section></main>;
 }
