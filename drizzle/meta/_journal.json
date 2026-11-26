@@ -421,6 +421,13 @@
       "when": 1795647933735,
       "tag": "0060_formulario_publico_cliente",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795708947172,
+      "tag": "0061_relatorio_fechamento_comissao",
+      "breakpoints": true
     }
   ]
 }

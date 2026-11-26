@@ -1412,6 +1412,10 @@ button { color:inherit; }
 @media (max-width: 760px) { section[aria-label^="Gerente "] .panel-header { flex-wrap: wrap; } section[aria-label^="Gerente "] .heading-actions { flex-wrap: wrap; justify-content: flex-start; width: 100%; } }
 .adjustments-panel .status-chip, .payout-report .status-chip { white-space: normal; }
 @media (max-width: 760px) { .payout-report td.adjustments-cell { padding: 30px 0 8px; text-align: left; } .payout-report td.adjustments-cell::before { width: 100%; } }
+.payout-pdf-links { white-space: nowrap; }
+.payout-pdf-links .outline-button { display:inline-flex; align-items:center; min-height:32px; padding:4px 10px; margin:2px 4px 2px 0; text-decoration:none; font-size:13px; }
+.closings-panel { margin: 12px 0; }
+@media (max-width: 760px) { .payout-pdf-links { white-space: normal; } }
 
 /* Formulário público da proposta em etapas (cadastro completo do cliente), pensado primeiro para o celular. */
 .proposal-card:has(.proposal-wizard) { max-width: 640px; width: min(100%, 640px); }

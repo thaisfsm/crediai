@@ -485,6 +485,36 @@ export const accountManagerAdjustments = pgTable("account_manager_adjustment", {
   ...tenantPolicies("account_manager_adjustment", table.tenantId, { tenantDelete: true }),
 ]).enableRLS();
 
+// Detalhamento de cada fechamento de comissão (migração 0061): os contratos que entraram nele e a comissão de cada um, gravados no
+// próprio fechamento com os dados daquele momento (cliente, valor, taxa, percentuais, juros recebidos). É o que o relatório em PDF
+// mostra; mudanças posteriores nos contratos não alteram o histórico. Só se grava junto com o fechamento (gatilho no banco confere que
+// as linhas somam exatamente o valor fechado) e nunca se altera nem se apaga.
+export const accountManagerPayoutItems = pgTable("account_manager_payout_item", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  managerId: text("manager_id").notNull(),
+  payoutId: text("payout_id").notNull(),
+  // Nulos só na linha "comissão sem contrato identificado" (nunca esperada; existe para o total nunca deixar de bater).
+  operationId: text("operation_id"),
+  clientId: text("client_id"),
+  clientName: text("client_name").notNull(),
+  operationCode: text("operation_code"),
+  loanDate: date("loan_date", { mode: "string" }),
+  principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
+  interestRateBps: numeric("interest_rate_bps", { precision: 9, scale: 1, mode: "number" }).notNull(),
+  commissionBps: integer("commission_bps").notNull(),
+  interestReceivedCents: bigint("interest_received_cents", { mode: "number" }).notNull(),
+  commissionCents: bigint("commission_cents", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("account_manager_payout_item_payout_idx").on(table.tenantId, table.payoutId),
+  uniqueIndex("account_manager_payout_item_operation_unique").on(table.tenantId, table.payoutId, table.operationId),
+  foreignKey({ name: "account_manager_payout_item_payout_same_manager_fk", columns: [table.tenantId, table.managerId, table.payoutId], foreignColumns: [accountManagerPayouts.tenantId, accountManagerPayouts.managerId, accountManagerPayouts.id] }).onDelete("cascade"),
+  check("account_manager_payout_item_values_valid", sql`${table.commissionCents} > 0 and ${table.principalCents} >= 0 and ${table.interestReceivedCents} >= 0 and ${table.interestRateBps} >= 0 and ${table.commissionBps} >= 0 and ${table.commissionBps} <= 10000`),
+  check("account_manager_payout_item_client_name_not_blank", sql`length(trim(${table.clientName})) > 0`),
+  ...tenantPolicies("account_manager_payout_item", table.tenantId),
+]).enableRLS();
+
 export const clients = pgTable("client", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
