@@ -26,14 +26,18 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
   if (text(data, "confirm", 5) !== "1") return { ok: false, error: "Confirme a renegociação para gravar." };
   const modality: RenegotiationModality = text(data, "modality", 20) === "SINGLE" ? "SINGLE" : "INSTALLMENT";
   const frequency: RenegotiationFrequency = text(data, "frequency", 20) === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
-  const rateBps = parseLoanRateToBps(text(data, "rate", 20));
+  // "Valor negociado": a parcela informada manda e a taxa vira a equivalente; "Automático": a taxa calcula as parcelas.
+  const manual = modality === "INSTALLMENT" && text(data, "entryMode", 10) === "MANUAL";
+  const installmentCents = manual ? parseMoneyToCents(text(data, "installment", 40)) : null;
+  if (manual && (installmentCents === null || installmentCents <= 0)) return { ok: false, error: "Informe o valor da parcela renegociada em reais, por exemplo 700,00." };
+  const rateBps = manual ? 0 : parseLoanRateToBps(text(data, "rate", 20));
   if (rateBps === null || rateBps > 100_000) return { ok: false, error: "Informe a taxa de juros em %, por exemplo 5." };
   const countInput = text(data, "count", 5);
   const count = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(countInput) ? Number(countInput) : NaN) : 1;
   if (!Number.isInteger(count) || count < 1 || count > 360) return { ok: false, error: "Informe a quantidade de parcelas, de 1 a 360." };
   const firstDueDate = text(data, "firstDueDate", 10);
   if (!isIsoDate(firstDueDate)) return { ok: false, error: "Informe o primeiro vencimento." };
-  const adjustmentKind = text(data, "adjustmentKind", 10);
+  const adjustmentKind = manual ? "NONE" : text(data, "adjustmentKind", 10);
   const adjustmentInput = adjustmentKind === "DISCOUNT" || adjustmentKind === "ADDITION" ? parseMoneyToCents(text(data, "adjustment", 40)) : 0;
   if (adjustmentInput === null || adjustmentInput < 0) return { ok: false, error: "Informe o valor do ajuste em reais, por exemplo 100,00." };
   const penaltyInput = text(data, "penalty", 40) ? parseMoneyToCents(text(data, "penalty", 40)) : 0;
@@ -57,7 +61,7 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
     if (chosen.some((operation) => operation.clientId !== clientId)) return { ok: false, error: "Todas as operações precisam ser do mesmo cliente." };
     if (chosen.some((operation) => operation.status !== "OPEN")) return { ok: false, error: "Só operações em aberto podem ser renegociadas. Atualize a tela e confira." };
     const position = renegotiationPosition(chosen);
-    const built = renegotiationContract(position, { modality, frequency, rateBps, count, firstDueDate, adjustmentCents, penaltyCents: penaltyInput }, loanDate);
+    const built = renegotiationContract(position, { modality, frequency, rateBps, count, firstDueDate, adjustmentCents, penaltyCents: penaltyInput, installmentCents }, loanDate);
     if (!built.ok) return built;
 
     const renegotiatedAt = new Date();
@@ -78,7 +82,7 @@ export async function renegotiateAction(data: FormData): Promise<RenegotiationRe
     await recordAdminAudit(tx, session, {
       action: "OPERATION_RENEGOTIATED", entity: "loan_operation", entityId: newId, tenantId, tenantName: tenant?.name ?? null,
       before: { operations: chosen.map((operation) => ({ id: operation.id, code: operation.code, principalOpenCents: operation.principalRemainingCents, interestOpenCents: operation.interestRemainingCents, balanceCents: operation.balanceCents })) },
-      after: { newOperationId: newId, newOperationCode: newCode, ...built.contract, adjustmentCents, penaltyCents: penaltyInput, roundingCents: built.roundingCents, reason: reason || null },
+      after: { newOperationId: newId, newOperationCode: newCode, ...built.contract, entryMode: manual ? "MANUAL" : "RATE", negotiatedInstallmentCents: installmentCents, adjustmentCents: built.sim.adjustmentCents, newInterestCents: built.sim.newInterestCents, penaltyCents: penaltyInput, roundingCents: built.roundingCents, reason: reason || null },
       description: `Renegociação de ${client.name}: ${chosen.map((operation) => `#${operation.code}`).join(", ")} → #${newCode}`,
     });
     return {
