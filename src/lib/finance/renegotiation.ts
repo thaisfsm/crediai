@@ -5,7 +5,7 @@
 //  • D-H2: o principal da nova operação é o principal em aberto das antigas (não sai dinheiro novo); os juros em aberto
 //    entram como valor fixo, sem contar como recebidos.
 //  • Juros simples sobre o PRINCIPAL: os juros novos nunca incidem sobre juros em aberto (sem juros sobre juros).
-import { BIWEEKLY_INSTALLMENT_RULE, BIWEEKLY_RULE, INSTALLMENT_RULE, calculateOperation, dueDates, installmentDueDate, simpleInterest } from "./rules";
+import { BIWEEKLY_INSTALLMENT_RULE, BIWEEKLY_RULE, INSTALLMENT_RULE, calculateOperation, dueDates, installmentDueDate, simpleInterest, simpleMonthlyRate } from "./rules";
 import type { OperationView } from "./portfolio";
 
 export type RenegotiationModality = "SINGLE" | "INSTALLMENT";
@@ -16,7 +16,13 @@ export type RenegotiationTerms = {
   adjustmentCents: number;
   // Multa somada só à ÚLTIMA parcela (a parcela pulada que vai para o final). Opcional; conta como juros do contrato.
   penaltyCents?: number;
+  // Valor da parcela negociado com o cliente (só parcelado). Quando informado, a taxa NÃO calcula as parcelas: o total é
+  // parcela × quantidade (+ multa na última); a diferença para o saldo atual vira juros novos (acima) ou desconto nos juros
+  // em aberto (abaixo). A taxa gravada é a taxa simples equivalente (juros ÷ principal ÷ parcelas), como no cadastro.
+  installmentCents?: number | null;
 };
+
+export const isManualInstallment = (terms: RenegotiationTerms) => terms.modality === "INSTALLMENT" && typeof terms.installmentCents === "number";
 
 // Posição atual das operações escolhidas (só as em aberto entram).
 export function renegotiationPosition(operations: OperationView[]) {
@@ -35,18 +41,27 @@ export function renegotiationPosition(operations: OperationView[]) {
 }
 export type RenegotiationPosition = ReturnType<typeof renegotiationPosition>;
 
-export function simulateRenegotiation(position: RenegotiationPosition, terms: RenegotiationTerms) {
+export function simulateRenegotiation(position: RenegotiationPosition, rawTerms: RenegotiationTerms) {
+  const manual = isManualInstallment(rawTerms);
   const baseCents = position.principalOpenCents;
   const carriedInterestCents = position.interestOpenCents;
+  const periods = rawTerms.modality === "INSTALLMENT" ? rawTerms.count : 1;
+  const penaltyCents = Math.max(0, rawTerms.penaltyCents ?? 0);
+  // Valor negociado: o ajuste informado é ignorado; a diferença entre parcela × quantidade e o saldo atual é o ajuste
+  // (desconto, se abaixo) ou os juros novos (se acima). Taxa equivalente simples sobre o principal em aberto.
+  const negotiatedCents = manual ? (rawTerms.installmentCents as number) * periods : 0;
+  const difference = negotiatedCents - position.balanceCents;
+  const terms = manual
+    ? { ...rawTerms, adjustmentCents: Math.min(0, difference), rateBps: Math.round(simpleMonthlyRate({ principalCents: baseCents, interestCents: Math.max(0, negotiatedCents + penaltyCents - baseCents), months: periods }) * 100_000) / 10 }
+    : rawTerms;
   const renegotiatedCents = position.balanceCents + terms.adjustmentCents;
-  const periods = terms.modality === "INSTALLMENT" ? terms.count : 1;
-  // Juros novos: taxa simples do período sobre o principal em aberto, vezes a quantidade de períodos.
-  const newInterestCents = simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps, periods });
-  const penaltyCents = Math.max(0, terms.penaltyCents ?? 0);
+  // Juros novos: taxa simples do período sobre o principal em aberto, vezes a quantidade de períodos (no valor negociado,
+  // o que passa do saldo atual).
+  const newInterestCents = manual ? Math.max(0, difference) : simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps, periods });
   const totalCents = renegotiatedCents + newInterestCents + penaltyCents;
   const dates = dueDates(terms.frequency, terms.firstDueDate, periods);
   // As parcelas iguais dividem o total sem a multa; a última leva o resto e a multa.
-  const installmentCents = Math.floor((totalCents - penaltyCents) / periods);
+  const installmentCents = manual ? (rawTerms.installmentCents as number) : Math.floor((totalCents - penaltyCents) / periods);
   const payments = dates.map((dueDate, index) => ({ number: index + 1, dueDate, amountCents: index === periods - 1 ? totalCents - installmentCents * (periods - 1) : installmentCents }));
   const warnings: string[] = [];
   if (renegotiatedCents < baseCents) warnings.push("O desconto passa dos juros em aberto: parte do principal emprestado deixaria de voltar.");
@@ -63,7 +78,7 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
     capitalOutflowCents: 0,
   };
   return {
-    comparison,
+    comparison, manual, rateBps: terms.rateBps,
     baseCents, carriedInterestCents, adjustmentCents: terms.adjustmentCents, penaltyCents, renegotiatedCents, newInterestCents, totalCents, payments,
     // Na renovação do pagamento único, cada novo período cobraria de novo a taxa sobre o principal em aberto.
     periodInterestCents: simpleInterest({ principalCents: baseCents, rateBps: terms.rateBps }),
@@ -78,19 +93,22 @@ export function simulateRenegotiation(position: RenegotiationPosition, terms: Re
 export function renegotiationContract(position: RenegotiationPosition, terms: RenegotiationTerms, loanDate: string) {
   const sim = simulateRenegotiation(position, terms);
   if (position.principalOpenCents <= 0) return { ok: false as const, error: "As operações escolhidas não têm principal em aberto para renegociar." };
+  if (sim.manual && (!Number.isInteger(terms.installmentCents) || (terms.installmentCents as number) <= 0)) return { ok: false as const, error: "Informe o valor da parcela renegociada em reais, por exemplo 700,00." };
+  if (sim.manual && sim.renegotiatedCents < sim.baseCents) return { ok: false as const, error: `O valor negociado (${terms.count} × parcela) fica abaixo do principal em aberto: parte do principal emprestado deixaria de voltar. Aumente a parcela ou a quantidade.` };
   if (sim.renegotiatedCents < sim.baseCents) return { ok: false as const, error: "O desconto passa dos juros em aberto: parte do principal emprestado deixaria de voltar. Reduza o desconto." };
   if (terms.firstDueDate < loanDate) return { ok: false as const, error: "O primeiro vencimento não pode ser antes de hoje." };
   const principalCents = sim.baseCents;
   if (terms.modality === "INSTALLMENT") {
     // Parcela fixa para cima; a multa (se houver) vai inteira na última, que a agenda calcula como total − parcela × (n − 1).
-    const installmentCents = Math.ceil((sim.totalCents - sim.penaltyCents) / terms.count);
+    // No valor negociado, a parcela é exatamente a informada (sem arredondamento).
+    const installmentCents = sim.manual ? (terms.installmentCents as number) : Math.ceil((sim.totalCents - sim.penaltyCents) / terms.count);
     const totalCents = installmentCents * terms.count + sim.penaltyCents;
     const interestCents = totalCents - principalCents;
     return {
       ok: true as const, roundingCents: totalCents - sim.totalCents, sim,
       contract: {
         principalCents, interestCents, totalCents, loanDate, dueDate: installmentDueDate(terms.firstDueDate, terms.count, terms.frequency), modality: "INSTALLMENT" as const, frequency: terms.frequency,
-        interestRateBps: terms.rateBps, calculationRule: terms.frequency === "BIWEEKLY" ? BIWEEKLY_INSTALLMENT_RULE : INSTALLMENT_RULE,
+        interestRateBps: sim.rateBps, calculationRule: terms.frequency === "BIWEEKLY" ? BIWEEKLY_INSTALLMENT_RULE : INSTALLMENT_RULE,
         installmentCount: terms.count, installmentCents, firstDueDate: terms.firstDueDate,
       },
     };

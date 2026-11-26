@@ -25,6 +25,9 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const [modality, setModality] = useState<RenegotiationModality>("INSTALLMENT");
   const [frequency, setFrequency] = useState<RenegotiationFrequency>("MONTHLY");
   const [rate, setRate] = useState("");
+  // Forma de calcular o parcelado: pela taxa (automático) ou pelo valor da parcela negociado com o cliente.
+  const [entryMode, setEntryMode] = useState<"RATE" | "MANUAL">("RATE");
+  const [installment, setInstallment] = useState("");
   const [count, setCount] = useState("3");
   const [firstDueDate, setFirstDueDate] = useState(addDays(portfolio.today, 30));
   const [confirmed, setConfirmed] = useState(false);
@@ -33,27 +36,36 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
   const operations = open.filter((operation) => operation.clientId === clientId);
   const chosen = operations.filter((operation) => !excluded.includes(operation.id));
   const position = renegotiationPosition(chosen);
-  const rateBps = parseLoanRateToBps(rate);
-  const adjustmentCents = adjustmentKind === "NONE" ? 0 : parseMoneyToCents(adjustment);
+  const manual = modality === "INSTALLMENT" && entryMode === "MANUAL";
+  const installmentCents = manual ? parseMoneyToCents(installment) : null;
+  const rateBps = manual ? 0 : parseLoanRateToBps(rate);
+  const adjustmentCents = manual || adjustmentKind === "NONE" ? 0 : parseMoneyToCents(adjustment);
   const periods = modality === "INSTALLMENT" ? (/^\d{1,3}$/.test(count) ? Number(count) : NaN) : 1;
   const penaltyCents = penalty.trim() ? parseMoneyToCents(penalty) : 0;
   // Desconto, acréscimo ou multa só entram com motivo (D-H1).
-  const needsReason = adjustmentKind !== "NONE" || (penaltyCents ?? 0) > 0;
+  const needsReason = (!manual && adjustmentKind !== "NONE") || (penaltyCents ?? 0) > 0;
   const reasonMissing = needsReason && adjustmentReason.trim().length < 3;
-  const ready = chosen.length > 0 && !reasonMissing && penaltyCents !== null && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate);
-  const result = ready ? simulateRenegotiation(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number), penaltyCents: penaltyCents as number }) : null;
-  const contract = result ? renegotiationContract(position, { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number), penaltyCents: penaltyCents as number }, portfolio.today) : null;
+  const ready = chosen.length > 0 && !reasonMissing && penaltyCents !== null && rateBps !== null && rateBps <= 100_000 && adjustmentCents !== null && Number.isInteger(periods) && periods >= 1 && periods <= 360 && /^\d{4}-\d{2}-\d{2}$/.test(firstDueDate)
+    && (!manual || (installmentCents !== null && installmentCents > 0));
+  const terms = { modality, frequency, rateBps: rateBps as number, count: periods, firstDueDate, adjustmentCents: adjustmentKind === "DISCOUNT" ? -(adjustmentCents as number) : (adjustmentCents as number), penaltyCents: penaltyCents as number, installmentCents: manual ? installmentCents : null };
+  const result = ready ? simulateRenegotiation(position, terms) : null;
+  const contract = result ? renegotiationContract(position, terms, portfolio.today) : null;
+  const switchEntryMode = (mode: "RATE" | "MANUAL") => {
+    // Ao passar para o valor negociado, sugere a parcela que a taxa calcularia (o usuário troca pelo valor combinado).
+    if (mode === "MANUAL" && !installment.trim() && contract?.ok && contract.contract.installmentCents) setInstallment((contract.contract.installmentCents / 100).toFixed(2).replace(".", ","));
+    setEntryMode(mode);
+  };
   const save = () => {
     const data = new FormData();
     data.set("clientId", clientId);
     for (const operation of chosen) data.append("operationIds", operation.id);
-    data.set("modality", modality); data.set("frequency", frequency); data.set("rate", rate); data.set("count", String(periods)); data.set("firstDueDate", firstDueDate);
+    data.set("modality", modality); data.set("frequency", frequency); data.set("rate", rate); data.set("count", String(periods)); data.set("entryMode", manual ? "MANUAL" : "RATE"); data.set("installment", installment); data.set("firstDueDate", firstDueDate);
     data.set("adjustmentKind", adjustmentKind); data.set("adjustment", adjustment); data.set("penalty", penalty); data.set("reason", adjustmentReason); data.set("confirm", confirmed ? "1" : "0");
     setFeedback(null);
     startTransition(async () => {
       try {
         const saved = await renegotiateAction(data);
-        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); setPenalty(""); }
+        if (saved.ok) { setFeedback({ tone: "ok", text: saved.message }); setClientId(""); setExcluded([]); setConfirmed(false); setRate(""); setAdjustment(""); setAdjustmentReason(""); setAdjustmentKind("NONE"); setPenalty(""); setInstallment(""); }
         else setFeedback({ tone: "error", text: saved.error });
       } catch { setFeedback({ tone: "error", text: "Não foi possível gravar a renegociação. Nada foi alterado; tente novamente." }); }
     });
@@ -100,25 +112,34 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <button type="button" role="radio" aria-checked={frequency === "MONTHLY"} className={frequency === "MONTHLY" ? "is-active" : ""} onClick={() => setFrequency("MONTHLY")}>Mensal</button>
             <button type="button" role="radio" aria-checked={frequency === "BIWEEKLY"} className={frequency === "BIWEEKLY" ? "is-active" : ""} onClick={() => setFrequency("BIWEEKLY")}>Quinzenal</button>
           </div>
+          {modality === "INSTALLMENT" && (
+            <div className="modality-switch" role="radiogroup" aria-label="Forma de cálculo da parcela">
+              <button type="button" role="radio" aria-checked={!manual} className={!manual ? "is-active" : ""} onClick={() => switchEntryMode("RATE")}>Cálculo automático (taxa)</button>
+              <button type="button" role="radio" aria-checked={manual} className={manual ? "is-active" : ""} onClick={() => switchEntryMode("MANUAL")}>Valor negociado</button>
+            </div>
+          )}
           <div className="form-grid">
-            <label className="field"><span>Ajuste</span><select value={adjustmentKind} onChange={(event) => setAdjustmentKind(event.target.value as typeof adjustmentKind)}>
+            {manual && <label className="field"><span>Valor da parcela renegociada (R$)</span><input inputMode="decimal" placeholder="700,00" value={installment} onChange={(event) => setInstallment(event.target.value)} /></label>}
+            {!manual && <label className="field"><span>Ajuste</span><select value={adjustmentKind} onChange={(event) => setAdjustmentKind(event.target.value as typeof adjustmentKind)}>
               <option value="NONE">Sem ajuste</option><option value="DISCOUNT">Desconto</option><option value="ADDITION">Acréscimo</option>
-            </select></label>
-            {adjustmentKind !== "NONE" && <label className="field"><span>{adjustmentKind === "DISCOUNT" ? "Valor do desconto (R$)" : "Valor do acréscimo (R$)"}</span><input inputMode="decimal" placeholder="0,00" value={adjustment} onChange={(event) => setAdjustment(event.target.value)} /></label>}
+            </select></label>}
+            {!manual && adjustmentKind !== "NONE" && <label className="field"><span>{adjustmentKind === "DISCOUNT" ? "Valor do desconto (R$)" : "Valor do acréscimo (R$)"}</span><input inputMode="decimal" placeholder="0,00" value={adjustment} onChange={(event) => setAdjustment(event.target.value)} /></label>}
             <label className="field"><span>Multa na última parcela (R$)</span><input inputMode="decimal" placeholder="0,00" value={penalty} onChange={(event) => setPenalty(event.target.value)} /></label>
             {needsReason && <label className="field field-wide"><span>{adjustmentKind === "NONE" ? "Motivo da multa" : adjustmentKind === "DISCOUNT" ? "Motivo do desconto" : "Motivo do acréscimo"}</span><input maxLength={300} placeholder="Ex.: parcela em atraso jogada para o final" value={adjustmentReason} onChange={(event) => setAdjustmentReason(event.target.value)} /></label>}
-            <label className="field"><span>{`Taxa de juros por ${periodWord} (%)`}</span><input inputMode="decimal" placeholder="5" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
+            {!manual && <label className="field"><span>{`Taxa de juros por ${periodWord} (%)`}</span><input inputMode="decimal" placeholder="5" value={rate} onChange={(event) => setRate(event.target.value)} /></label>}
             {modality === "INSTALLMENT" && <label className="field"><span>{frequency === "BIWEEKLY" ? "Quantidade de parcelas (quinzenas)" : "Quantidade de parcelas (meses)"}</span><input inputMode="numeric" maxLength={3} value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} /></label>}
             <DateField label={modality === "INSTALLMENT" ? "Primeiro vencimento" : "Vencimento"} name="simulationFirstDue" defaultValue={firstDueDate} onChange={setFirstDueDate} />
           </div>
-          <p className="capital-note">{"A multa é somada só à última parcela (a parcela em atraso que vai para o final). As demais parcelas ficam iguais."}</p>
+          <p className="capital-note">{manual
+            ? "Valor negociado: total = parcela × quantidade (+ multa na última). O que passar do saldo atual vira juros novos; abaixo dele, é desconto nos juros em aberto. O principal em aberto precisa estar coberto. A taxa gravada é a equivalente em juros simples."
+            : "A multa é somada só à última parcela (a parcela em atraso que vai para o final). As demais parcelas ficam iguais."}</p>
           {reasonMissing && <p className="form-feedback form-feedback-warning">Informe o motivo para ver a simulação.</p>}
         </section>
       )}
 
       {result && (
         <section className="panel form-panel" aria-label="Resultado da simulação">
-          <div className="panel-header"><div><h2>3. Resultado da simulação</h2><p>Juros simples sobre o principal em aberto; os juros em aberto entram como valor fixo, sem juros sobre juros.</p></div></div>
+          <div className="panel-header"><div><h2>3. Resultado da simulação</h2><p>{result.manual ? `Valor negociado: ${periods} × ${formatMoney(installmentCents as number)}. Taxa equivalente em juros simples: ${formatRate(result.rateBps)} por ${periodWord}.` : "Juros simples sobre o principal em aberto; os juros em aberto entram como valor fixo, sem juros sobre juros."}</p></div></div>
           <dl className="payment-summary">
             <div><dt>Saldo atual (antes)</dt><dd>{formatMoney(position.balanceCents)}</dd></div>
             <div><dt>Principal em aberto (base dos juros)</dt><dd>{formatMoney(result.baseCents)}</dd></div>
@@ -126,7 +147,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             <div><dt>{result.adjustmentCents < 0 ? "Desconto" : "Acréscimo"}</dt><dd>{formatMoney(Math.abs(result.adjustmentCents))}</dd></div>
             {result.penaltyCents > 0 && <div><dt>Multa (na última parcela)</dt><dd>{formatMoney(result.penaltyCents)}</dd></div>}
             <div><dt>Valor renegociado</dt><dd>{formatMoney(result.renegotiatedCents)}</dd></div>
-            <div><dt>{`Juros novos (${formatRate(rateBps as number)} por ${periodWord}${modality === "INSTALLMENT" ? ` × ${periods}` : ""})`}</dt><dd>{formatMoney(result.newInterestCents)}</dd></div>
+            <div><dt>{result.manual ? "Juros novos (acima do saldo atual)" : `Juros novos (${formatRate(rateBps as number)} por ${periodWord}${modality === "INSTALLMENT" ? ` × ${periods}` : ""})`}</dt><dd>{formatMoney(result.newInterestCents)}</dd></div>
             <div className="payment-balance"><dt>Total a receber (depois)</dt><dd>{formatMoney(result.totalCents)}</dd></div>
           </dl>
           {result.warnings.map((warning) => <p key={warning} className="form-feedback form-feedback-warning">{warning}</p>)}
@@ -147,7 +168,7 @@ export function RenegotiationPage({ portfolio }: { portfolio: TenantPortfolio })
             </tbody>
           </table></div>
           <p className="capital-note">Ao gravar: nenhum dinheiro sai do capital, porque o principal do contrato novo é o mesmo já emprestado. Os juros em aberto passam para o contrato novo e só viram lucro quando forem pagos; os juros já recebidos continuam registrados nas operações antigas, que ficam como Renegociada, com o histórico intacto e o vínculo com o contrato novo.</p>
-          {contract && !contract.ok && !contract.error.startsWith("O desconto") && <p className="form-feedback form-feedback-warning">{contract.error}</p>}
+          {contract && !contract.ok && (result.manual || !contract.error.startsWith("O desconto")) && <p className="form-feedback form-feedback-warning">{contract.error}</p>}
           {contract?.ok && contract.roundingCents > 0 && <p className="muted-cell">{`Parcela fixa arredondada para cima: o total do contrato fica ${formatMoney(contract.roundingCents)} acima da simulação (centavos somados aos juros).`}</p>}
           <label className="field-check"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> <span>{`Confirmo: encerrar ${chosen.length === 1 ? "a operação" : `as ${chosen.length} operações`} como renegociada${chosen.length === 1 ? "" : "s"} e criar o contrato novo de ${formatMoney(result.totalCents)}.`}</span></label>
           <div className="form-actions"><button type="button" className="primary-button" disabled={!confirmed || pending || !contract?.ok} onClick={save}>{pending ? "Gravando…" : "Gravar renegociação"}</button></div>

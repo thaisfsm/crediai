@@ -53,7 +53,9 @@ const available = () => one(`select w.initial_capital_cents
 const otherTenants = () => one(`select md5(string_agg(x, '|' order by x)) from (select 'o'||row(o.*)::text x from loan_operation o where tenant_id <> 'ten_roberio' union all select 'p'||row(p.*)::text from payment p where tenant_id <> 'ten_roberio') t`);
 
 let robério, fernando, ids = [], newId, capitalBefore, othersBefore;
-const fields = (extra = {}) => ({ clientId: "c_e2e_rg", modality: "INSTALLMENT", frequency: "MONTHLY", rate: "5", count: "3", firstDueDate: "2026-11-20", adjustmentKind: "NONE", adjustment: "", reason: "", confirm: "1", ...extra });
+// Primeiro vencimento sempre no futuro (a data fixa antiga vencia com o calendário).
+const FUTURE_DUE = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+const fields = (extra = {}) => ({ clientId: "c_e2e_rg", modality: "INSTALLMENT", frequency: "MONTHLY", rate: "5", count: "3", firstDueDate: FUTURE_DUE, adjustmentKind: "NONE", adjustment: "", reason: "", confirm: "1", ...extra });
 const renegotiate = (cookie, extra, operationIds = ids) => {
   // operationIds repetido: a ação lê getAll("operationIds").
   const form = new FormData();
@@ -124,7 +126,7 @@ test("RG3. repetir, editar, excluir e pagar ficam recusados; o banco recusa rene
   const again = await renegotiate(robério, {}); assert.equal(again?.ok, false); assert.match(again.error, /em aberto/);
   const cancelNew = await action(robério, "cancelOperationAction", { operationId: newId }); assert.equal(cancelNew?.ok, false); assert.match(cancelNew.error, /renegocia/i);
   const cancelOld = await action(robério, "cancelOperationAction", { operationId: ids[1] }); assert.equal(cancelOld?.ok, false);
-  const edit = await action(robério, "previewOperationEditAction", { operationId: newId, clientId: "c_e2e_rg", modality: "INSTALLMENT", installmentFrequency: "MONTHLY", loanAmount: "1.600,00", installment: "600,00", term: "3", firstDueDate: "2026-11-20", loanDate: "2026-10-17" });
+  const edit = await action(robério, "previewOperationEditAction", { operationId: newId, clientId: "c_e2e_rg", modality: "INSTALLMENT", installmentFrequency: "MONTHLY", loanAmount: "1.600,00", installment: "600,00", term: "3", firstDueDate: FUTURE_DUE, loanDate: "2026-10-17" });
   assert.equal(edit?.ok, false); assert.match(edit.error, /renegocia/i);
   const payOld = await action(robério, "registerPaymentAction", { operationId: ids[1], amount: "10,00", paidAt: "2026-10-17" }); assert.equal(payOld?.ok, false);
   assert.equal(await dataHash(), hash, "nada mudou");
@@ -186,6 +188,8 @@ test("RG6. tela: gravar exige a confirmação, mostra o resultado, o vínculo na
     const [renegotiated] = await admin(`select count(*)::int n from loan_operation where client_id = 'c_e2e_rg3' and status = 'RENEGOTIATED'`);
     assert.ok(renegotiated.n >= 1);
     await page.goto(`${BASE}/?tela=operacoes`);
+    // A lista abre em "Em aberto"; a renegociada aparece em "Todos".
+    await page.getByRole("group", { name: "Situação das operações" }).getByRole("button", { name: /Todos/ }).click();
     await page.getByText("Renegociada").first().waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal (${label})`);
     await page.goto(`${BASE}/financeiro`);
@@ -205,6 +209,70 @@ test("RG8. multa na última parcela: exige motivo, grava a parcela final = parce
   assert.equal(done?.ok, true, JSON.stringify(done));
   const [contract] = await admin(`select installment_count c, installment_cents i, principal_cents + interest_cents t from loan_operation where client_id = 'c_e2e_rg4' and status = 'OPEN'`);
   assert.equal(Number(contract.t), Number(contract.i) * Number(contract.c) + 10_000, "total = parcelas iguais + multa");
+});
+
+test("RG9. valor negociado (caso Priscila): 10 × R$ 700 grava exatamente a prévia, sem duplicar principal; outro tenant recusado", async () => {
+  await admin(`insert into client(id, tenant_id, name) values ('c_e2e_rg5', 'ten_roberio', 'Cliente Valor Negociado')`);
+  const created = await action(robério, "createOperationAction", { clientId: "c_e2e_rg5", modality: "SINGLE", frequency: "MONTHLY", principal: "3.000,00", rate: "75", loanDate: "2026-08-18", dueDate: "2026-09-18" });
+  assert.equal(created?.ok, true, JSON.stringify(created));
+  const [{ id }] = await admin(`select id from loan_operation where client_id = 'c_e2e_rg5'`);
+  const capital = Number(await available());
+  const others = await otherTenants();
+  const manual = { clientId: "c_e2e_rg5", entryMode: "MANUAL", installment: "700,00", rate: "", count: "10", firstDueDate: "2026-12-26" };
+  const hash = await dataHash();
+  // Recusas sem gravar: parcela vazia, parcela que não cobre o principal, outro tenant com os ids do A.
+  assert.match((await renegotiate(robério, { ...manual, installment: "" }, [id])).error, /valor da parcela/i);
+  assert.match((await renegotiate(robério, { ...manual, installment: "299,00" }, [id])).error, /principal em aberto/i);
+  assert.equal((await renegotiate(fernando, manual, [id])).ok, false);
+  assert.equal(await dataHash(), hash, "nenhuma recusa grava");
+  const done = await renegotiate(robério, manual, [id]);
+  assert.equal(done?.ok, true, JSON.stringify(done));
+  const [fresh] = await admin(`select principal_cents::int principal, interest_cents::int interest, total_cents::int total, installment_cents::int installment, installment_count count, interest_rate_bps::float rate, first_due_date::text first, due_date::text due, status, modality from loan_operation where id = '${done.operationId}'`);
+  assert.deepEqual(fresh, { principal: 300000, interest: 400000, total: 700000, installment: 70000, count: 10, rate: 1333.3, first: "2026-12-26", due: "2027-09-26", status: "OPEN", modality: "INSTALLMENT" });
+  const [old] = await admin(`select status, renegotiated_into_id, renegotiated_principal_cents::int p, renegotiated_interest_cents::int i from loan_operation where id = '${id}'`);
+  assert.deepEqual(old, { status: "RENEGOTIATED", renegotiated_into_id: done.operationId, p: 300000, i: 225000 });
+  assert.equal(Number(await available()), capital, "nenhum dinheiro entra ou sai");
+  const [audit] = await admin(`select "after"->>'entryMode' mode, ("after"->>'negotiatedInstallmentCents')::int parcela from admin_audit_log where action = 'OPERATION_RENEGOTIATED' and entity_id = '${done.operationId}'`);
+  assert.deepEqual(audit, { mode: "MANUAL", parcela: 70000 });
+  assert.equal(await otherTenants(), others, "o outro tenant não muda");
+  // Pagar a 1ª parcela de R$ 700 entra no capital uma vez.
+  const paid = await action(robério, "registerPaymentAction", { operationId: done.operationId, amount: "700,00", paidAt: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) });
+  assert.equal(paid?.ok, true, JSON.stringify(paid));
+  assert.equal(Number(await available()), capital + 70000);
+});
+
+test("RG10. tela: \"Valor negociado\" mostra 10 × R$ 700, total R$ 7.000 e grava (desktop e celular)", async () => {
+  await admin(`update wallet set initial_capital_cents = initial_capital_cents + 1000000 where tenant_id = 'ten_roberio'`);
+  for (const [label, viewport] of [["desktop", { width: 1440, height: 900 }], ["celular", { width: 390, height: 844 }]]) {
+    const clientId = `c_e2e_rg6_${label}`;
+    await admin(`insert into client(id, tenant_id, name) values ('${clientId}', 'ten_roberio', 'Cliente Tela Negociada ${label}')`);
+    assert.equal((await action(robério, "createOperationAction", { clientId, modality: "SINGLE", frequency: "MONTHLY", principal: "3.000,00", rate: "75", loanDate: "2026-08-18", dueDate: "2026-09-18" }))?.ok, true);
+    const context = await browser.newContext({ viewport });
+    const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+    await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/?tela=renegociacao`);
+    await page.getByRole("region", { name: "Operações a renegociar" }).getByLabel("Cliente").selectOption(clientId);
+    const terms = page.getByRole("region", { name: "Novas condições" });
+    await terms.getByLabel("Quantidade de parcelas (meses)").fill("10");
+    await terms.getByRole("radio", { name: "Valor negociado" }).click();
+    assert.equal(await terms.getByLabel("Taxa de juros por mês (%)").count(), 0, "no valor negociado a taxa não é pedida");
+    await terms.getByLabel("Valor da parcela renegociada (R$)").fill("700,00");
+    const result = page.getByRole("region", { name: "Resultado da simulação" });
+    await result.waitFor();
+    const preview = await result.getByLabel("Pagamentos simulados").locator("li").allInnerTexts();
+    assert.equal(preview.length, 10);
+    assert.ok(preview.every((row) => row.includes("700,00")), preview.join(" | "));
+    assert.match(await result.locator(".payment-balance").innerText(), /7\.000,00/);
+    await result.getByLabel(/Confirmo/).check();
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/renegociacao-valor-negociado-${label}.png`, fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `sem rolagem horizontal (${label})`);
+    await result.getByRole("button", { name: "Gravar renegociação" }).click();
+    await page.getByText(/Renegociação gravada/).waitFor();
+    const [fresh] = await admin(`select total_cents::int total, installment_cents::int installment, installment_count count from loan_operation where client_id = '${clientId}' and status = 'OPEN'`);
+    assert.deepEqual(fresh, { total: 700000, installment: 70000, count: 10 });
+    await context.close();
+  }
 });
 
 test("RG7. o tenant B não vê as renegociações do A", async () => {
