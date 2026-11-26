@@ -40,12 +40,21 @@ type Adjustment = Manager["adjustments"][number];
 const KindChip = ({ kind }: { kind: string }) => <span className={`status-chip ${kind === "CREDIT" ? "status-paid" : "status-late"}`}><i />{kind === "CREDIT" ? "Crédito" : "Débito"}</span>;
 const signed = (kind: string, cents: number) => `${kind === "CREDIT" ? "+" : "−"} ${formatMoney(cents)}`;
 
-// Relatório dos fechamentos: comissão quitada, cada lançamento aplicado (descrição, débito/crédito e valor) e o valor final pago.
+// Relatório dos fechamentos: comissão quitada, cada lançamento aplicado (descrição, débito/crédito e valor) e o valor final pago, com o
+// PDF de cada fechamento (visualizar ou baixar de novo a qualquer momento; o MASTER abre o da carteira escolhida).
 export function PayoutReport({ payouts }: { payouts: Manager["payouts"] }) {
+  const scope = useContext(Scope);
   if (payouts.length === 0) return <p>Nenhum fechamento de comissão registrado ainda.</p>;
+  const pdfHref = (payoutId: string, download: boolean) => {
+    const query = new URLSearchParams();
+    if (scope?.tenantId) query.set("tenantId", scope.tenantId);
+    if (download) query.set("baixar", "1");
+    const search = query.toString();
+    return `/gerentes/fechamentos/${encodeURIComponent(payoutId)}${search ? `?${search}` : ""}`;
+  };
   return (
     <table className="data-table fit-table payout-report">
-      <thead><tr><th>Data</th><th>Comissão</th><th>Lançamentos aplicados</th><th>Valor final pago</th><th>Observação</th></tr></thead>
+      <thead><tr><th>Data</th><th>Comissão</th><th>Lançamentos aplicados</th><th>Valor final pago</th><th>Observação</th><th>Relatório</th></tr></thead>
       <tbody>{payouts.map((payout) => (
         <tr key={payout.id}>
           <td data-label="Data">{dateBr(payout.paidOn)}</td>
@@ -55,6 +64,10 @@ export function PayoutReport({ payouts }: { payouts: Manager["payouts"] }) {
           )}</td>
           <td data-label="Valor final"><strong>{formatMoney(payout.finalCents)}</strong></td>
           <td data-label="Observação">{payout.notes ?? "—"}</td>
+          <td data-label="Relatório" className="payout-pdf-links">
+            <a className="outline-button" href={pdfHref(payout.id, false)} target="_blank" rel="noopener" aria-label={`Ver PDF do fechamento de ${dateBr(payout.paidOn)}`}>Ver PDF</a>
+            <a className="outline-button" href={pdfHref(payout.id, true)} download aria-label={`Baixar PDF do fechamento de ${dateBr(payout.paidOn)}`}>Baixar</a>
+          </td>
         </tr>
       ))}</tbody>
     </table>
@@ -210,6 +223,7 @@ function PayoutForm({ manager }: { manager: Manager }) {
     <form className="form-grid" onSubmit={form.onSubmit}>
       <input type="hidden" name="managerId" value={manager.id} /><TenantField />
       <input type="hidden" name="pendingIds" value={pending.map((item) => item.id).join(",")} />
+      <input type="hidden" name="includedClientIds" value={included.map((client) => client.id).join(",")} />
       <div className="field-wide payout-review">
         <h3>Conferir antes de pagar</h3>
         {payable.length === 0 ? <p>{manager.clients.length === 0 ? "Nenhum cliente indicado ainda." : "Nenhum contrato com comissão gerada."}</p> : (
@@ -342,6 +356,7 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
   const [editing, setEditing] = useState(false);
   const [paying, setPaying] = useState(false);
   const [entries, setEntries] = useState(false);
+  const [closings, setClosings] = useState(false);
   const { summary } = manager;
   return (
     <section className="panel form-panel" aria-label={`Gerente ${manager.name}`}>
@@ -351,9 +366,10 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
           <p>Comissão sobre os juros recebidos, definida por cliente · {manager.clients.length} {manager.clients.length === 1 ? "cliente indicado" : "clientes indicados"}</p>
         </div>
         <div className="heading-actions">
-          <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); setEntries(false); }}>{editing ? "Fechar" : "Editar"}</button>
-          <button type="button" className="outline-button" onClick={() => { setEntries(!entries); setEditing(false); setPaying(false); }}>{entries ? "Fechar" : `Lançamentos${manager.pending.count > 0 ? ` (${manager.pending.count})` : ""}`}</button>
-          <button type="button" className="outline-button" onClick={() => { setPaying(!paying); setEditing(false); setEntries(false); }}>{paying ? "Fechar" : "Pagar comissão"}</button>
+          <button type="button" className="outline-button" onClick={() => { setEditing(!editing); setPaying(false); setEntries(false); setClosings(false); }}>{editing ? "Fechar" : "Editar"}</button>
+          <button type="button" className="outline-button" onClick={() => { setEntries(!entries); setEditing(false); setPaying(false); setClosings(false); }}>{entries ? "Fechar" : `Lançamentos${manager.pending.count > 0 ? ` (${manager.pending.count})` : ""}`}</button>
+          <button type="button" className="outline-button" onClick={() => { setClosings(!closings); setEditing(false); setPaying(false); setEntries(false); }}>{closings ? "Fechar" : `Fechamentos (${manager.payouts.length})`}</button>
+          <button type="button" className="outline-button" onClick={() => { setPaying(!paying); setEditing(false); setEntries(false); setClosings(false); }}>{paying ? "Fechar" : "Pagar comissão"}</button>
           <DeleteManager manager={manager} />
         </div>
       </div>
@@ -370,6 +386,13 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
       </dl>
       {editing && <ManagerEdit manager={manager} onDone={() => setEditing(false)} />}
       {entries && <AdjustmentsPanel manager={manager} />}
+      {closings && (
+        <div className="payout-review closings-panel">
+          <h3>Fechamentos de comissão</h3>
+          <p><small>Cada fechamento tem o seu relatório em PDF: gerente, data e período, cada cliente e contrato que entrou nele (valor original, taxa, percentuais e comissão) e o total pago. Pode ser aberto e baixado de novo quando quiser.</small></p>
+          <PayoutReport payouts={manager.payouts} />
+        </div>
+      )}
       {paying && <PayoutForm manager={manager} />}
       <AccessBox manager={manager} />
       {manager.clients.length === 0 ? <EmptyPanel icon="users" text="Nenhum cliente indicado por este gerente ainda." /> : (
@@ -379,6 +402,43 @@ function ManagerPanel({ manager, unassigned }: { manager: Manager; unassigned: M
         </table>
       )}
       <LinkForm manager={manager} unassigned={unassigned} />
+    </section>
+  );
+}
+
+// Relatório consolidado por data: todos os fechamentos do dia num PDF só, agrupados por gerente (total de cada um e total geral).
+function ConsolidatedReports({ managers }: { managers: Manager[] }) {
+  const { tenantId } = useScope();
+  const byDate = new Map<string, { count: number; finalCents: number }>();
+  for (const payout of managers.flatMap((manager) => manager.payouts)) {
+    const entry = byDate.get(payout.paidOn) ?? { count: 0, finalCents: 0 };
+    byDate.set(payout.paidOn, { count: entry.count + 1, finalCents: entry.finalCents + payout.finalCents });
+  }
+  if (byDate.size === 0) return null;
+  const href = (date: string, download: boolean) => {
+    const query = new URLSearchParams();
+    if (tenantId) query.set("tenantId", tenantId);
+    if (download) query.set("baixar", "1");
+    const search = query.toString();
+    return `/gerentes/fechamentos/data/${date}${search ? `?${search}` : ""}`;
+  };
+  return (
+    <section className="panel form-panel" aria-label="Relatórios de fechamento por data">
+      <div className="panel-header"><div><h2>Relatórios de fechamento por data</h2><p>Todos os fechamentos de comissão do dia num PDF só, agrupados por gerente, com o total de cada um e o total geral. O relatório de cada fechamento fica em “Fechamentos” de cada gerente.</p></div></div>
+      <table className="data-table fit-table payout-report">
+        <thead><tr><th>Data</th><th>Fechamentos</th><th>Total pago</th><th>Relatório</th></tr></thead>
+        <tbody>{[...byDate].sort(([a], [b]) => b.localeCompare(a)).map(([date, entry]) => (
+          <tr key={date}>
+            <td data-label="Data">{dateBr(date)}</td>
+            <td data-label="Fechamentos">{entry.count}</td>
+            <td data-label="Total pago"><strong>{formatMoney(entry.finalCents)}</strong></td>
+            <td data-label="Relatório" className="payout-pdf-links">
+              <a className="outline-button" href={href(date, false)} target="_blank" rel="noopener" aria-label={`Ver PDF consolidado de ${dateBr(date)}`}>Ver PDF</a>
+              <a className="outline-button" href={href(date, true)} download aria-label={`Baixar PDF consolidado de ${dateBr(date)}`}>Baixar</a>
+            </td>
+          </tr>
+        ))}</tbody>
+      </table>
     </section>
   );
 }
@@ -406,6 +466,7 @@ function ManagersBody({ data, standalone }: { data: ManagersPage; standalone: bo
         </form>
       </section>
       {data.managers.length === 0 ? <EmptyPanel icon="users" text="Nenhum gerente de contas cadastrado ainda." /> : data.managers.map((manager) => <ManagerPanel key={manager.id} manager={manager} unassigned={data.unassigned} />)}
+      <ConsolidatedReports managers={data.managers} />
     </div>
   );
 }

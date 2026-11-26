@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { accountManagerAdjustments, accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
+import { accountManagerAdjustments, accountManagerPayoutItems, accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
 import { formatMoney, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { closingTotals, type AdjustmentKind } from "./commission";
-import { loadManagerCommissionSummary } from "./queries";
+import { closingLinesForNewPayout, loadManagerCommissionSummary } from "./queries";
 
 // Regras de gravação dos gerentes de contas, usadas pelo dono da carteira (/gerentes, withTenantContext) e pelo MASTER
 // (/admin/clientes/[id]/gerentes, withPlatformContext). Cada função recebe o tenant EXPLÍCITO e filtra tenant_id em toda consulta;
@@ -250,8 +250,13 @@ export async function registerPayout(tx: TenantTransaction, tenantId: string, ac
   if (totals.finalCents < 0) {
     return { ok: false, error: `Os débitos (${formatMoney(totals.debitCents)}) passam da comissão mais os créditos (${formatMoney(cents + totals.creditCents)}). O valor final não pode ficar negativo.` };
   }
+  // Detalhamento por contrato gravado junto (relatório em PDF): a comissão fechada repartida entre os contratos com comissão a pagar,
+  // primeiro os clientes marcados na conferência. Soma exatamente o valor fechado (o banco confere no fim da transação).
+  const priority = data.has("includedClientIds") ? new Set(text(data, "includedClientIds", 8000).split(",").filter(Boolean)) : null;
+  const lines = await closingLinesForNewPayout(tx, tenantId, manager.id, manager.commissionBps, cents, priority);
   const payoutId = id("mgp");
   await tx.insert(accountManagerPayouts).values({ id: payoutId, tenantId, managerId: manager.id, amountCents: cents, paidOn, notes, createdByUserId: actor.user.id, debitCents: totals.debitCents, creditCents: totals.creditCents });
+  await tx.insert(accountManagerPayoutItems).values(lines.map((line) => ({ id: id("mgi"), tenantId, managerId: manager.id, payoutId, ...line, clientName: line.clientName.trim() || "Cliente" })));
   if (pending.length > 0) {
     // Só os que ainda estão pendentes (payout_id nulo): um lançamento nunca é aplicado duas vezes.
     const applied = await tx.update(accountManagerAdjustments).set({ payoutId, appliedAt: sql`now()` })
@@ -267,7 +272,7 @@ export async function registerPayout(tx: TenantTransaction, tenantId: string, ac
     action: "MANAGER_COMMISSION_PAID", entity: "account_manager_payout", entityId: payoutId, tenantId, tenantName: await tenantName(tx, tenantId),
     description: applied === 0 ? `Comissão de ${formatMoney(cents)} paga a ${manager.name} em ${paidOn}.`
       : `Fechamento de ${manager.name} em ${paidOn}: comissão ${formatMoney(cents)} − débitos ${formatMoney(totals.debitCents)} + créditos ${formatMoney(totals.creditCents)} = ${formatMoney(totals.finalCents)} pago (${applied} lançamento(s) aplicado(s)).`,
-    after: { managerId: manager.id, amountCents: cents, paidOn, debitCents: totals.debitCents, creditCents: totals.creditCents, finalCents: totals.finalCents, adjustmentsApplied: applied },
+    after: { managerId: manager.id, amountCents: cents, paidOn, debitCents: totals.debitCents, creditCents: totals.creditCents, finalCents: totals.finalCents, adjustmentsApplied: applied, contractsInReport: lines.filter((line) => line.operationId).length },
   });
   return { ok: true, message: applied === 0 ? `Pagamento de ${formatMoney(cents)} registrado para ${manager.name}.`
     : `Fechamento registrado para ${manager.name}: comissão ${formatMoney(cents)}, ${applied} lançamento(s) aplicado(s), valor final ${formatMoney(totals.finalCents)}.` };

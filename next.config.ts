@@ -4,8 +4,8 @@ const nextConfig: NextConfig = {
   devIndicators: false,
   // Documentos do cliente vão por Server Action e podem ter até 5 MB (mais a margem do formulário).
   experimental: { serverActions: { bodySizeLimit: "6mb" } },
-  // Fontes embutidas no PDF do contrato de investimento (lidas do disco pelo servidor).
-  outputFileTracingIncludes: { "/investidores/**/*": ["./src/lib/investors/fonts/*.ttf"] },
+  // Fontes embutidas nos PDFs (contrato de investimento e relatório do fechamento de comissão), lidas do disco pelo servidor.
+  outputFileTracingIncludes: { "/investidores/**/*": ["./src/lib/investors/fonts/*.ttf"], "/gerentes/**/*": ["./src/lib/investors/fonts/*.ttf"] },
   // Cabeçalhos de segurança em todas as respostas: nenhuma página do CrediAI pode ser aberta dentro de um site de fora
   // (clique disfarçado em "excluir", "bloquear" etc.), o endereço não vaza para outros sites e o navegador usa só HTTPS.
   async headers() {
