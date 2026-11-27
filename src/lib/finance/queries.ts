@@ -1,6 +1,6 @@
 import "server-only";
 import { filledSteps } from "@/lib/credit/client-data-steps";
-import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withTenantContext } from "@/lib/auth/guards";
 import { accountManagers, capitalMovements, clientDocuments, clients, creditPolicies, creditProposalDocuments, creditProposalReviews, creditProposals, proposalLinks, operationRequests, investmentPriorContributions, loanOperationRevisions, installmentDeferrals, loanOperations, loanRenewals, paymentRevisions, payments, users, walletCycles, wallets } from "@/lib/db/schema";
 import { evaluateProposal, offerSummary } from "@/lib/credit/engine";
@@ -8,8 +8,9 @@ import { cpfsWithOperations, openExposureByCpf } from "@/lib/credit/exposure";
 import { bankKeys } from "../bank-account";
 import { clientProfileKeys, type ClientProfile } from "./client-profile";
 import { todayIso } from "./format";
+import { PENALTY_KEY_PREFIX } from "./penalty";
 import { buildPortfolio, summarizeOperations, type ClientRecord, type DeferralRecord, type OperationCorrection, type PaymentRevisionRecord, type RenewalRecord } from "./portfolio";
-import { loadTenantPortfolios, toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
+import { loadTenantPortfolios, penaltiesByPayment, toMovementRecord, toOperationRecord, toDeferralRecord, toPaymentRecord, toRenewalRecord } from "./summaries";
 
 // Todas as consultas rodam no contexto do tenant da sessão (RLS) e também filtram por tenant_id,
 // para que o isolamento não dependa só do papel de banco usado em produção.
@@ -17,6 +18,11 @@ import { loadTenantPortfolios, toMovementRecord, toOperationRecord, toDeferralRe
 // não vê o caixa do dono). Toda consulta filtra tenant_id e, no escopo do gerente, os clientes dele.
 export type PortfolioScope = { managerId: string } | null;
 type PortfolioTx = Parameters<Parameters<typeof withTenantContext>[0]>[0];
+
+// Receitas de multa (todas as datas e ciclos) do tenant, para mostrar a multa de cada pagamento. O gerente de contas não vê o
+// caixa do dono, então no escopo dele a lista fica vazia.
+const penaltyRowsOf = (tx: PortfolioTx, tenantId: string) => tx.select({ kind: capitalMovements.kind, amountCents: capitalMovements.amountCents, idempotencyKey: capitalMovements.idempotencyKey }).from(capitalMovements)
+  .where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.kind, "OTHER_INCOME"), like(capitalMovements.idempotencyKey, `${PENALTY_KEY_PREFIX}%`)));
 
 async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: PortfolioScope) {
     const wallet = scope ? undefined : await tx.query.wallets.findFirst({ where: eq(wallets.tenantId, tenantId) });
@@ -30,6 +36,7 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
       : undefined);
     // Só o ciclo atual entra nos cálculos; os pagamentos seguem o ciclo da operação.
     const cycleNumber = wallet?.cycleNumber ?? 1;
+    const penaltyRows = scope ? [] : await penaltyRowsOf(tx, tenantId);
     const movementRows = scope ? [] : await tx.select().from(capitalMovements).where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.cycleNumber, cycleNumber))).orderBy(asc(capitalMovements.occurredAt), asc(capitalMovements.createdAt));
     // Aportes indicados como a entrada do dinheiro de um contrato antigo de investidor (migração 0023): não se estornam.
     const investorLinkedRows = scope ? [] : await tx.select({ id: investmentPriorContributions.capitalMovementId }).from(investmentPriorContributions).where(eq(investmentPriorContributions.tenantId, tenantId));
@@ -108,7 +115,7 @@ async function readPortfolioData(tx: PortfolioTx, tenantId: string, scope: Portf
     const draftDocumentRows = draftRows.length === 0 ? [] : await tx.select({ proposalId: creditProposalDocuments.proposalId, kind: creditProposalDocuments.kind })
       .from(creditProposalDocuments).where(and(eq(creditProposalDocuments.tenantId, tenantId), inArray(creditProposalDocuments.proposalId, draftRows.map((row) => row.id))));
     const [linkRow] = scope ? [] : await tx.select({ token: proposalLinks.token, enabled: proposalLinks.enabled }).from(proposalLinks).where(eq(proposalLinks.tenantId, tenantId));
-    return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, knownCpfs, proposalRows, proposalDocumentRows, proposalReviewRows, draftRows, draftDocumentRows, linkRow, requestRows, movementRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
+    return { wallet, cycleNumber, managerRows, policyRow, exposureByCpf, knownCpfs, proposalRows, proposalDocumentRows, proposalReviewRows, draftRows, draftDocumentRows, linkRow, requestRows, movementRows, penaltyRows, investorLinkedRows, clientRows, operationRows, paymentRows, revisionRows, renewalRows, deferralRows, correctionRows, documentRows, historyRows, closedCycles };
 }
 
 // Quanto ainda cabe de principal a desembolsar: o mesmo cálculo da trava da Nova operação (máximo da política menos o principal emprestado da carteira toda).
@@ -166,6 +173,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     id: client.id, name: client.name, document: client.document, phone: client.phone, notes: scoped ? null : client.notes, onlineCasinoBettor: scoped ? false : client.onlineCasinoBettor, archivedAt: client.archivedAt?.toISOString() ?? null, createdAt: client.createdAt.toISOString(),
     ...(Object.fromEntries(clientProfileKeys.map((key) => [key, scoped && (bankKeys as readonly string[]).includes(key) ? null : client[key]])) as ClientProfile),
   }));
+  const penalties = penaltiesByPayment(data.penaltyRows);
   const portfolio = buildPortfolio({
     hasWallet: scoped || Boolean(data.wallet),
     initialCapitalCents: data.wallet?.initialCapitalCents ?? 0,
@@ -174,7 +182,7 @@ function assemblePortfolio(data: PortfolioData, scoped: boolean) {
     capitalMovements: data.movementRows.map(toMovementRecord),
     today: todayIso(),
     operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [], deferralsByOperation.get(operation.id) ?? []), corrections: correctionsByOperation.get(operation.id) ?? [] })),
-    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, revisionsByPayment.get(payment.id) ?? [])),
+    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, revisionsByPayment.get(payment.id) ?? [], penalties.get(payment.id) ?? 0)),
   });
   // Contagens por cliente para a exclusão: operações visíveis, em aberto e qualquer histórico (inclusive excluídas).
   const countBy = (rows: { clientId: string }[]) => {
@@ -266,7 +274,8 @@ export async function loadAllCyclesOperations() {
     const deferralRows = await tx.select({ deferral: installmentDeferrals }).from(installmentDeferrals)
       .where(eq(installmentDeferrals.tenantId, tenantId))
       .orderBy(asc(installmentDeferrals.createdAt));
-    return { operationRows, paymentRows, renewalRows, deferralRows };
+    const penaltyRows = await penaltyRowsOf(tx, tenantId);
+    return { operationRows, paymentRows, renewalRows, deferralRows, penaltyRows };
   });
   const renewalsByOperation = new Map<string, RenewalRecord[]>();
   for (const { renewal } of data.renewalRows) {
@@ -276,10 +285,11 @@ export async function loadAllCyclesOperations() {
   for (const { deferral } of data.deferralRows) {
     deferralsByOperation.set(deferral.operationId, [...(deferralsByOperation.get(deferral.operationId) ?? []), toDeferralRecord(deferral)]);
   }
+  const penalties = penaltiesByPayment(data.penaltyRows);
   const { operations } = buildPortfolio({
     hasWallet: true, initialCapitalCents: 0, today: todayIso(),
     operations: data.operationRows.map(({ operation, clientName }) => ({ ...toOperationRecord(operation, clientName, renewalsByOperation.get(operation.id) ?? [], deferralsByOperation.get(operation.id) ?? []), cycleNumber: operation.cycleNumber })),
-    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName)),
+    payments: data.paymentRows.map(({ payment, clientName }) => toPaymentRecord(payment, clientName, [], penalties.get(payment.id) ?? 0)),
   });
   return operations;
 }

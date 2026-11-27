@@ -26,16 +26,16 @@ test("RE1. períodos: este mês, mês passado (inclusive virada de ano), último
 test("RE2. todo o ciclo: soma tudo, ignora excluídas, ordena pelo lucro realizado", () => {
   const report = profitabilityReport(operations, { period: "CYCLE", from: "", to: "", status: "ALL" }, "2026-10-13");
   assert.deepEqual(report.clients.map((client) => client.clientName), ["Ana", "Bia"]);
-  assert.deepEqual(report.totals, { principalLentCents: 350_000, principalReceivedCents: 100_000, interestReceivedCents: 45_000, receivedCents: 145_000, paymentCount: 3, interestRemainingCents: 90_000, balanceCents: 340_000, operationCount: 3 });
+  assert.deepEqual(report.totals, { principalLentCents: 350_000, principalReceivedCents: 100_000, interestReceivedCents: 45_000, receivedCents: 145_000, penaltyReceivedCents: 0, paymentCount: 3, interestRemainingCents: 90_000, balanceCents: 340_000, operationCount: 3 });
 });
 
 test("RE3. período: recebidos pela data do pagamento, emprestado pela data do empréstimo, saldo de hoje", () => {
   const september = profitabilityReport(operations, { period: "CUSTOM", from: "2026-09-01", to: "2026-09-30", status: "ALL" }, "2026-10-13");
   assert.equal(september.clients.length, 1);
-  assert.deepEqual(september.totals, { principalLentCents: 100_000, principalReceivedCents: 0, interestReceivedCents: 30_000, receivedCents: 30_000, paymentCount: 1, interestRemainingCents: 30_000, balanceCents: 80_000, operationCount: 1 });
+  assert.deepEqual(september.totals, { principalLentCents: 100_000, principalReceivedCents: 0, interestReceivedCents: 30_000, receivedCents: 30_000, penaltyReceivedCents: 0, paymentCount: 1, interestRemainingCents: 30_000, balanceCents: 80_000, operationCount: 1 });
   const october = profitabilityReport(operations, { period: "THIS_MONTH", from: "", to: "", status: "ALL" }, "2026-10-13");
   // o1 entra pelo pagamento de outubro (sem contar o principal emprestado em setembro); o3 pelo empréstimo.
-  assert.deepEqual(october.totals, { principalLentCents: 200_000, principalReceivedCents: 50_000, interestReceivedCents: 0, receivedCents: 50_000, paymentCount: 1, interestRemainingCents: 90_000, balanceCents: 340_000, operationCount: 2 });
+  assert.deepEqual(october.totals, { principalLentCents: 200_000, principalReceivedCents: 50_000, interestReceivedCents: 0, receivedCents: 50_000, penaltyReceivedCents: 0, paymentCount: 1, interestRemainingCents: 90_000, balanceCents: 340_000, operationCount: 2 });
 });
 
 test("RE4. situação: em aberto, em atraso e quitadas", () => {

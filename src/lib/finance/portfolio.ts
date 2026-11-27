@@ -39,7 +39,9 @@ export type RenewalRecord = { id: string; paymentId: string; periodNumber: numbe
 // Correção feita em um pagamento: valores de antes e de depois.
 export type PaymentRevisionRecord = { id: string; previousAmountCents: number; previousPaidAt: string; amountCents: number; paidAt: string; editedAt: string; editedBy: string | null };
 // mode/allocationOrder: modalidade e ordem de apropriação gravadas no pagamento (0054); null nos pagamentos anteriores.
-export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[]; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null; period?: number | null };
+export type PaymentRecord = { id: string; operationId: string; clientName: string; amountCents: number; paidAt: string; notes: string | null; createdAt: string; revisions?: PaymentRevisionRecord[]; mode?: PaymentMode | null; allocationOrder?: AllocationOrder | null; period?: number | null;
+  // Multa recebida junto com o pagamento (receita de multa, fora do extrato do contrato; ver penalty.ts). 0 = sem multa.
+  penaltyCents?: number };
 // renewedPeriod: o período que este pagamento renovou (pagamento somente de juros), com o novo vencimento.
 export type AllocatedPayment = PaymentRecord & { interestCents: number; principalCents: number; kind: PaymentKind; renewedPeriod: LedgerPeriod | null };
 export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_REVERSAL" | "OTHER_INCOME";
@@ -47,6 +49,8 @@ export type CapitalMovementKind = "CONTRIBUTION" | "WITHDRAWAL" | "CONTRIBUTION_
 export type CapitalMovementRecord = {
   id: string; kind: CapitalMovementKind; amountCents: number; occurredAt: string; notes: string | null; reversedMovementId: string | null; createdAt: string;
   category?: string | null; description?: string | null; source?: string; createdByUserId?: string | null;
+  // Receita de multa: o pagamento de operação ao qual esta entrada pertence (chave pen-<id>, penalty.ts).
+  penaltyPaymentId?: string | null;
 };
 
 // Extrato do capital: cada linha soma (+) ou tira (−) do capital disponível; o saldo final é o capital disponível atual.
@@ -56,6 +60,7 @@ export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVER
 export type CapitalLedgerEntry = {
   key: string; kind: CapitalLedgerKind; date: string; description: string; amountCents: number; balanceCents: number; movementId?: string; reversed?: boolean;
   category?: string | null; notes?: string | null; source?: string; createdByUserId?: string | null; operationCode?: string; principalCents?: number; interestCents?: number;
+  penaltyPaymentId?: string | null;
 };
 export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = {
   INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", CONTRIBUTION_REVERSAL: "Estorno de aporte", WITHDRAWAL: "Retirada", OTHER_INCOME: "Outra entrada",
@@ -85,7 +90,7 @@ export type OperationView = Omit<OperationRecord, "renewals" | "deferrals"> & {
   nextOpenDueDate: string | null;
   // Próximo valor a cobrar (juros do período ou a próxima parcela) e os termos usados pelas prévias da tela.
   amountDueCents: number; ledgerTerms: LedgerTerms;
-  code: string; paidCents: number; interestPaidCents: number; principalPaidCents: number; interestRemainingCents: number; principalRemainingCents: number;
+  code: string; paidCents: number; interestPaidCents: number; principalPaidCents: number; penaltyReceivedCents: number; interestRemainingCents: number; principalRemainingCents: number;
   balanceCents: number; state: OperationState; daysUntilDue: number; payments: AllocatedPayment[];
   // Tempo da operação: do empréstimo até hoje (ou até a quitação) e em quantos meses diferentes houve pagamento.
   elapsedUntil: string; paymentMonths: number;
@@ -218,6 +223,8 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       nextOpenDueDate: open && ledger.balanceCents > 0 ? ledger.nextItem?.dueDate ?? ledger.nextDueDate : null,
       periodInterestCents: ledger.periodInterestCents, periodDueDate: ledger.periodDueDate, pendingPeriods: open ? ledger.pendingPeriods : [], periodViews: ledger.periodViews, originalDueDate, amountDueCents: open ? ledger.amountDueCents : 0, ledgerTerms,
       paidCents: ledger.paidCents, interestPaidCents: ledger.interestPaidCents, principalPaidCents: ledger.principalPaidCents,
+      // Multas recebidas: receita à parte, nunca somada a paidCents, juros, principal ou saldo.
+      penaltyReceivedCents: ledger.items.reduce((total, payment) => total + (payment.penaltyCents ?? 0), 0),
       interestRemainingCents: open ? ledger.interestRemainingCents : 0,
       principalRemainingCents: open ? ledger.principalRemainingCents : 0,
       balanceCents: open ? ledger.balanceCents : 0,
@@ -338,6 +345,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       // O valor gravado é sempre positivo; o sinal vem do tipo (só aporte e outras entradas somam).
       amountCents: movement.kind === "CONTRIBUTION" || movement.kind === "OTHER_INCOME" ? movement.amountCents : -movement.amountCents,
       category: movement.category ?? null, notes: movement.description ? movement.notes : null, source: movement.source ?? "CAPITAL", createdByUserId: movement.createdByUserId ?? null,
+      ...(movement.penaltyPaymentId ? { penaltyPaymentId: movement.penaltyPaymentId } : {}),
       ...(movement.kind === "CONTRIBUTION" ? { movementId: movement.id, reversed: reversedIds.has(movement.id) } : {}),
     })),
     // Operações excluídas continuam no extrato: a saída do capital e a devolução na exclusão se anulam.

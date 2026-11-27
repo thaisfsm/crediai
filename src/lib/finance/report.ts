@@ -30,10 +30,11 @@ const matchesStatus = (operation: OperationView, status: ReportStatus) =>
   status === "ALL" || (status === "PAID" ? operation.status === "PAID" : status === "OVERDUE" ? operation.status === "OPEN" && operation.state === "OVERDUE" : operation.status === "OPEN");
 
 export type ReportRow = {
-  principalLentCents: number; principalReceivedCents: number; interestReceivedCents: number; receivedCents: number; paymentCount: number;
+  // penaltyReceivedCents: multas recebidas no período (receita de multa, à parte de receivedCents, juros e principal).
+  principalLentCents: number; principalReceivedCents: number; interestReceivedCents: number; receivedCents: number; penaltyReceivedCents: number; paymentCount: number;
   interestRemainingCents: number; balanceCents: number; operationCount: number;
 };
-const emptyRow = (): ReportRow => ({ principalLentCents: 0, principalReceivedCents: 0, interestReceivedCents: 0, receivedCents: 0, paymentCount: 0, interestRemainingCents: 0, balanceCents: 0, operationCount: 0 });
+const emptyRow = (): ReportRow => ({ principalLentCents: 0, principalReceivedCents: 0, interestReceivedCents: 0, receivedCents: 0, penaltyReceivedCents: 0, paymentCount: 0, interestRemainingCents: 0, balanceCents: 0, operationCount: 0 });
 
 // Números de uma operação no período. inPeriod = a operação foi feita no período ou recebeu pagamento nele.
 export function operationInPeriod(operation: OperationView, range: { from: string | null; to: string | null }) {
@@ -47,6 +48,7 @@ export function operationInPeriod(operation: OperationView, range: { from: strin
       principalReceivedCents: payments.reduce((total, payment) => total + payment.principalCents, 0),
       interestReceivedCents: payments.reduce((total, payment) => total + payment.interestCents, 0),
       receivedCents: payments.reduce((total, payment) => total + payment.amountCents, 0),
+      penaltyReceivedCents: payments.reduce((total, payment) => total + (payment.penaltyCents ?? 0), 0),
       paymentCount: payments.length,
       interestRemainingCents: operation.interestRemainingCents,
       balanceCents: operation.balanceCents,
