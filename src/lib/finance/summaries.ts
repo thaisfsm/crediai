@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clients, installmentDeferrals, loanOperations, loanRenewals, payments, wallets } from "@/lib/db/schema";
 import { todayIso } from "./format";
+import { penaltyPaymentIdOf, penaltyRoleOf } from "./penalty";
 import { isAllocationOrder, isPaymentMode } from "./rules";
 import { buildPortfolio, type CapitalMovementRecord, type OperationRecord, type PaymentRecord, type PaymentRevisionRecord, type DeferralRecord, type RenewalRecord } from "./portfolio";
 
@@ -18,6 +19,8 @@ export function toMovementRecord(movement: MovementRow): CapitalMovementRecord {
   return {
     id: movement.id, kind: movement.kind, amountCents: movement.amountCents, occurredAt: movement.occurredAt, notes: movement.notes, reversedMovementId: movement.reversedMovementId, createdAt: movement.createdAt.toISOString(),
     category: movement.category, description: movement.description, source: movement.source, createdByUserId: movement.createdByUserId,
+    penaltyPaymentId: movement.kind === "OTHER_INCOME" ? penaltyPaymentIdOf(movement.idempotencyKey) : null,
+    penaltyRole: penaltyRoleOf(movement.kind, movement.idempotencyKey),
   };
 }
 
@@ -50,12 +53,22 @@ export function toOperationRecord(operation: OperationRow, clientName: string, r
   };
 }
 
-export function toPaymentRecord(payment: PaymentRow, clientName: string, revisions: PaymentRevisionRecord[] = []): PaymentRecord {
+export function toPaymentRecord(payment: PaymentRow, clientName: string, revisions: PaymentRevisionRecord[] = [], penaltyCents = 0): PaymentRecord {
   return {
     id: payment.id, operationId: payment.operationId, clientName, amountCents: payment.amountCents, paidAt: payment.paidAt, notes: payment.notes, createdAt: payment.createdAt.toISOString(),
     revisions, mode: isPaymentMode(payment.paymentMode) ? payment.paymentMode : null, allocationOrder: isAllocationOrder(payment.allocationOrder) ? payment.allocationOrder : null,
-    period: payment.interestPeriodNumber ?? null,
+    period: payment.interestPeriodNumber ?? null, penaltyCents,
   };
+}
+
+// Multa recebida de cada pagamento, a partir das receitas de multa (chave pen-<id do pagamento>, penalty.ts).
+export function penaltiesByPayment(rows: { kind: string; amountCents: number; idempotencyKey: string | null }[]) {
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    const paymentId = row.kind === "OTHER_INCOME" ? penaltyPaymentIdOf(row.idempotencyKey) : null;
+    if (paymentId) map.set(paymentId, (map.get(paymentId) ?? 0) + row.amountCents);
+  }
+  return map;
 }
 
 // Ciclo atual de cada linha: o da carteira do tenant (1 quando ainda não existe carteira).
@@ -104,7 +117,8 @@ export async function loadTenantPortfolios(tx: TenantTransaction, tenantIds: str
 
   for (const tenantId of tenantIds) {
     const wallet = walletRows.find((row) => row.tenantId === tenantId);
-    const tenantPayments = (paymentsByTenant.get(tenantId) ?? []).map(({ payment, clientName }) => toPaymentRecord(payment, clientName));
+    const penalties = penaltiesByPayment(movementsByTenant.get(tenantId) ?? []);
+    const tenantPayments = (paymentsByTenant.get(tenantId) ?? []).map(({ payment, clientName }) => toPaymentRecord(payment, clientName, [], penalties.get(payment.id) ?? 0));
     const portfolio = buildPortfolio({
       hasWallet: Boolean(wallet),
       initialCapitalCents: wallet?.initialCapitalCents ?? 0,

@@ -39,6 +39,10 @@ export const statementCategoryLabels = {
   LOAN_CANCELED: "Devolução de operação excluída",
   RENEGOTIATION: "Principal levado à renegociação",
   PAYMENT: "Recebimento de operação",
+  // Multa recebida junto com um pagamento de operação: receita própria, fora de principal, juros e saldo (penalty.ts).
+  PENALTY_INCOME: "Multa recebida",
+  // Saída que anula uma multa retirada na correção do pagamento (a receita original continua no histórico).
+  PENALTY_REVERSAL: "Estorno de multa",
   CONTRIBUTION_REVERSAL: "Estorno de aporte",
   LEGACY_WITHDRAWAL: "Retirada (sem categoria)",
   // Contas a Pagar: entrada confirmada de um contrato de investimento e baixas de rendimento e de principal.
@@ -105,13 +109,18 @@ export function checkOutflow({ ledger, amountCents, occurredAt, availableCents }
 // outro numa data). Recalcula os saldos com a mudança e devolve o menor saldo a partir da primeira data afetada, ou
 // null se nenhum ficar negativo. ledger: extrato em ordem cronológica; o lançamento novo entra depois dos do mesmo dia.
 export function negativeAfterChange(ledger: CapitalLedgerEntry[], change: { removeKey?: string; add?: { date: string; amountCents: number } }) {
-  const removed = change.removeKey ? ledger.find((entry) => entry.key === change.removeKey) : undefined;
-  const entries = ledger.filter((entry) => entry !== removed).map((entry) => ({ date: entry.date, amountCents: entry.amountCents, initial: entry.key === "initial" }));
-  if (change.add) {
-    const position = entries.findIndex((entry) => !entry.initial && entry.date > change.add!.date);
-    entries.splice(position === -1 ? entries.length : position, 0, { ...change.add, initial: false });
+  return negativeAfterChanges(ledger, { removeKeys: change.removeKey ? [change.removeKey] : [], adds: change.add ? [change.add] : [] });
+}
+
+// Mesma conta com várias linhas trocadas de uma vez (ex.: um pagamento e a multa recebida com ele).
+export function negativeAfterChanges(ledger: CapitalLedgerEntry[], change: { removeKeys: string[]; adds: { date: string; amountCents: number }[] }) {
+  const removed = ledger.filter((entry) => change.removeKeys.includes(entry.key));
+  const entries = ledger.filter((entry) => !removed.includes(entry)).map((entry) => ({ date: entry.date, amountCents: entry.amountCents, initial: entry.key === "initial" }));
+  for (const add of change.adds) {
+    const position = entries.findIndex((entry) => !entry.initial && entry.date > add.date);
+    entries.splice(position === -1 ? entries.length : position, 0, { ...add, initial: false });
   }
-  const from = [removed?.date, change.add?.date].filter((date): date is string => Boolean(date)).sort()[0] ?? "";
+  const from = [...removed.map((entry) => entry.date), ...change.adds.map((add) => add.date)].filter(Boolean).sort()[0] ?? "";
   let running = 0;
   let lowest: { date: string; balanceCents: number } | null = null;
   for (const entry of entries) {
@@ -152,8 +161,8 @@ const categoryOfEntry = (entry: CapitalLedgerEntry): StatementCategory => {
     case "PAYMENT": return "PAYMENT";
     case "CONTRIBUTION_REVERSAL": return "CONTRIBUTION_REVERSAL";
     case "CONTRIBUTION": return entry.category === "INVESTOR_CONTRIBUTION" ? "INVESTOR_CONTRIBUTION" : "CAPITAL_CONTRIBUTION";
-    case "OTHER_INCOME": return "OTHER_INCOME";
-    case "WITHDRAWAL": return entry.category && (isManualCategory(entry.category) || isInvestorCategory(entry.category)) ? entry.category : "LEGACY_WITHDRAWAL";
+    case "OTHER_INCOME": return entry.penaltyRole ? "PENALTY_INCOME" : "OTHER_INCOME";
+    case "WITHDRAWAL": if (entry.penaltyRole === "PENALTY_REVERSAL") return "PENALTY_REVERSAL"; return entry.category && (isManualCategory(entry.category) || isInvestorCategory(entry.category)) ? entry.category : "LEGACY_WITHDRAWAL";
   }
 };
 
@@ -164,6 +173,8 @@ function originOf(entry: CapitalLedgerEntry) {
   if (entry.kind === "LOAN_CANCELED") return `Operações · exclusão ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "PAYMENT") return `Pagamentos · ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "CONTRIBUTION_REVERSAL") return "Capital · estorno de aporte";
+  if (entry.penaltyRole === "PENALTY_REVERSAL") return "Pagamentos · multa retirada na correção";
+  if (entry.penaltyRole) return "Pagamentos · multa recebida";
   if (entry.source === "INVESTOR") return entry.kind === "CONTRIBUTION" ? "Investidores · entrada do contrato" : "Contas a pagar · baixa";
   return entry.source === "FINANCE" ? "Financeiro · lançamento manual" : "Capital · lançamento manual";
 }
@@ -173,14 +184,14 @@ function originOf(entry: CapitalLedgerEntry) {
 export function financeRows(ledger: CapitalLedgerEntry[], userNames: Map<string, string>): FinanceRow[] {
   return ledger.map((entry) => {
     const category = categoryOfEntry(entry);
-    const manual = ["CONTRIBUTION", "OTHER_INCOME", "WITHDRAWAL"].includes(entry.kind);
+    const manual = ["CONTRIBUTION", "OTHER_INCOME", "WITHDRAWAL"].includes(entry.kind) && !entry.penaltyRole;
     return {
       key: entry.key, date: entry.date, direction: entry.amountCents < 0 ? "OUT" : "IN", category, categoryLabel: statementCategoryLabels[category],
       description: entry.description, notes: entry.kind === "PAYMENT" || entry.kind === "LOAN" ? null : entry.notes ?? null,
       amountCents: Math.abs(entry.amountCents), balanceCents: entry.balanceCents,
       responsible: manual || entry.kind === "CONTRIBUTION_REVERSAL"
         ? (entry.createdByUserId ? userNames.get(entry.createdByUserId) ?? "Usuário removido" : "Não registrado (lançamento anterior ao Financeiro)")
-        : "Automático (" + capitalLedgerLabels[entry.kind].toLowerCase() + ")",
+        : "Automático (" + (entry.penaltyRole === "PENALTY_REVERSAL" ? "estorno de multa na correção do pagamento" : entry.penaltyRole ? "multa recebida no pagamento" : capitalLedgerLabels[entry.kind].toLowerCase()) + ")",
       origin: originOf(entry),
       ...(entry.kind === "PAYMENT" ? { principalCents: entry.principalCents ?? 0, interestCents: entry.interestCents ?? 0 } : {}),
     };

@@ -25,9 +25,11 @@ import { clientFields, duplicateCpfError, isDuplicateCpf } from "@/lib/clients/f
 import { recordAdminAudit } from "@/lib/admin/audit";
 import { loadAllCyclesOperations } from "@/lib/finance/queries";
 import type { OperationView } from "@/lib/finance/portfolio";
-import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange } from "@/lib/finance/cashflow";
+import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterChange, negativeAfterChanges } from "@/lib/finance/cashflow";
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
+import { operationCode } from "@/lib/finance/portfolio";
+import { PENALTY_LABEL, PENALTY_REVERSAL_LABEL, parsePenalty, penaltyChange, penaltyDescription, penaltyKey, penaltyRevisionNote, penaltyVoidKeys } from "@/lib/finance/penalty";
 import { allocationOrderFor, BIWEEKLY_RULE, calculateCustomInstallments, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
@@ -933,6 +935,10 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
   // Pagamento só entra no capital e no lucro quando o dinheiro chegou: data futura não é aceita.
   if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
+  // Multa recebida (opcional): vazio ou 0,00 = sem multa, o pagamento segue exatamente como antes.
+  const penalty = parsePenalty(text(data, "penalty", 40));
+  if (!penalty.ok) return penalty;
+  const penaltyCents = penalty.cents;
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Trava a operação: dois pagamentos (ou duas renovações) simultâneos são aplicados um depois do outro e revalidados.
     const [operation] = await tx.select().from(loanOperations)
@@ -955,6 +961,9 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     const plan = planPayment(terms, previous, { mode, amountCents, paidAt, newDueDate: newDueDateInput || null, expectedPeriod, period }, today, paymentId, formatMoney);
     if (!plan.ok) return plan;
     await tx.insert(payments).values({ id: paymentId, tenantId, operationId: operation.id, amountCents, paidAt, notes, paymentMode: plan.mode, allocationOrder: plan.allocationOrder, interestPeriodNumber: plan.period });
+    // Multa: receita própria no caixa (Outras entradas › Multa recebida), ligada ao pagamento pela chave pen-<id>. Não
+    // entra no pagamento (amount_cents), então não muda juros, principal, saldo, renovação nem comissão. Mesma transação.
+    if (penaltyCents > 0) await insertPenalty(tx, { tenantId, paymentId, operation, cents: penaltyCents, paidAt, userId: session.user.id });
     if (plan.renewal) {
       await tx.insert(loanRenewals).values({
         id: id("ren"), tenantId, operationId: operation.id, paymentId, periodNumber: plan.renewal.periodNumber, previousDueDate: plan.renewal.previousDueDate, newDueDate: plan.renewal.newDueDate,
@@ -981,7 +990,24 @@ export async function registerPaymentAction(data: FormData): Promise<ActionResul
     return { ok: true, message: `${paymentModeLabels[plan.mode]}: ${formatMoney(amountCents)} registrado (juros ${formatMoney(plan.interestCents)}, principal ${formatMoney(plan.principalCents)}). Saldo em aberto: ${formatMoney(plan.after.balanceCents)}. Próximo vencimento: ${formatDate(plan.after.nextDueDate)}.` };
   });
   if (result.ok) revalidatePath("/");
+  if (result.ok && penaltyCents > 0) {
+    return { ok: true, message: `${result.message} ${PENALTY_LABEL}: ${formatMoney(penaltyCents)} (receita de multa, fora do saldo). Total recebido: ${formatMoney(amountCents + penaltyCents)}.` };
+  }
   return result;
+}
+
+async function clientNameOf(tx: TenantTransaction, tenantId: string, clientId: string) {
+  const [row] = await tx.select({ name: clients.name }).from(clients).where(and(eq(clients.id, clientId), eq(clients.tenantId, tenantId)));
+  return row?.name ?? "Cliente";
+}
+
+// Grava a receita de multa de um pagamento. A chave pen-<id do pagamento> é única por tenant no banco: uma segunda multa
+// para o mesmo pagamento (reenvio, corrida) é recusada pelo índice e desfaz a transação inteira.
+async function insertPenalty(tx: TenantTransaction, { tenantId, paymentId, operation, cents, paidAt, userId }: { tenantId: string; paymentId: string; operation: OperationRow; cents: number; paidAt: string; userId: string }) {
+  await tx.insert(capitalMovements).values({
+    id: id("cap"), tenantId, kind: "OTHER_INCOME", category: "OTHER_INCOME", source: "FINANCE", amountCents: cents, occurredAt: paidAt, cycleNumber: operation.cycleNumber,
+    description: penaltyDescription(await clientNameOf(tx, tenantId, operation.clientId), operationCode(operation.id)), notes: null, createdByUserId: userId, idempotencyKey: penaltyKey(paymentId),
+  });
 }
 
 // Liquidação antecipada: o cliente quita a operação com um valor negociado (já com a data e a confirmação explícita). O
@@ -1090,6 +1116,10 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
   if (amountCents === null || amountCents <= 0) return { ok: false, error: "Informe o valor recebido, por exemplo 300,00." };
   if (!isIsoDate(paidAt)) return { ok: false, error: "Informe a data do pagamento." };
   if (paidAt > todayIso()) return { ok: false, error: "A data do pagamento não pode ser depois de hoje." };
+  // Multa recebida: sem o campo (tela antiga) a multa gravada fica como está; vazio ou 0,00 retira a multa.
+  const penaltySent = data.get("penalty") !== null;
+  const penalty = parsePenalty(text(data, "penalty", 40));
+  if (!penalty.ok) return penalty;
   const result = await withTenantContext(async (tx, { tenantId, session }): Promise<ActionResult> => {
     // Mesma ordem de travas da criação de operação e do pagamento: carteira, depois operação.
     const [wallet] = await tx.select({ initialCapitalCents: wallets.initialCapitalCents, cycleNumber: wallets.cycleNumber }).from(wallets).where(eq(wallets.tenantId, tenantId)).for("update");
@@ -1102,7 +1132,14 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     if (operation.status === "RENEGOTIATED") return { ok: false, error: "Esta operação foi renegociada; o histórico dela não pode mais ser alterado." };
     if (operation.settlementPaymentId) return { ok: false, error: "Esta operação foi liquidada antecipadamente; os pagamentos dela não podem mais ser alterados." };
     // Data anterior ao empréstimo também vale na correção (pagamento antecipado), como no registro.
-    if (amountCents === payment.amountCents && paidAt === payment.paidAt && notes === payment.notes) return { ok: false, error: "Nada foi alterado neste pagamento." };
+    // A receita de multa deste pagamento (no máximo uma, pela chave única) é travada junto, para a correção não duplicar.
+    const [penaltyRow] = await tx.select().from(capitalMovements)
+      .where(and(eq(capitalMovements.tenantId, tenantId), eq(capitalMovements.idempotencyKey, penaltyKey(payment.id)), eq(capitalMovements.kind, "OTHER_INCOME"))).for("update");
+    const previousPenaltyCents = penaltyRow?.amountCents ?? 0;
+    const nextPenaltyCents = penaltySent ? penalty.cents : previousPenaltyCents;
+    const paymentChanged = amountCents !== payment.amountCents || paidAt !== payment.paidAt || notes !== payment.notes;
+    const change = penaltyChange(previousPenaltyCents, nextPenaltyCents, Boolean(penaltyRow) && penaltyRow.occurredAt !== paidAt);
+    if (!paymentChanged && change.action === "NONE") return { ok: false, error: "Nada foi alterado neste pagamento." };
     const terms = await ledgerTermsOf(tx, tenantId, operation);
     const renewalPaymentIds = new Set(terms.renewals.map((renewal) => renewal.paymentId));
     // "Só os juros e renovar" gravado com a modalidade: o valor é exatamente os juros que ele pagou e fica travado (só a
@@ -1132,30 +1169,59 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
     if (amountCents > edited.balanceBeforeCents || !fitsLedger(terms, list, after)) {
       return { ok: false, error: `O pagamento não pode ser maior que ${formatMoney(edited.balanceBeforeCents)}, o saldo da operação nessa data sem este pagamento.` };
     }
-    // Diminuir um pagamento tira dinheiro do capital disponível; não pode deixá-lo negativo.
-    if (amountCents < payment.amountCents) {
+    // Diminuir um pagamento (ou a multa) tira dinheiro do capital disponível; não pode deixá-lo negativo.
+    const previousTotalCents = payment.amountCents + previousPenaltyCents;
+    const nextTotalCents = amountCents + nextPenaltyCents;
+    if (nextTotalCents < previousTotalCents) {
       const availableCents = await availableCapitalCents(tx, tenantId, wallet);
-      if (availableCents - (payment.amountCents - amountCents) < 0) {
-        return { ok: false, error: `Não é possível reduzir este pagamento em ${formatMoney(payment.amountCents - amountCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };
+      if (availableCents - (previousTotalCents - nextTotalCents) < 0) {
+        return { ok: false, error: `Não é possível reduzir este pagamento em ${formatMoney(previousTotalCents - nextTotalCents)}: o capital disponível é ${formatMoney(Math.max(availableCents, 0))} e ficaria negativo.` };
       }
     }
-    // Pagamento menor ou mais tarde: o dinheiro entra depois (ou menos), e uma saída feita no meio pode ficar sem cobertura.
-    if (amountCents < payment.amountCents || paidAt > payment.paidAt) {
-      const negative = negativeAfterChange([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { removeKey: payment.id, add: { date: paidAt, amountCents } });
+    // Pagamento (ou multa) menor ou mais tarde: o dinheiro entra depois (ou menos), e uma saída feita no meio pode ficar sem cobertura.
+    if (amountCents < payment.amountCents || paidAt > payment.paidAt || nextPenaltyCents < previousPenaltyCents) {
+      const removeKeys = [payment.id, ...(penaltyRow ? [penaltyRow.id] : [])];
+      const adds = [{ date: paidAt, amountCents }, ...(nextPenaltyCents > 0 ? [{ date: paidAt, amountCents: nextPenaltyCents }] : [])];
+      const negative = negativeAfterChanges([...(await tenantCapital(tx, tenantId)).capitalLedger].reverse(), { removeKeys, adds });
       if (negative) return { ok: false, error: capitalGapError("o pagamento corrigido", paidAt, negative) };
     }
-    await tx.insert(paymentRevisions).values({
-      id: id("rev"), tenantId, paymentId: payment.id, previousAmountCents: payment.amountCents, previousPaidAt: payment.paidAt, previousNotes: payment.notes,
-      amountCents, paidAt, notes, editedByUserId: session.user.id,
-    });
-    await tx.update(payments).set({ amountCents, paidAt, notes }).where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)));
+    if (paymentChanged) {
+      await tx.insert(paymentRevisions).values({
+        id: id("rev"), tenantId, paymentId: payment.id, previousAmountCents: payment.amountCents, previousPaidAt: payment.paidAt, previousNotes: payment.notes,
+        amountCents, paidAt, notes, editedByUserId: session.user.id,
+      });
+      await tx.update(payments).set({ amountCents, paidAt, notes }).where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)));
+    }
+    // A multa segue o pagamento: a mesma linha é atualizada (valor e data) ou retirada; nunca uma segunda linha.
+    const editor = session.user.name ?? null;
+    const when = formatDate(todayIso());
+    if (change.action === "INSERT") await insertPenalty(tx, { tenantId, paymentId: payment.id, operation, cents: change.cents, paidAt, userId: session.user.id });
+    if (change.action === "UPDATE" && penaltyRow) {
+      const trail = penaltyRow.amountCents !== change.cents ? penaltyRevisionNote(penaltyRow.amountCents, change.cents, when, editor) : null;
+      await tx.update(capitalMovements).set({ amountCents: change.cents, occurredAt: paidAt, notes: trail ? [penaltyRow.notes, trail].filter(Boolean).join(" ").slice(-500) : penaltyRow.notes })
+        .where(and(eq(capitalMovements.id, penaltyRow.id), eq(capitalMovements.tenantId, tenantId)));
+    }
+    // Retirar: movimento de caixa não se apaga. A receita fica marcada como estornada e entra uma saída de mesmo valor e
+    // data ("Estorno de multa"); as duas se anulam no caixa e a chave pen-<id> fica livre para uma multa nova.
+    if (change.action === "DELETE" && penaltyRow) {
+      const keys = penaltyVoidKeys(payment.id, `${Date.now()}`);
+      const trail = `Retirada em ${when}${editor ? ` por ${editor}` : ""} na correção do pagamento.`;
+      await tx.update(capitalMovements).set({ idempotencyKey: keys.income, description: `${penaltyRow.description ?? PENALTY_LABEL} (estornada)`.slice(0, 200), notes: [penaltyRow.notes, trail].filter(Boolean).join(" ").slice(-500) })
+        .where(and(eq(capitalMovements.id, penaltyRow.id), eq(capitalMovements.tenantId, tenantId)));
+      await tx.insert(capitalMovements).values({
+        id: id("cap"), tenantId, kind: "WITHDRAWAL", category: "OTHER_OUTFLOW", source: "FINANCE", amountCents: penaltyRow.amountCents, occurredAt: penaltyRow.occurredAt, cycleNumber: penaltyRow.cycleNumber,
+        description: `${PENALTY_REVERSAL_LABEL} · ${(penaltyRow.description ?? "").replace(/^Multa recebida · /, "")}`.slice(0, 200), notes: trail, createdByUserId: session.user.id, idempotencyKey: keys.reversal,
+      });
+    }
     // Situação da operação conforme o novo total: quitada (data do último pagamento) ou de volta para em aberto.
     const settles = after.balanceCents === 0;
     const settledAt = settles ? others.reduce((latest, item) => (item.paidAt > latest ? item.paidAt : latest), paidAt) : null;
     await tx.update(loanOperations).set({ status: settles ? "PAID" : "OPEN", settledAt, updatedAt: sql`now()` })
       .where(and(eq(loanOperations.id, operation.id), eq(loanOperations.tenantId, tenantId)));
     const reopened = operation.status === "PAID" && !settles;
-    return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(after.balanceCents)}.`}` };
+    const penaltyText = change.action === "NONE" ? (nextPenaltyCents > 0 ? ` ${PENALTY_LABEL}: ${formatMoney(nextPenaltyCents)}.` : "")
+      : change.action === "DELETE" ? ` ${PENALTY_LABEL} retirada (antes ${formatMoney(previousPenaltyCents)}).` : ` ${PENALTY_LABEL}: ${formatMoney(nextPenaltyCents)}${previousPenaltyCents > 0 && previousPenaltyCents !== nextPenaltyCents ? ` (antes ${formatMoney(previousPenaltyCents)})` : ""}.`;
+    return { ok: true, message: `Pagamento corrigido para ${formatMoney(amountCents)} em ${formatDate(paidAt)}.${penaltyText}${settles ? " Operação quitada." : reopened ? " A operação voltou a ficar em aberto." : ` Saldo em aberto: ${formatMoney(after.balanceCents)}.`}` };
   });
   if (result.ok) revalidatePath("/");
   return result;

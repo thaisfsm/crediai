@@ -16,6 +16,7 @@ import { REPORT_PERIODS, REPORT_SCOPES, REPORT_STATUSES, profitabilityReport, ty
 import { addressKey, addressKinds, addressPartLabels, addressParts, brazilianStates, formatAddress, guarantorFromClient, guarantorPartLabels, maskCep, referenceKey, referenceSlots, type AddressKind, type AddressPart } from "@/lib/finance/client-profile";
 import { calculateCustomInstallments, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, dueDates, frequencyLabels, monthlyEquivalentRate, operationLedger, paymentLabel, planPayment, periodStatusLabels, type PaymentMode, simpleMonthlyRate, type Frequency, type InstallmentFrequency } from "@/lib/finance/rules";
 import { MoneyInput } from "./money-input";
+import { PENALTY_LABEL, parsePenalty, totalReceivedCents } from "@/lib/finance/penalty";
 import { PROPOSAL_PHASES } from "@/lib/credit/phases";
 import { PROPOSAL_DOCUMENTS } from "@/lib/credit/documents";
 import { CLIENT_DATA_STEPS } from "@/lib/credit/client-data-steps";
@@ -1173,8 +1174,10 @@ const formatDateTime = (timestamp: string) => `${formatDate(todayIso(new Date(ti
 // Correção de um pagamento registrado: mostra na hora o saldo e a situação da operação depois da correção.
 function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { operation: OperationView; payment: AllocatedPaymentView; today: string; onClose: () => void; onChanged: () => void }) {
   const [amount, setAmount] = useState(centsToInput(payment.amountCents));
+  const [penalty, setPenalty] = useState(payment.penaltyCents ? centsToInput(payment.penaltyCents) : "");
   const { pending, feedback, onSubmit } = useFormAction(editPaymentAction, () => { onChanged(); onClose(); });
   const amountCents = parseMoneyToCents(amount);
+  const penaltyParsed = parsePenalty(penalty);
   const others = operation.payments.filter((item) => item.id !== payment.id);
   const probe = ledgerOf(operation, [...others, { ...payment, amountCents: amountCents ?? 0 }], today);
   const maxCents = probe.items.find((item) => item.id === payment.id)?.balanceBeforeCents ?? 0;
@@ -1186,6 +1189,9 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
       <input type="hidden" name="paymentId" value={payment.id} />
       <DateField label="Data do pagamento" name="paidAt" defaultValue={payment.paidAt} max={today} required />
       <label className="field"><span>Valor pago (R$)</span><MoneyInput name="amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></label>
+      <label className="field"><span>{PENALTY_LABEL} (R$)</span><MoneyInput name="penalty" inputMode="decimal" placeholder="0,00" value={penalty} onChange={(event) => setPenalty(event.target.value)} /></label>
+      {penaltyParsed.ok ? <p className="capital-note field-wide" data-testid="edit-payment-total">Total recebido: <strong>{formatMoney(totalReceivedCents(amountCents, penaltyParsed.cents))}</strong>{penaltyParsed.cents > 0 ? ` (pagamento ${formatMoney(amountCents ?? 0)} + multa ${formatMoney(penaltyParsed.cents)})` : ""}.</p>
+        : <p className="form-feedback form-feedback-warning field-wide">{penaltyParsed.error}</p>}
       {renewal && <p className="capital-note field-wide">Este pagamento renovou o período até {formatDate(renewal.newDueDate)}. Ele pode ser corrigido para um valor maior (o excedente abate o principal), mas não menor que os juros pagos na renovação.</p>}
       <label className="field field-wide"><span>Observação</span><input name="notes" defaultValue={payment.notes ?? ""} placeholder="Opcional" maxLength={500} /></label>
       {exceeds && <p className="form-feedback form-feedback-warning">O pagamento não pode ser maior que {formatMoney(maxCents)}, o saldo da operação sem este pagamento.</p>}
@@ -1197,10 +1203,10 @@ function EditPaymentForm({ operation, payment, today, onClose, onChanged }: { op
           <div><span>Situação após</span><strong>{after.balanceCents === 0 ? "Quitada" : stateLabels[after.state].label}</strong></div>
         </div>
       )}
-      <p className="capital-note field-wide">O valor e a data de antes ficam guardados no histórico deste pagamento.</p>
+      <p className="capital-note field-wide">O valor e a data de antes ficam guardados no histórico deste pagamento. A multa é corrigida na mesma receita de multa, sem lançamento novo.</p>
       <div className="form-actions">
         <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
-        <button className="primary-button" disabled={pending || exceeds}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar correção"}</button>
+        <button className="primary-button" disabled={pending || exceeds || !penaltyParsed.ok}><Icon name="check" size={16} /> {pending ? "Salvando…" : "Salvar correção"}</button>
       </div>
       <Feedback feedback={feedback} />
     </form>
@@ -1365,7 +1371,10 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
   const [newDueDate, setNewDueDate] = useState<string | null>(null);
   // Período escolhido na lista "Períodos de juros" para "Receber juros e renovar".
   const [period, setPeriod] = useState<number | null>(null);
-  const reset = () => { setAmount(""); setMode("MANUAL"); setNewDueDate(null); setPeriod(null); };
+  // Multa recebida junto com o pagamento: receita à parte, fora do extrato do contrato (vazio = sem multa).
+  const [penalty, setPenalty] = useState("");
+  const penaltyParsed = parsePenalty(penalty);
+  const reset = () => { setAmount(""); setPenalty(""); setMode("MANUAL"); setNewDueDate(null); setPeriod(null); };
   const { pending, feedback, onSubmit } = useFormAction(registerPaymentAction, () => { reset(); onChanged(); });
   const isOpen = operation.status === "OPEN" && !readOnly;
   const amountCents = parseMoneyToCents(amount);
@@ -1406,6 +1415,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
           <div><dt>Recebido</dt><dd>{formatMoney(operation.paidCents)}</dd></div>
           <div><dt>Juros recebidos</dt><dd>{formatMoney(operation.interestPaidCents)}</dd></div>
           <div><dt>Principal recebido</dt><dd>{formatMoney(operation.principalPaidCents)}</dd></div>
+          {operation.penaltyReceivedCents > 0 && <div><dt>Multas recebidas (à parte)</dt><dd>{formatMoney(operation.penaltyReceivedCents)}</dd></div>}
           <div><dt>Juros restantes</dt><dd>{formatMoney(operation.interestRemainingCents)}</dd></div>
           <div><dt>Principal restante</dt><dd>{formatMoney(operation.principalRemainingCents)}</dd></div>
           <div className="payment-balance"><dt>Saldo</dt><dd>{formatMoney(operation.balanceCents)}</dd></div>
@@ -1473,6 +1483,14 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             )}
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} max={today} required onChange={setPaidAt} />
             <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
+            <label className="field"><span>{PENALTY_LABEL} (R$)</span><MoneyInput name="penalty" inputMode="decimal" placeholder="0,00" value={penalty} onChange={(event) => setPenalty(event.target.value)} /></label>
+            <div className="operation-preview payment-total-preview field-wide" data-testid="payment-total" aria-live="polite">
+              <div><span>Valor da parcela / pagamento</span><strong>{formatMoney(amountCents ?? 0)}</strong></div>
+              <div><span>{PENALTY_LABEL}</span><strong>{formatMoney(penaltyParsed.ok ? penaltyParsed.cents : 0)}</strong></div>
+              <div><span>Total recebido</span><strong>{formatMoney(totalReceivedCents(amountCents, penaltyParsed.ok ? penaltyParsed.cents : 0))}</strong></div>
+            </div>
+            {!penaltyParsed.ok && <p className="form-feedback form-feedback-warning field-wide">{penaltyParsed.error}</p>}
+            {penaltyParsed.ok && penaltyParsed.cents > 0 && <p className="capital-note field-wide">A multa entra no caixa como receita de multa. Ela não abate principal, juros nem saldo do contrato.</p>}
             <label className="field field-wide"><span>Observação</span><input name="notes" placeholder="Opcional" maxLength={500} /></label>
             {plan && !plan.ok && <p className="form-feedback form-feedback-warning">{plan.error}</p>}
             {renewal && (
@@ -1502,7 +1520,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
             )}
             <div className="form-actions">
               <button type="button" className="outline-button" onClick={() => setSettling(true)}>Liquidação antecipada</button>
-              <button className="primary-button" disabled={pending || plan === null || !plan.ok}><Icon name="check" size={16} /> {pending ? "Registrando…" : chosenPeriod ? "Confirmar recebimento e renovar" : "Registrar pagamento"}</button>
+              <button className="primary-button" disabled={pending || plan === null || !plan.ok || !penaltyParsed.ok}><Icon name="check" size={16} /> {pending ? "Registrando…" : chosenPeriod ? "Confirmar recebimento e renovar" : "Registrar pagamento"}</button>
             </div>
           </form>
         )}
@@ -1522,6 +1540,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
                 <span>{formatDate(payment.paidAt)}</span><strong>{formatMoney(payment.amountCents)}</strong><span className={`status-chip ${payment.kind === "SETTLEMENT" ? "status-paid" : payment.kind === "RENEWAL" ? "status-renewal" : "status-active"}`}><i />{paymentLabel(payment)}</span>
                 {operation.status !== "CANCELED" && operation.status !== "RENEGOTIATED" && !operation.settlementPaymentId && !readOnly && editingId !== payment.id && <button type="button" className="outline-button payment-edit-button" onClick={() => setEditingId(payment.id)}>Editar pagamento</button>}
                 <small>Juros {formatMoney(payment.interestCents)} · Principal {formatMoney(payment.principalCents)}{renewalNote(payment)}{payment.notes ? ` · ${payment.notes}` : ""}</small>
+                {(payment.penaltyCents ?? 0) > 0 && <small className="payment-penalty" data-testid="payment-penalty">{PENALTY_LABEL} {formatMoney(payment.penaltyCents ?? 0)} (receita de multa, fora do saldo) · Total recebido {formatMoney(payment.amountCents + (payment.penaltyCents ?? 0))}</small>}
                 {(payment.revisions ?? []).map((revision) => <small key={revision.id} className="payment-revision">Corrigido em {formatDateTime(revision.editedAt)}{revision.editedBy ? ` por ${revision.editedBy}` : ""}: antes {formatMoney(revision.previousAmountCents)} em {formatDate(revision.previousPaidAt)}, depois {formatMoney(revision.amountCents)} em {formatDate(revision.paidAt)}.</small>)}
                 {editingId === payment.id && <EditPaymentForm operation={operation} payment={payment} today={today} onClose={() => setEditingId(null)} onChanged={onChanged} />}
               </li>
@@ -2398,22 +2417,22 @@ export function ReportsPage({ portfolio, onChanged = () => {} }: { portfolio: Te
         </form>
         {loadingAll ? <EmptyPanel icon="chart" text={allCycles && "error" in allCycles ? allCycles.error : "Carregando os ciclos encerrados…"} /> : report.clients.length === 0 ? <EmptyPanel icon="chart" text={filtered ? "Nenhuma operação com esses filtros." : "Nenhuma operação no ciclo atual."} /> : (
           <div className="table-scroll"><table className="data-table report-table">
-            <thead><tr><th>Cliente</th><th>Operações</th><th>Principal emprestado</th><th>Principal recuperado</th><th>Juros recebidos</th><th>Juros previstos</th><th>Saldo</th><th>Pagamentos</th></tr></thead>
+            <thead><tr><th>Cliente</th><th>Operações</th><th>Principal emprestado</th><th>Principal recuperado</th><th>Juros recebidos</th><th>Multas recebidas</th><th>Juros previstos</th><th>Saldo</th><th>Pagamentos</th></tr></thead>
             <tbody>{report.clients.map((client) => (
               <Fragment key={client.clientId}>
                 <tr className="report-client-row">
                   <td><button type="button" className="text-link client-link" aria-expanded={expanded === client.clientId} onClick={() => setExpanded(expanded === client.clientId ? null : client.clientId)}><strong>{client.clientName}</strong></button></td>
-                  <td>{client.totals.operationCount}</td><td>{formatMoney(client.totals.principalLentCents)}</td><td>{formatMoney(client.totals.principalReceivedCents)}</td><td>{formatMoney(client.totals.interestReceivedCents)}</td><td>{formatMoney(client.totals.interestRemainingCents)}</td><td><strong>{formatMoney(client.totals.balanceCents)}</strong></td><td>{client.totals.paymentCount}</td>
+                  <td>{client.totals.operationCount}</td><td>{formatMoney(client.totals.principalLentCents)}</td><td>{formatMoney(client.totals.principalReceivedCents)}</td><td>{formatMoney(client.totals.interestReceivedCents)}</td><td>{formatMoney(client.totals.penaltyReceivedCents)}</td><td>{formatMoney(client.totals.interestRemainingCents)}</td><td><strong>{formatMoney(client.totals.balanceCents)}</strong></td><td>{client.totals.paymentCount}</td>
                 </tr>
                 {expanded === client.clientId && client.operations.map(({ operation, row }) => (
                   <tr key={operation.id} className="report-operation-row">
                     <td><span className="row-actions"><button type="button" className="outline-button" onClick={() => setOpened(operation.id)}>{`Abrir #${operation.code}`}</button></span><small>{`${modalityLabel(operation)} · empréstimo ${formatDate(operation.loanDate)}${scope === "ALL" && operation.cycleNumber ? ` · ciclo ${operation.cycleNumber}${operation.cycleNumber === portfolio.summary.cycleNumber ? " (atual)" : ""}` : ""}`}</small></td>
-                    <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td>{formatMoney(row.principalLentCents)}</td><td>{formatMoney(row.principalReceivedCents)}</td><td>{formatMoney(row.interestReceivedCents)}</td><td>{formatMoney(row.interestRemainingCents)}</td><td>{formatMoney(row.balanceCents)}</td><td>{row.paymentCount}</td>
+                    <td><StatusChip state={operation.state} daysUntilDue={operation.daysUntilDue} /></td><td>{formatMoney(row.principalLentCents)}</td><td>{formatMoney(row.principalReceivedCents)}</td><td>{formatMoney(row.interestReceivedCents)}</td><td>{formatMoney(row.penaltyReceivedCents)}</td><td>{formatMoney(row.interestRemainingCents)}</td><td>{formatMoney(row.balanceCents)}</td><td>{row.paymentCount}</td>
                   </tr>
                 ))}
               </Fragment>
             ))}</tbody>
-            <tfoot><tr><td><strong>Total</strong></td><td>{report.totals.operationCount}</td><td>{formatMoney(report.totals.principalLentCents)}</td><td>{formatMoney(report.totals.principalReceivedCents)}</td><td>{formatMoney(report.totals.interestReceivedCents)}</td><td>{formatMoney(report.totals.interestRemainingCents)}</td><td><strong>{formatMoney(report.totals.balanceCents)}</strong></td><td>{report.totals.paymentCount}</td></tr></tfoot>
+            <tfoot><tr><td><strong>Total</strong></td><td>{report.totals.operationCount}</td><td>{formatMoney(report.totals.principalLentCents)}</td><td>{formatMoney(report.totals.principalReceivedCents)}</td><td>{formatMoney(report.totals.interestReceivedCents)}</td><td>{formatMoney(report.totals.penaltyReceivedCents)}</td><td>{formatMoney(report.totals.interestRemainingCents)}</td><td><strong>{formatMoney(report.totals.balanceCents)}</strong></td><td>{report.totals.paymentCount}</td></tr></tfoot>
           </table></div>
         )}
       </section>
