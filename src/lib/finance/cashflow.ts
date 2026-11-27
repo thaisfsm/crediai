@@ -41,6 +41,8 @@ export const statementCategoryLabels = {
   PAYMENT: "Recebimento de operação",
   // Multa recebida junto com um pagamento de operação: receita própria, fora de principal, juros e saldo (penalty.ts).
   PENALTY_INCOME: "Multa recebida",
+  // Saída que anula uma multa retirada na correção do pagamento (a receita original continua no histórico).
+  PENALTY_REVERSAL: "Estorno de multa",
   CONTRIBUTION_REVERSAL: "Estorno de aporte",
   LEGACY_WITHDRAWAL: "Retirada (sem categoria)",
   // Contas a Pagar: entrada confirmada de um contrato de investimento e baixas de rendimento e de principal.
@@ -159,8 +161,8 @@ const categoryOfEntry = (entry: CapitalLedgerEntry): StatementCategory => {
     case "PAYMENT": return "PAYMENT";
     case "CONTRIBUTION_REVERSAL": return "CONTRIBUTION_REVERSAL";
     case "CONTRIBUTION": return entry.category === "INVESTOR_CONTRIBUTION" ? "INVESTOR_CONTRIBUTION" : "CAPITAL_CONTRIBUTION";
-    case "OTHER_INCOME": return entry.penaltyPaymentId ? "PENALTY_INCOME" : "OTHER_INCOME";
-    case "WITHDRAWAL": return entry.category && (isManualCategory(entry.category) || isInvestorCategory(entry.category)) ? entry.category : "LEGACY_WITHDRAWAL";
+    case "OTHER_INCOME": return entry.penaltyRole ? "PENALTY_INCOME" : "OTHER_INCOME";
+    case "WITHDRAWAL": if (entry.penaltyRole === "PENALTY_REVERSAL") return "PENALTY_REVERSAL"; return entry.category && (isManualCategory(entry.category) || isInvestorCategory(entry.category)) ? entry.category : "LEGACY_WITHDRAWAL";
   }
 };
 
@@ -171,7 +173,8 @@ function originOf(entry: CapitalLedgerEntry) {
   if (entry.kind === "LOAN_CANCELED") return `Operações · exclusão ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "PAYMENT") return `Pagamentos · ${entry.operationCode ?? ""}`.trim();
   if (entry.kind === "CONTRIBUTION_REVERSAL") return "Capital · estorno de aporte";
-  if (entry.penaltyPaymentId) return "Pagamentos · multa recebida";
+  if (entry.penaltyRole === "PENALTY_REVERSAL") return "Pagamentos · multa retirada na correção";
+  if (entry.penaltyRole) return "Pagamentos · multa recebida";
   if (entry.source === "INVESTOR") return entry.kind === "CONTRIBUTION" ? "Investidores · entrada do contrato" : "Contas a pagar · baixa";
   return entry.source === "FINANCE" ? "Financeiro · lançamento manual" : "Capital · lançamento manual";
 }
@@ -181,14 +184,14 @@ function originOf(entry: CapitalLedgerEntry) {
 export function financeRows(ledger: CapitalLedgerEntry[], userNames: Map<string, string>): FinanceRow[] {
   return ledger.map((entry) => {
     const category = categoryOfEntry(entry);
-    const manual = ["CONTRIBUTION", "OTHER_INCOME", "WITHDRAWAL"].includes(entry.kind) && !entry.penaltyPaymentId;
+    const manual = ["CONTRIBUTION", "OTHER_INCOME", "WITHDRAWAL"].includes(entry.kind) && !entry.penaltyRole;
     return {
       key: entry.key, date: entry.date, direction: entry.amountCents < 0 ? "OUT" : "IN", category, categoryLabel: statementCategoryLabels[category],
       description: entry.description, notes: entry.kind === "PAYMENT" || entry.kind === "LOAN" ? null : entry.notes ?? null,
       amountCents: Math.abs(entry.amountCents), balanceCents: entry.balanceCents,
       responsible: manual || entry.kind === "CONTRIBUTION_REVERSAL"
         ? (entry.createdByUserId ? userNames.get(entry.createdByUserId) ?? "Usuário removido" : "Não registrado (lançamento anterior ao Financeiro)")
-        : "Automático (" + (entry.penaltyPaymentId ? "multa recebida no pagamento" : capitalLedgerLabels[entry.kind].toLowerCase()) + ")",
+        : "Automático (" + (entry.penaltyRole === "PENALTY_REVERSAL" ? "estorno de multa na correção do pagamento" : entry.penaltyRole ? "multa recebida no pagamento" : capitalLedgerLabels[entry.kind].toLowerCase()) + ")",
       origin: originOf(entry),
       ...(entry.kind === "PAYMENT" ? { principalCents: entry.principalCents ?? 0, interestCents: entry.interestCents ?? 0 } : {}),
     };

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPortfolio } from "../src/lib/finance/portfolio.ts";
 import { financeRows, financeStatement, negativeAfterChange, negativeAfterChanges, statementCategoryLabels } from "../src/lib/finance/cashflow.ts";
-import { PENALTY_KEY_PREFIX, parsePenalty, penaltyChange, penaltyDescription, penaltyKey, penaltyPaymentIdOf, totalReceivedCents } from "../src/lib/finance/penalty.ts";
+import { PENALTY_KEY_PREFIX, parsePenalty, penaltyRoleOf, penaltyVoidKeys, penaltyChange, penaltyDescription, penaltyKey, penaltyPaymentIdOf, totalReceivedCents } from "../src/lib/finance/penalty.ts";
 import { profitabilityReport } from "../src/lib/finance/report.ts";
 
 const TODAY = "2026-10-13";
@@ -16,7 +16,7 @@ const op = (id, principalCents, loanDate, extra = {}) => ({
 const pay = (id, operationId, amountCents, paidAt, extra = {}) => ({ id, operationId, clientName: "Cliente Teste", amountCents, paidAt, notes: null, createdAt: `${paidAt}T15:00:00Z`, ...extra });
 const penaltyMov = (paymentId, amountCents, occurredAt) => ({
   id: `cap_${paymentId}`, kind: "OTHER_INCOME", amountCents, occurredAt, notes: null, reversedMovementId: null, createdAt: `${occurredAt}T15:00:01Z`,
-  category: "OTHER_INCOME", description: penaltyDescription("Cliente Teste", "X"), source: "FINANCE", createdByUserId: "u1", penaltyPaymentId: paymentId,
+  category: "OTHER_INCOME", description: penaltyDescription("Cliente Teste", "X"), source: "FINANCE", createdByUserId: "u1", penaltyPaymentId: paymentId, penaltyRole: "PENALTY",
 });
 const build = ({ movements = [], payments = [] } = {}) => buildPortfolio({
   initialCapitalCents: 1_000_000, hasWallet: true, walletCreatedOn: "2026-10-01", capitalMovements: movements, operations: [op("op_a", 100_000, "2026-10-01")], payments, today: TODAY,
@@ -116,4 +116,23 @@ test("MR8. capital nunca negativo: reduzir multa e pagamento juntos é conferido
   // A versão de uma linha continua igual.
   assert.equal(negativeAfterChange(ledger, { removeKey: "cap_pen" })?.balanceCents, -5_000);
   assert.equal(negativeAfterChange(ledger, {}), null);
+});
+
+test("MR9. multa retirada: receita estornada + saída de estorno se anulam no caixa, não contam como multa do pagamento e aparecem no Financeiro", () => {
+  const keys = penaltyVoidKeys("pay_1", "123");
+  assert.equal(penaltyRoleOf("OTHER_INCOME", "pen-pay_1"), "PENALTY");
+  assert.equal(penaltyRoleOf("OTHER_INCOME", keys.income), "PENALTY_VOIDED");
+  assert.equal(penaltyRoleOf("WITHDRAWAL", keys.reversal), "PENALTY_REVERSAL");
+  assert.equal(penaltyRoleOf("OTHER_INCOME", "ivf-x"), null);
+  assert.equal(penaltyPaymentIdOf(keys.income), null);
+  assert.equal(penaltyPaymentIdOf(keys.reversal), null);
+  const voidedIncome = { ...penaltyMov("pay_1", 10_000, "2026-10-10"), penaltyPaymentId: null, penaltyRole: "PENALTY_VOIDED" };
+  const reversal = { id: "cap_rev", kind: "WITHDRAWAL", amountCents: 10_000, occurredAt: "2026-10-10", notes: null, reversedMovementId: null, createdAt: "2026-10-12T10:00:00Z", category: "OTHER_OUTFLOW", description: "Estorno de multa", source: "FINANCE", createdByUserId: "u1", penaltyRole: "PENALTY_REVERSAL" };
+  const without = build({ payments: [pay("pay_1", "op_a", 60_000, "2026-10-10")] });
+  const removed = build({ payments: [pay("pay_1", "op_a", 60_000, "2026-10-10")], movements: [voidedIncome, reversal] });
+  assert.equal(removed.summary.availableCents, without.summary.availableCents);
+  assert.equal(removed.operations[0].penaltyReceivedCents, 0);
+  const rows = financeRows(removed.capitalLedger, new Map());
+  assert.deepEqual(rows.filter((row) => row.category.startsWith("PENALTY")).map((row) => [row.category, row.categoryLabel, row.direction, row.amountCents]).sort(),
+    [["PENALTY_INCOME", "Multa recebida", "IN", 10_000], ["PENALTY_REVERSAL", "Estorno de multa", "OUT", 10_000]]);
 });

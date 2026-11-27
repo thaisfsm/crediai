@@ -29,7 +29,7 @@ import { INFLOW_KINDS, checkInitialCapitalChange, checkOutflow, negativeAfterCha
 import { editReason, operationChanges, type OperationChange, type OperationEditSnapshot } from "@/lib/finance/operation-edit";
 import { cycleStartedOn, tenantCapital } from "@/lib/finance/finance-queries";
 import { operationCode } from "@/lib/finance/portfolio";
-import { PENALTY_LABEL, parsePenalty, penaltyChange, penaltyDescription, penaltyKey, penaltyRevisionNote } from "@/lib/finance/penalty";
+import { PENALTY_LABEL, PENALTY_REVERSAL_LABEL, parsePenalty, penaltyChange, penaltyDescription, penaltyKey, penaltyRevisionNote, penaltyVoidKeys } from "@/lib/finance/penalty";
 import { allocationOrderFor, BIWEEKLY_RULE, calculateCustomInstallments, calculateDaily, calculateFixedInterest, calculateInstallments, calculateOperation, checkPayment, deferralDueDate, deferralEligibility, installmentDueDate, interestModeOf, interestOnlyRenewal, isAllocationOrder, isPaymentMode, operationLedger, paymentModeLabels, planPayment, type Frequency, type InstallmentFrequency, type LedgerPayment, type LedgerTerms, type PaymentMode } from "@/lib/finance/rules";
 
 export type ActionResult = { ok: true; message: string } | { ok: false; error: string };
@@ -1201,7 +1201,18 @@ export async function editPaymentAction(data: FormData): Promise<ActionResult> {
       await tx.update(capitalMovements).set({ amountCents: change.cents, occurredAt: paidAt, notes: trail ? [penaltyRow.notes, trail].filter(Boolean).join(" ").slice(-500) : penaltyRow.notes })
         .where(and(eq(capitalMovements.id, penaltyRow.id), eq(capitalMovements.tenantId, tenantId)));
     }
-    if (change.action === "DELETE" && penaltyRow) await tx.delete(capitalMovements).where(and(eq(capitalMovements.id, penaltyRow.id), eq(capitalMovements.tenantId, tenantId)));
+    // Retirar: movimento de caixa não se apaga. A receita fica marcada como estornada e entra uma saída de mesmo valor e
+    // data ("Estorno de multa"); as duas se anulam no caixa e a chave pen-<id> fica livre para uma multa nova.
+    if (change.action === "DELETE" && penaltyRow) {
+      const keys = penaltyVoidKeys(payment.id, `${Date.now()}`);
+      const trail = `Retirada em ${when}${editor ? ` por ${editor}` : ""} na correção do pagamento.`;
+      await tx.update(capitalMovements).set({ idempotencyKey: keys.income, description: `${penaltyRow.description ?? PENALTY_LABEL} (estornada)`.slice(0, 200), notes: [penaltyRow.notes, trail].filter(Boolean).join(" ").slice(-500) })
+        .where(and(eq(capitalMovements.id, penaltyRow.id), eq(capitalMovements.tenantId, tenantId)));
+      await tx.insert(capitalMovements).values({
+        id: id("cap"), tenantId, kind: "WITHDRAWAL", category: "OTHER_OUTFLOW", source: "FINANCE", amountCents: penaltyRow.amountCents, occurredAt: penaltyRow.occurredAt, cycleNumber: penaltyRow.cycleNumber,
+        description: `${PENALTY_REVERSAL_LABEL} · ${(penaltyRow.description ?? "").replace(/^Multa recebida · /, "")}`.slice(0, 200), notes: trail, createdByUserId: session.user.id, idempotencyKey: keys.reversal,
+      });
+    }
     // Situação da operação conforme o novo total: quitada (data do último pagamento) ou de volta para em aberto.
     const settles = after.balanceCents === 0;
     const settledAt = settles ? others.reduce((latest, item) => (item.paidAt > latest ? item.paidAt : latest), paidAt) : null;

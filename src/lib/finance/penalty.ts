@@ -12,9 +12,27 @@ export const PENALTY_KEY_PREFIX = "pen-";
 export const PENALTY_LABEL = "Multa recebida";
 export const PENALTY_MAX_CENTS = 100_000_000_000; // mesmo limite técnico dos demais valores (R$ 1 bilhão)
 
+// Retirar uma multa já lançada: dinheiro do caixa não se apaga (o banco só deixa a administração excluir movimentos). A
+// receita é marcada como estornada (a chave muda para pen-void-in-…, liberando pen-<id> para uma multa nova) e entra uma
+// saída "Estorno de multa" de mesmo valor e data (pen-void-out-…). As duas se anulam no caixa e ficam no histórico.
+export const PENALTY_VOID_IN_PREFIX = `${PENALTY_KEY_PREFIX}void-in-`;
+export const PENALTY_VOID_OUT_PREFIX = `${PENALTY_KEY_PREFIX}void-out-`;
+export const PENALTY_REVERSAL_LABEL = "Estorno de multa";
 export const penaltyKey = (paymentId: string) => `${PENALTY_KEY_PREFIX}${paymentId}`;
+export const penaltyVoidKeys = (paymentId: string, stamp: string) => ({ income: `${PENALTY_VOID_IN_PREFIX}${paymentId}-${stamp}`, reversal: `${PENALTY_VOID_OUT_PREFIX}${paymentId}-${stamp}` });
+const isVoidKey = (key: string) => key.startsWith(PENALTY_VOID_IN_PREFIX) || key.startsWith(PENALTY_VOID_OUT_PREFIX);
+// Pagamento da multa ATIVA (só a chave pen-<id>; as estornadas não contam como multa do pagamento).
 export const penaltyPaymentIdOf = (idempotencyKey: string | null | undefined) =>
-  idempotencyKey && idempotencyKey.startsWith(PENALTY_KEY_PREFIX) && idempotencyKey.length > PENALTY_KEY_PREFIX.length ? idempotencyKey.slice(PENALTY_KEY_PREFIX.length) : null;
+  idempotencyKey && idempotencyKey.startsWith(PENALTY_KEY_PREFIX) && !isVoidKey(idempotencyKey) && idempotencyKey.length > PENALTY_KEY_PREFIX.length ? idempotencyKey.slice(PENALTY_KEY_PREFIX.length) : null;
+// Papel de um movimento de capital ligado a multa: ativa, estornada (receita que foi retirada) ou o estorno (saída).
+export type PenaltyRole = "PENALTY" | "PENALTY_VOIDED" | "PENALTY_REVERSAL";
+export function penaltyRoleOf(kind: string, idempotencyKey: string | null | undefined): PenaltyRole | null {
+  if (!idempotencyKey) return null;
+  if (kind === "OTHER_INCOME" && idempotencyKey.startsWith(PENALTY_VOID_IN_PREFIX)) return "PENALTY_VOIDED";
+  if (kind === "WITHDRAWAL" && idempotencyKey.startsWith(PENALTY_VOID_OUT_PREFIX)) return "PENALTY_REVERSAL";
+  if (kind === "OTHER_INCOME" && penaltyPaymentIdOf(idempotencyKey)) return "PENALTY";
+  return null;
+}
 
 // Campo "Multa recebida (R$)": vazio ou zero = sem multa (o pagamento funciona como antes). Negativo, texto inválido ou
 // acima do limite técnico são recusados.

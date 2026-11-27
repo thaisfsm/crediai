@@ -3,7 +3,7 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { TenantTransaction } from "@/lib/auth/guards";
 import { capitalMovements, clients, installmentDeferrals, loanOperations, loanRenewals, payments, wallets } from "@/lib/db/schema";
 import { todayIso } from "./format";
-import { penaltyPaymentIdOf } from "./penalty";
+import { penaltyPaymentIdOf, penaltyRoleOf } from "./penalty";
 import { isAllocationOrder, isPaymentMode } from "./rules";
 import { buildPortfolio, type CapitalMovementRecord, type OperationRecord, type PaymentRecord, type PaymentRevisionRecord, type DeferralRecord, type RenewalRecord } from "./portfolio";
 
@@ -20,6 +20,7 @@ export function toMovementRecord(movement: MovementRow): CapitalMovementRecord {
     id: movement.id, kind: movement.kind, amountCents: movement.amountCents, occurredAt: movement.occurredAt, notes: movement.notes, reversedMovementId: movement.reversedMovementId, createdAt: movement.createdAt.toISOString(),
     category: movement.category, description: movement.description, source: movement.source, createdByUserId: movement.createdByUserId,
     penaltyPaymentId: movement.kind === "OTHER_INCOME" ? penaltyPaymentIdOf(movement.idempotencyKey) : null,
+    penaltyRole: penaltyRoleOf(movement.kind, movement.idempotencyKey),
   };
 }
 

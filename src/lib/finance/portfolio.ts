@@ -51,6 +51,8 @@ export type CapitalMovementRecord = {
   category?: string | null; description?: string | null; source?: string; createdByUserId?: string | null;
   // Receita de multa: o pagamento de operação ao qual esta entrada pertence (chave pen-<id>, penalty.ts).
   penaltyPaymentId?: string | null;
+  // Movimento ligado a multa (penalty.ts): receita ativa, receita estornada ou a saída do estorno.
+  penaltyRole?: "PENALTY" | "PENALTY_VOIDED" | "PENALTY_REVERSAL" | null;
 };
 
 // Extrato do capital: cada linha soma (+) ou tira (−) do capital disponível; o saldo final é o capital disponível atual.
@@ -60,7 +62,7 @@ export type CapitalLedgerKind = "INITIAL" | "CONTRIBUTION" | "CONTRIBUTION_REVER
 export type CapitalLedgerEntry = {
   key: string; kind: CapitalLedgerKind; date: string; description: string; amountCents: number; balanceCents: number; movementId?: string; reversed?: boolean;
   category?: string | null; notes?: string | null; source?: string; createdByUserId?: string | null; operationCode?: string; principalCents?: number; interestCents?: number;
-  penaltyPaymentId?: string | null;
+  penaltyPaymentId?: string | null; penaltyRole?: "PENALTY" | "PENALTY_VOIDED" | "PENALTY_REVERSAL" | null;
 };
 export const capitalLedgerLabels: Record<CapitalLedgerKind, string> = {
   INITIAL: "Capital inicial", CONTRIBUTION: "Aporte", CONTRIBUTION_REVERSAL: "Estorno de aporte", WITHDRAWAL: "Retirada", OTHER_INCOME: "Outra entrada",
@@ -346,6 +348,7 @@ export function buildPortfolio({ initialCapitalCents, hasWallet, walletCreatedOn
       amountCents: movement.kind === "CONTRIBUTION" || movement.kind === "OTHER_INCOME" ? movement.amountCents : -movement.amountCents,
       category: movement.category ?? null, notes: movement.description ? movement.notes : null, source: movement.source ?? "CAPITAL", createdByUserId: movement.createdByUserId ?? null,
       ...(movement.penaltyPaymentId ? { penaltyPaymentId: movement.penaltyPaymentId } : {}),
+      ...(movement.penaltyRole ? { penaltyRole: movement.penaltyRole } : {}),
       ...(movement.kind === "CONTRIBUTION" ? { movementId: movement.id, reversed: reversedIds.has(movement.id) } : {}),
     })),
     // Operações excluídas continuam no extrato: a saída do capital e a devolução na exclusão se anulam.

@@ -153,7 +153,10 @@ test("MR-E4. correção: muda a multa na mesma linha, mantém sem o campo, retir
   const removed = await action(robério, "editPaymentAction", { paymentId: payment.id, amount: "610,00", penalty: "0,00", paidAt: day(-1), notes: "" });
   assert.equal(removed?.ok, true, JSON.stringify(removed));
   assert.match(removed.message, /Multa recebida retirada/);
-  assert.equal((await penalties(payment.id)).length, 0);
+  assert.equal((await penalties(payment.id)).length, 0, "sem multa ativa no pagamento");
+  // Dinheiro não se apaga: a receita fica estornada e entra a saída do estorno, de mesmo valor (o caixa perde R$ 150,00).
+  const voided = await admin(`select kind::text kind, category, amount_cents::int amount_cents from capital_movement where idempotency_key like 'pen-void-%-${payment.id}-%' order by kind`);
+  assert.deepEqual(voided.map((row) => [row.kind, row.category, row.amount_cents]), [["OTHER_INCOME", "OTHER_INCOME", 15000], ["WITHDRAWAL", "OTHER_OUTFLOW", 15000]]);
   assert.equal(await available(), cash - 15000);
 
   const readded = await action(robério, "editPaymentAction", { paymentId: payment.id, amount: "610,00", penalty: "50,00", paidAt: day(-1), notes: "" });
