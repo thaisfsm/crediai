@@ -114,9 +114,10 @@ test("RL2. ficha (lista de clientes) e relatório do ciclo atual mostram os mesm
   await page.goto(`${BASE}/?tela=relatorios`);
   const row = page.getByRole("region", { name: "Rentabilidade por cliente" }).locator("tr.report-client-row", { hasText: "Cliente Relatório A" });
   await row.waitFor();
-  // Relatório: emprestado, recuperado, juros recebidos, juros previstos, saldo.
+  // Relatório: emprestado, recuperado, juros recebidos, multas recebidas, juros previstos, saldo.
   const report = moneyIn(await row.innerText());
-  assert.deepEqual([report[0], report[2], report[4]], [lent, interest, balance]);
+  assert.deepEqual([report[0], report[2], report[5]], [lent, interest, balance]);
+  assert.equal(report[3], "0,00", "sem multa registrada");
   assert.deepEqual([lent, interest], ["1.500,00", "400,00"]);
   await context.close();
 });
