@@ -233,6 +233,30 @@ test("MR-E7. tela: campo Multa recebida, total recebido, histórico, Financeiro 
   }
 });
 
+test("MR-E9. abrir o pagamento não grava nada: campo Valor recebido vazio com a sugestão da parcela (R$ 600,00, não o saldo), resumo R$ 0,00, desktop e celular", async () => {
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
+  browser ??= await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+  const [name, value] = robério.split("; ").find((cookie) => cookie.includes("session_token")).split(/=(.*)/s);
+  const snapshot = () => one(`select md5(string_agg(x, '|' order by x)) from (select 'p'||row(p.*)::text x from payment p union all select 'm'||row(m.*)::text from capital_movement m union all select 'o'||row(o.*)::text from loan_operation o) t`);
+  const before = await snapshot();
+  for (const viewport of [{ width: 1440, height: 900, label: "desktop" }, { width: 390, height: 844, label: "celular" }]) {
+    const context = await browser.newContext({ viewport, locale: "pt-BR" });
+    await context.addCookies([{ name, value, domain: new URL(BASE).hostname, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/?tela=operacoes`);
+    await page.getByRole("row", { name: /Multa zero/ }).first().getByRole("button", { name: "Registrar pagamento" }).click();
+    const panel = page.locator(".payment-overlay");
+    const field = panel.getByLabel("Valor recebido (R$)");
+    await field.waitFor();
+    assert.equal(await field.inputValue(), "", "o campo não vem preenchido");
+    assert.equal(await field.getAttribute("placeholder"), "600,00", "sugestão = parcela, não o saldo total");
+    assert.match(await panel.getByTestId("payment-total").innerText(), /Total recebido\s*R\$\s?0,00/);
+    if (SHOTS) await page.screenshot({ path: `${SHOTS}/multa-recebida-campo-valor-${viewport.label}.png` });
+    await context.close();
+  }
+  assert.equal(await snapshot(), before, "abrir a tela não grava nem altera nada");
+});
+
 test("MR-E8. nada que já existia mudou", async () => {
   assert.equal(await existingHash(), before);
 });

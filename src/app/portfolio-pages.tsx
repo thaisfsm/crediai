@@ -1482,7 +1482,7 @@ function PaymentPanel({ operation, today, onClose, onChanged, readOnly = false }
               </div>
             )}
             <DateField label="Data do pagamento" name="paidAt" defaultValue={today} max={today} required onChange={setPaidAt} />
-            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
+            <label className="field"><span>Valor recebido (R$)</span><MoneyInput name="amount" inputMode="decimal" placeholder={centsToInput(next && next.remainingCents < operation.balanceCents ? next.remainingCents : operation.balanceCents)} value={amount} readOnly={fixedAmount} onChange={(event) => { setAmount(event.target.value); if (mode !== "PRINCIPAL_AMORTIZATION") setMode("MANUAL"); }} required autoFocus /></label>
             <label className="field"><span>{PENALTY_LABEL} (R$)</span><MoneyInput name="penalty" inputMode="decimal" placeholder="0,00" value={penalty} onChange={(event) => setPenalty(event.target.value)} /></label>
             <div className="operation-preview payment-total-preview field-wide" data-testid="payment-total" aria-live="polite">
               <div><span>Valor da parcela / pagamento</span><strong>{formatMoney(amountCents ?? 0)}</strong></div>
