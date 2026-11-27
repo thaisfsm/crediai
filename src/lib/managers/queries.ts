@@ -1,11 +1,12 @@
 import "server-only";
 import { and, asc, desc, eq, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { withManagerContext, withPlatformContext, withTenantContext } from "@/lib/auth/guards";
-import { accountManagerAdjustments, accountManagerPayoutItems, accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, tenants, users } from "@/lib/db/schema";
+import { accountManagerAdjustments, accountManagerCommissionPaid, accountManagerPayoutItems, accountManagerPayouts, accountManagers, clients, installmentDeferrals, loanOperations, loanRenewals, operationRequests, payments, tenants, users } from "@/lib/db/schema";
 import { todayIso } from "@/lib/finance/format";
 import { buildPortfolio, type DeferralRecord, type OperationView, type RenewalRecord } from "@/lib/finance/portfolio";
 import { toDeferralRecord, toOperationRecord, toPaymentRecord, toRenewalRecord } from "@/lib/finance/summaries";
-import { addPaid, allocateClosing, buildClosingReport, referencePeriod, sortPayouts, type ClosingLine, type ContractEarning } from "./closing-report";
+import { buildClosingReport, linesFromCommissionPaid, referencePeriod, unregisteredLine, type ClosingLine, type ClosingReversal, type ClosingSource } from "./closing-report";
+import { contractReceipts, contractsWithStatus, receiptsWithStatus, reversibleByRow, type CommissionPaidRow, type Receipt } from "./commission-paid";
 import { clientSituation, commissionOf, effectiveBps, managerCommission, type ClientSituation } from "./commission";
 
 // Lançamentos (débito/crédito) e fechamentos com o detalhe de cada um: o relatório de comissão mostra comissão, lançamentos e valor final.
@@ -96,13 +97,15 @@ export async function loadManagerCash(tx: Parameters<Parameters<typeof withTenan
   return managerCashOf(manager?.cashLimitCents ?? 0, operations, Number(reserved?.total ?? 0));
 }
 
-// Saldo de comissão de UM gerente, com a mesma conta da tela (comissão gerada sobre os juros recebidos − já pago). Usado pelo
-// pagamento da comissão para nunca pagar sem comissão gerada nem pagar de novo o que já foi pago.
+// Saldo de comissão de UM gerente, com a mesma conta da tela (comissão gerada sobre os juros recebidos − já pago − estornado) e os
+// recebimentos com a situação de cada um no controle CPG. Usado pelo fechamento para nunca pagar sem comissão nem pagar de novo.
 export async function loadManagerCommissionSummary(tx: Parameters<Parameters<typeof withTenantContext>[0]>[0], tenantId: string, managerId: string, managerBps: number) {
   const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, managerId);
-  const [paid] = await tx.select({ total: sql<string>`coalesce(sum(${accountManagerPayouts.amountCents}), 0)` }).from(accountManagerPayouts)
+  const payouts = await tx.select({ amountCents: accountManagerPayouts.amountCents }).from(accountManagerPayouts)
     .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, managerId)));
-  return managerCommission(commissionGroups(clientRows, operations, managerBps, overrideBps), Number(paid?.total ?? 0));
+  const rows = await loadCommissionPaid(tx, tenantId, managerId);
+  const summary = managerCommission(commissionGroups(clientRows, operations, managerBps, overrideBps), paidOutOf(payouts, rows));
+  return { ...summary, receipts: receiptsWithStatus(managerReceipts(clientRows, operations, managerBps, overrideBps), rows) };
 }
 
 export type ManagerOperationRow = {
@@ -121,17 +124,64 @@ export type ManagerClientCard = {
 // Percentual de cada contrato: o do contrato transferido, ou o do cliente (e, sem ele, o padrão do gerente).
 const operationBps = (operation: OperationView, clientBps: number | null, managerBps: number, overrideBps: Map<string, number>) => overrideBps.get(operation.id) ?? effectiveBps(clientBps, managerBps);
 
-// Grupos para a conta da comissão: um por cliente e percentual (contratos transferidos entram com o percentual do contrato).
+// Grupos para a conta da comissão: um por contrato (cada contrato com o seu percentual e o seu arredondamento, igual à soma dos
+// recebimentos no controle CPG). Cliente sem operação entra vazio (só para a comissão prevista ficar zero).
 function commissionGroups(clientRows: { id: string; bps: number | null }[], operations: OperationView[], managerBps: number, overrideBps: Map<string, number>) {
   return clientRows.flatMap((client) => {
-    const byBps = new Map<number, OperationView[]>();
-    for (const operation of operations.filter((row) => row.clientId === client.id)) {
-      const bps = operationBps(operation, client.bps, managerBps, overrideBps);
-      byBps.set(bps, [...(byBps.get(bps) ?? []), operation]);
-    }
-    return byBps.size === 0 ? [{ bps: effectiveBps(client.bps, managerBps), operations: [] as OperationView[] }] : [...byBps].map(([bps, own]) => ({ bps, operations: own }));
+    const own = operations.filter((row) => row.clientId === client.id);
+    return own.length === 0 ? [{ bps: effectiveBps(client.bps, managerBps), operations: [] as OperationView[] }]
+      : own.map((operation) => ({ bps: operationBps(operation, client.bps, managerBps, overrideBps), operations: [operation] }));
   });
 }
+
+// Recebimentos de juros de todos os contratos do gerente (cancelados ficam de fora, como no saldo), com a comissão de cada um.
+function managerReceipts(clientRows: { id: string; name: string; bps: number | null }[], operations: OperationView[], managerBps: number, overrideBps: Map<string, number>): Receipt[] {
+  const byId = new Map(clientRows.map((client) => [client.id, client]));
+  return operations.filter((operation) => operation.status !== "CANCELED" && byId.has(operation.clientId)).flatMap((operation) => {
+    const client = byId.get(operation.clientId)!;
+    return contractReceipts({
+      operationId: operation.id, clientId: client.id, clientName: client.name, operationCode: operation.code, loanDate: operation.loanDate,
+      principalCents: operation.principalCents, interestRateBps: Number(operation.interestRateBps), commissionBps: operationBps(operation, client.bps, managerBps, overrideBps),
+      interestPaidCents: operation.interestPaidCents,
+    }, operation.payments.map((payment) => ({ id: payment.id, paidAt: payment.paidAt, createdAt: payment.createdAt, interestCents: payment.interestCents })));
+  });
+}
+
+// Linhas do controle CPG (comissão paga por recebimento) do tenant, de um gerente ou de todos.
+async function loadCommissionPaid(tx: Tx, tenantId: string, managerId?: string): Promise<(CommissionPaidRow & { managerId: string })[]> {
+  const rows = await tx.select().from(accountManagerCommissionPaid)
+    .where(and(eq(accountManagerCommissionPaid.tenantId, tenantId), managerId ? eq(accountManagerCommissionPaid.managerId, managerId) : undefined))
+    .orderBy(asc(accountManagerCommissionPaid.createdAt), asc(accountManagerCommissionPaid.receiptPaidOn), asc(accountManagerCommissionPaid.id));
+  return rows.map((row) => ({
+    id: row.id, managerId: row.managerId, payoutId: row.payoutId, kind: row.kind === "REVERSAL" ? "REVERSAL" : "PAID", reversesId: row.reversesId, paymentId: row.paymentId, operationId: row.operationId,
+    clientId: row.clientId, clientName: row.clientName, operationCode: row.operationCode, loanDate: row.loanDate, principalCents: row.principalCents, interestRateBps: Number(row.interestRateBps),
+    commissionBps: row.commissionBps, receiptPaidOn: row.receiptPaidOn, interestCents: row.interestCents, commissionDueCents: row.commissionDueCents, commissionCents: row.commissionCents,
+    source: row.source === "HISTORICAL" ? "HISTORICAL" : "CLOSING", reason: row.reason, createdAt: row.createdAt.toISOString(),
+  }));
+}
+const reversedCentsOf = (rows: Pick<CommissionPaidRow, "kind" | "commissionCents">[]) => rows.filter((row) => row.kind === "REVERSAL").reduce((total, row) => total + row.commissionCents, 0);
+// Já pago ao gerente = comissão dos fechamentos − estornos.
+const paidOutOf = (payouts: { amountCents: number }[], rows: Pick<CommissionPaidRow, "kind" | "commissionCents">[]) => payouts.reduce((total, payout) => total + payout.amountCents, 0) - reversedCentsOf(rows);
+
+// Composição de um fechamento: CPG (recebimentos pagos nele), o detalhamento por contrato gravado (versão anterior) ou nenhuma.
+type ItemRow = typeof accountManagerPayoutItems.$inferSelect;
+function payoutComposition(payout: { id: string; amountCents: number }, rows: CommissionPaidRow[], items: ItemRow[]): { source: ClosingSource; lines: ClosingLine[]; historical: { recordedAt: string; reason: string } | null } {
+  const paid = rows.filter((row) => row.payoutId === payout.id && row.kind === "PAID");
+  if (paid.length > 0) {
+    const historical = paid.find((row) => row.source === "HISTORICAL");
+    return { source: "CPG", lines: linesFromCommissionPaid(rows, payout.id), historical: historical ? { recordedAt: historical.createdAt, reason: historical.reason ?? "" } : null };
+  }
+  const own = items.filter((item) => item.payoutId === payout.id);
+  if (own.length > 0) {
+    return { source: "SNAPSHOT", historical: null, lines: own.map((item) => ({
+      operationId: item.operationId, clientId: item.clientId, clientName: item.clientName, operationCode: item.operationCode, loanDate: item.loanDate,
+      principalCents: item.principalCents, interestRateBps: Number(item.interestRateBps), commissionBps: item.commissionBps, interestReceivedCents: item.interestReceivedCents, commissionCents: item.commissionCents,
+    })) };
+  }
+  return { source: "UNREGISTERED", historical: null, lines: [unregisteredLine(payout.amountCents)] };
+}
+const reversalsOf = (rows: CommissionPaidRow[], payoutId: string): ClosingReversal[] => rows.filter((row) => row.payoutId === payoutId && row.kind === "REVERSAL")
+  .map((row) => ({ clientName: row.clientName, operationCode: row.operationCode, receiptPaidOn: row.receiptPaidOn, amountCents: row.commissionCents, reason: row.reason ?? "", createdAt: row.createdAt }));
 
 function clientCards(clientRows: { id: string; name: string; bps: number | null }[], operations: OperationView[], managerBps: number, overrideBps: Map<string, number>): ManagerClientCard[] {
   return clientRows.map((client) => {
@@ -166,9 +216,10 @@ export async function loadManagerPanel() {
     const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, manager.id);
     const { payouts: payoutRows, adjustments } = await loadPayoutsAndAdjustments(tx, tenantId, manager.id);
     const cash = await loadManagerCash(tx, tenantId, manager.id);
-    return { manager, userId: session.user.id, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, adjustments, cash };
+    const commissionPaid = await loadCommissionPaid(tx, tenantId, manager.id);
+    return { manager, userId: session.user.id, userName: session.user.name, clientRows, operations, overrideBps, payoutRows, adjustments, cash, commissionPaid };
   });
-  const paidOutCents = data.payoutRows.reduce((total, payout) => total + payout.amountCents, 0);
+  const paidOutCents = paidOutOf(data.payoutRows, data.commissionPaid);
   const summary = managerCommission(commissionGroups(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), paidOutCents);
   const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps);
   const live = data.operations.filter((operation) => operation.status !== "CANCELED");
@@ -208,6 +259,8 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
       .leftJoin(users, and(eq(users.id, accountManagers.userId), eq(users.tenantId, tenantId)))
       .where(eq(accountManagers.tenantId, tenantId)).orderBy(asc(accountManagers.name));
     const { payouts: payoutRows, adjustments } = await loadPayoutsAndAdjustments(tx, tenantId);
+    const commissionPaid = await loadCommissionPaid(tx, tenantId);
+    const items = await tx.select().from(accountManagerPayoutItems).where(eq(accountManagerPayoutItems.tenantId, tenantId));
     const unassigned = await tx.select({ id: clients.id, name: clients.name }).from(clients)
       .where(and(eq(clients.tenantId, tenantId), isNull(clients.accountManagerId), isNull(clients.archivedAt))).orderBy(asc(clients.name));
     const reservedRows = await tx.select({ managerId: operationRequests.managerId, total: sql<string>`coalesce(sum(${operationRequests.principalCents}), 0)` }).from(operationRequests)
@@ -215,21 +268,31 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
     const reservedBy = new Map(reservedRows.map((row) => [row.managerId, Number(row.total)]));
     const perManager = [];
     for (const manager of managerRows) perManager.push({ manager, ...(await loadManagerOperations(tx, tenantId, manager.id)) });
-    return { perManager, payoutRows, adjustments, unassigned, reservedBy };
+    return { perManager, payoutRows, adjustments, unassigned, reservedBy, commissionPaid, items };
   })();
   return {
     today: todayIso(),
     unassigned: data.unassigned,
     managers: data.perManager.map(({ manager, clientRows, operations, overrideBps }) => {
-      const payouts = data.payoutRows.filter((payout) => payout.managerId === manager.id);
-      const paidOutCents = payouts.reduce((total, payout) => total + payout.amountCents, 0);
+      const rows = data.commissionPaid.filter((row) => row.managerId === manager.id);
+      const reversible = reversibleByRow(rows);
+      // Cada fechamento com a composição dele (contratos e comissão de cada um) e os estornos ligados a ele.
+      const payouts = data.payoutRows.filter((payout) => payout.managerId === manager.id).map((payout) => {
+        const composition = payoutComposition(payout, rows, data.items);
+        return { ...payout, source: composition.source, historical: composition.historical, lines: composition.lines, reversals: reversalsOf(rows, payout.id), reversedCents: reversedCentsOf(rows.filter((row) => row.payoutId === payout.id)) };
+      });
+      const paidOutCents = paidOutOf(payouts, rows);
+      const receipts = receiptsWithStatus(managerReceipts(clientRows, operations, manager.commissionBps, overrideBps), rows);
+      const paidOn = new Map(payouts.map((payout) => [payout.id, payout.paidOn]));
+      // Histórico CPG: cada pagamento de comissão por recebimento e cada estorno, com o que ainda pode ser estornado.
+      const history = rows.map((row) => ({ ...row, payoutPaidOn: paidOn.get(row.payoutId) ?? null, reversibleCents: row.kind === "PAID" ? Math.max(0, reversible.get(row.id) ?? 0) : 0 }));
       const summary = managerCommission(commissionGroups(clientRows, operations, manager.commissionBps, overrideBps), paidOutCents);
       const cards = clientCards(clientRows, operations, manager.commissionBps, overrideBps);
       const adjustments = data.adjustments.filter((item) => item.managerId === manager.id);
       return {
         id: manager.id, name: manager.name, email: manager.email, active: manager.active, commissionBps: manager.commissionBps,
         hasLogin: Boolean(manager.userId), loginActive: manager.loginActive ?? false, mustChangePassword: manager.mustChangePassword ?? false, lastLoginAt: manager.lastLoginAt?.toISOString() ?? null,
-        summary, payouts, adjustments, pending: pendingTotals(adjustments), cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
+        summary, payouts, adjustments, pending: pendingTotals(adjustments), contracts: contractsWithStatus(receipts), commissionHistory: history, cash: managerCashOf(manager.cashLimitCents, operations, data.reservedBy.get(manager.id) ?? 0),
         clients: cards.map((card) => ({ id: card.id, name: card.name, situation: card.situation, commissionBps: card.commissionBps, customBps: clientRows.find((client) => client.id === card.id)?.bps ?? null, interestReceivedCents: card.interestReceivedCents, commissionCents: card.commissionCents, contracts: card.operations })),
       };
     }),
@@ -238,79 +301,28 @@ export async function loadManagersData(tx: Parameters<Parameters<typeof withTena
 export type ManagersPage = Awaited<ReturnType<typeof loadManagersData>>;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-// Relatório de cada fechamento (PDF). Contratos do gerente com a base da comissão (juros recebidos até `asOf`, ou até hoje) e o mesmo
-// percentual que a tela usa (o do contrato transferido, o do cliente ou o padrão do gerente). Cancelados ficam de fora, como no saldo.
-async function contractEarnings(tx: Tx, tenantId: string, managerId: string, managerBps: number, asOf?: string): Promise<ContractEarning[]> {
-  const { clientRows, operations, overrideBps } = await loadManagerOperations(tx, tenantId, managerId, asOf);
-  const byId = new Map(clientRows.map((client) => [client.id, client]));
-  return operations.filter((operation) => operation.status !== "CANCELED" && byId.has(operation.clientId)).map((operation) => {
-    const client = byId.get(operation.clientId)!;
-    return {
-      operationId: operation.id, clientId: client.id, clientName: client.name, operationCode: operation.code, loanDate: operation.loanDate,
-      principalCents: operation.principalCents, interestRateBps: Number(operation.interestRateBps), commissionBps: operationBps(operation, client.bps, managerBps, overrideBps),
-      interestReceivedCents: operation.interestPaidCents,
-    };
-  });
-}
-
-// Linhas de cada fechamento do gerente, em ordem: as gravadas no fechamento (a partir desta versão) ou, nos anteriores, reconstituídas
-// com os recebimentos até a data dele, descontando o que os fechamentos anteriores já atribuíram a cada contrato. `stopAt` para no
-// fechamento pedido. Devolve também quanto cada contrato já recebeu de comissão (para repartir o próximo fechamento).
-export type LedgerEntry = { lines: ClosingLine[]; source: "SNAPSHOT" | "RECONSTRUCTED" };
-async function payoutLedger(tx: Tx, tenantId: string, managerId: string, managerBps: number, stopAt?: string) {
-  const payoutRows = await tx.select({ id: accountManagerPayouts.id, paidOn: accountManagerPayouts.paidOn, createdAt: accountManagerPayouts.createdAt, amountCents: accountManagerPayouts.amountCents })
-    .from(accountManagerPayouts).where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, managerId)));
-  const itemRows = await tx.select().from(accountManagerPayoutItems)
-    .where(and(eq(accountManagerPayoutItems.tenantId, tenantId), eq(accountManagerPayoutItems.managerId, managerId)));
-  const ordered = sortPayouts(payoutRows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })));
-  const paid = new Map<string, number>();
-  const entries = new Map<string, LedgerEntry>();
-  const earningsByDate = new Map<string, ContractEarning[]>();
-  for (const payout of ordered) {
-    const own = itemRows.filter((item) => item.payoutId === payout.id);
-    let entry: LedgerEntry;
-    if (own.length > 0) {
-      entry = { source: "SNAPSHOT", lines: own.map((item) => ({
-        operationId: item.operationId, clientId: item.clientId, clientName: item.clientName, operationCode: item.operationCode, loanDate: item.loanDate,
-        principalCents: item.principalCents, interestRateBps: Number(item.interestRateBps), commissionBps: item.commissionBps, interestReceivedCents: item.interestReceivedCents, commissionCents: item.commissionCents,
-      })) };
-    } else {
-      if (!earningsByDate.has(payout.paidOn)) earningsByDate.set(payout.paidOn, await contractEarnings(tx, tenantId, managerId, managerBps, payout.paidOn));
-      entry = { source: "RECONSTRUCTED", lines: allocateClosing(payout.amountCents, earningsByDate.get(payout.paidOn)!, paid) };
-    }
-    addPaid(paid, entry.lines);
-    entries.set(payout.id, entry);
-    if (payout.id === stopAt) break;
-  }
-  return { ordered, paid, entries };
-}
-
-// Detalhamento que o fechamento NOVO grava junto com ele: a comissão fechada repartida entre os contratos com comissão a pagar agora
-// (primeiro os clientes marcados na conferência), descontado o que cada contrato já recebeu nos fechamentos anteriores.
-export async function closingLinesForNewPayout(tx: Tx, tenantId: string, managerId: string, managerBps: number, amountCents: number, priorityClientIds: Set<string> | null) {
-  const { paid } = await payoutLedger(tx, tenantId, managerId, managerBps);
-  return allocateClosing(amountCents, await contractEarnings(tx, tenantId, managerId, managerBps), paid, priorityClientIds);
-}
-
-// Relatório de UM fechamento, só se ele for do tenant de quem pede (o id de outra carteira devolve null). Só leitura.
+// Relatório de UM fechamento, só se ele for do tenant de quem pede (o id de outra carteira devolve null). Só leitura. As linhas são as
+// GRAVADAS (CPG ou detalhamento); fechamento sem composição registrada mostra só o valor, sem repartir entre contratos.
 export async function loadClosingReport(tx: Tx, tenantId: string, payoutId: string, generatedAt = new Date()) {
   const [payout] = await tx.select().from(accountManagerPayouts).where(and(eq(accountManagerPayouts.id, payoutId), eq(accountManagerPayouts.tenantId, tenantId)));
   if (!payout) return null;
-  const [manager] = await tx.select({ id: accountManagers.id, name: accountManagers.name, commissionBps: accountManagers.commissionBps }).from(accountManagers)
+  const [manager] = await tx.select({ id: accountManagers.id, name: accountManagers.name }).from(accountManagers)
     .where(and(eq(accountManagers.id, payout.managerId), eq(accountManagers.tenantId, tenantId)));
   if (!manager) return null;
   const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
-  const ledger = await payoutLedger(tx, tenantId, manager.id, manager.commissionBps, payout.id);
-  const entry = ledger.entries.get(payout.id)!;
+  const rows = await loadCommissionPaid(tx, tenantId, manager.id);
+  const items = await tx.select().from(accountManagerPayoutItems).where(and(eq(accountManagerPayoutItems.tenantId, tenantId), eq(accountManagerPayoutItems.payoutId, payout.id)));
+  const composition = payoutComposition(payout, rows, items);
   const adjustments = await tx.select({ kind: accountManagerAdjustments.kind, description: accountManagerAdjustments.description, amountCents: accountManagerAdjustments.amountCents, entryDate: accountManagerAdjustments.entryDate })
     .from(accountManagerAdjustments).where(and(eq(accountManagerAdjustments.tenantId, tenantId), eq(accountManagerAdjustments.payoutId, payout.id)))
     .orderBy(asc(accountManagerAdjustments.entryDate), asc(accountManagerAdjustments.createdAt));
-  const allPayouts = ledger.ordered.length === 0 ? [] : (await tx.select({ id: accountManagerPayouts.id, paidOn: accountManagerPayouts.paidOn, createdAt: accountManagerPayouts.createdAt }).from(accountManagerPayouts)
+  const allPayouts = (await tx.select({ id: accountManagerPayouts.id, paidOn: accountManagerPayouts.paidOn, createdAt: accountManagerPayouts.createdAt }).from(accountManagerPayouts)
     .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id)))).map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
   return buildClosingReport({
     tenantName: tenant?.name ?? "Carteira", managerName: manager.name,
     payout: { id: payout.id, paidOn: payout.paidOn, createdAt: payout.createdAt.toISOString(), amountCents: payout.amountCents, debitCents: payout.debitCents, creditCents: payout.creditCents, notes: payout.notes },
-    period: referencePeriod(allPayouts, payout.id)!, lines: entry.lines, source: entry.source, generatedAt,
+    period: referencePeriod(allPayouts, payout.id)!, lines: composition.lines, source: composition.source, historical: composition.historical, generatedAt,
+    reversals: reversalsOf(rows, payout.id),
     adjustments: adjustments.map((item) => ({ ...item, kind: item.kind === "CREDIT" ? "CREDIT" : "DEBIT" })),
   });
 }

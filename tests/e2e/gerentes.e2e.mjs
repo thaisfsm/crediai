@@ -128,14 +128,14 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   await region.getByText("Relatório dos fechamentos").waitFor();
   assert.equal(await region.getByLabel("Comissão deste fechamento (R$)").inputValue(), "30,00", "sugestão = comissão gerada (Ana 10,00 + Carla 20,00)");
   // Só entram os clientes/contratos com comissão gerada: o Beto (sem juros recebidos, comissão R$ 0) não aparece nem é marcado.
-  assert.equal(await region.getByLabel("Incluir Beto Indicado no pagamento").count(), 0, "cliente sem comissão gerada fora da conferência");
+  assert.equal(await region.getByLabel(new RegExp("^Incluir Beto Indicado #OP-\\w+ no pagamento$")).count(), 0, "cliente sem comissão gerada fora da conferência");
   assert.equal(await region.locator(".payout-review").getByText("Beto Indicado").count(), 0);
-  assert.equal(await region.getByLabel("Incluir Ana Indicada no pagamento").isChecked(), true);
-  await region.getByLabel("Incluir Carla Indicada no pagamento").uncheck();
+  assert.equal(await region.getByLabel(new RegExp("^Incluir Ana Indicada #OP-\\w+ no pagamento$")).isChecked(), true);
+  await region.getByLabel(new RegExp("^Incluir Carla Indicada #OP-\\w+ no pagamento$")).uncheck();
   await poll(`select 1`, 1);
   await owner.waitForTimeout(300);
   assert.equal(await region.getByLabel("Comissão deste fechamento (R$)").inputValue(), "10,00", "sem a Carla a sugestão cai para 10,00");
-  await region.getByLabel("Incluir Carla Indicada no pagamento").check();
+  await region.getByLabel(new RegExp("^Incluir Carla Indicada #OP-\\w+ no pagamento$")).check();
   await region.getByLabel("Comissão deste fechamento (R$)").fill("10,00");
   await region.getByRole("button", { name: "Registrar pagamento da comissão" }).click();
   await poll(`select coalesce(sum(amount_cents),0) from account_manager_payout where tenant_id='ten_roberio'`, 1000);

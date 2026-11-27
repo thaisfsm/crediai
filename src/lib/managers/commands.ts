@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAdminAudit, type AuditActor } from "@/lib/admin/audit";
 import type { TenantTransaction } from "@/lib/auth/guards";
-import { accountManagerAdjustments, accountManagerPayoutItems, accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
+import { accountManagerAdjustments, accountManagerCommissionPaid, accountManagerPayoutItems, accountManagerPayouts, accountManagers, accounts, clients, loanOperations, sessions, tenants, users } from "@/lib/db/schema";
 import { formatMoney, parseMoneyToCents, parseRateToBps, todayIso } from "@/lib/finance/format";
 import { closingTotals, type AdjustmentKind } from "./commission";
-import { closingLinesForNewPayout, loadManagerCommissionSummary } from "./queries";
+import { allocatePayout } from "./commission-paid";
+import { loadManagerCommissionSummary } from "./queries";
 
 // Regras de gravação dos gerentes de contas, usadas pelo dono da carteira (/gerentes, withTenantContext) e pelo MASTER
 // (/admin/clientes/[id]/gerentes, withPlatformContext). Cada função recebe o tenant EXPLÍCITO e filtra tenant_id em toda consulta;
@@ -250,13 +251,36 @@ export async function registerPayout(tx: TenantTransaction, tenantId: string, ac
   if (totals.finalCents < 0) {
     return { ok: false, error: `Os débitos (${formatMoney(totals.debitCents)}) passam da comissão mais os créditos (${formatMoney(cents + totals.creditCents)}). O valor final não pode ficar negativo.` };
   }
-  // Detalhamento por contrato gravado junto (relatório em PDF): a comissão fechada repartida entre os contratos com comissão a pagar,
-  // primeiro os clientes marcados na conferência. Soma exatamente o valor fechado (o banco confere no fim da transação).
-  const priority = data.has("includedClientIds") ? new Set(text(data, "includedClientIds", 8000).split(",").filter(Boolean)) : null;
-  const lines = await closingLinesForNewPayout(tx, tenantId, manager.id, manager.commissionBps, cents, priority);
+  // Composição (controle CPG): os recebimentos de juros pagos neste fechamento, dos contratos marcados na conferência (todos, se a tela
+  // não mandar), do mais antigo para o mais recente; valor menor que o pendente = pagamento parcial. Nunca paga de novo o que já foi pago.
+  const marked = data.has("includedOperationIds") ? new Set(text(data, "includedOperationIds", 20000).split(",").filter(Boolean))
+    : data.has("includedClientIds") ? new Set(summary.receipts.filter((receipt) => text(data, "includedClientIds", 8000).split(",").includes(receipt.clientId)).map((receipt) => receipt.operationId))
+    : null;
+  if (marked && marked.size === 0) return { ok: false, error: "Marque pelo menos um contrato com comissão pendente." };
+  const allocation = allocatePayout(cents, summary.receipts, marked);
+  if (!allocation.ok) {
+    return { ok: false, error: allocation.availableCents <= 0 ? "Os contratos marcados não têm comissão pendente (já foi paga). Nada a pagar."
+      : `O valor passa da comissão pendente dos contratos marcados (${formatMoney(allocation.availableCents)}). Confira o valor ou marque outros contratos.` };
+  }
   const payoutId = id("mgp");
   await tx.insert(accountManagerPayouts).values({ id: payoutId, tenantId, managerId: manager.id, amountCents: cents, paidOn, notes, createdByUserId: actor.user.id, debitCents: totals.debitCents, creditCents: totals.creditCents });
-  await tx.insert(accountManagerPayoutItems).values(lines.map((line) => ({ id: id("mgi"), tenantId, managerId: manager.id, payoutId, ...line, clientName: line.clientName.trim() || "Cliente" })));
+  await tx.insert(accountManagerCommissionPaid).values(allocation.lines.map((line) => ({
+    id: id("cpg"), tenantId, managerId: manager.id, payoutId, kind: "PAID", reversesId: null, operationId: line.operationId, paymentId: line.paymentId,
+    clientId: line.clientId, clientName: line.clientName.trim() || "Cliente", operationCode: line.operationCode, loanDate: line.loanDate, principalCents: line.principalCents,
+    interestRateBps: line.interestRateBps, commissionBps: line.commissionBps, receiptPaidOn: line.paidOn, interestCents: line.interestCents,
+    commissionDueCents: line.commissionDueCents, commissionCents: line.payCents, source: "CLOSING", reason: null, createdByUserId: actor.user.id,
+  })));
+  // Detalhamento por contrato (o mesmo do CPG, somado por contrato), como nas versões anteriores do relatório.
+  const byOperation = new Map<string, (typeof allocation.lines)[number] & { interestSum: number; paySum: number }>();
+  for (const line of allocation.lines) {
+    const current = byOperation.get(line.operationId);
+    byOperation.set(line.operationId, current ? { ...current, interestSum: current.interestSum + line.interestCents, paySum: current.paySum + line.payCents } : { ...line, interestSum: line.interestCents, paySum: line.payCents });
+  }
+  await tx.insert(accountManagerPayoutItems).values([...byOperation.values()].map((line) => ({
+    id: id("mgi"), tenantId, managerId: manager.id, payoutId, operationId: line.operationId, clientId: line.clientId, clientName: line.clientName.trim() || "Cliente",
+    operationCode: line.operationCode, loanDate: line.loanDate, principalCents: line.principalCents, interestRateBps: line.interestRateBps, commissionBps: line.commissionBps,
+    interestReceivedCents: line.interestSum, commissionCents: line.paySum,
+  })));
   if (pending.length > 0) {
     // Só os que ainda estão pendentes (payout_id nulo): um lançamento nunca é aplicado duas vezes.
     const applied = await tx.update(accountManagerAdjustments).set({ payoutId, appliedAt: sql`now()` })
@@ -272,7 +296,8 @@ export async function registerPayout(tx: TenantTransaction, tenantId: string, ac
     action: "MANAGER_COMMISSION_PAID", entity: "account_manager_payout", entityId: payoutId, tenantId, tenantName: await tenantName(tx, tenantId),
     description: applied === 0 ? `Comissão de ${formatMoney(cents)} paga a ${manager.name} em ${paidOn}.`
       : `Fechamento de ${manager.name} em ${paidOn}: comissão ${formatMoney(cents)} − débitos ${formatMoney(totals.debitCents)} + créditos ${formatMoney(totals.creditCents)} = ${formatMoney(totals.finalCents)} pago (${applied} lançamento(s) aplicado(s)).`,
-    after: { managerId: manager.id, amountCents: cents, paidOn, debitCents: totals.debitCents, creditCents: totals.creditCents, finalCents: totals.finalCents, adjustmentsApplied: applied, contractsInReport: lines.filter((line) => line.operationId).length },
+    after: { managerId: manager.id, amountCents: cents, paidOn, debitCents: totals.debitCents, creditCents: totals.creditCents, finalCents: totals.finalCents, adjustmentsApplied: applied, contractsInReport: byOperation.size,
+      composition: allocation.lines.map((line) => ({ operationCode: line.operationCode, clientName: line.clientName, paymentId: line.paymentId, receiptPaidOn: line.paidOn, interestCents: line.interestCents, commissionBps: line.commissionBps, commissionCents: line.payCents, partial: line.payCents < line.pendingCents })) },
   });
   return { ok: true, message: applied === 0 ? `Pagamento de ${formatMoney(cents)} registrado para ${manager.name}.`
     : `Fechamento registrado para ${manager.name}: comissão ${formatMoney(cents)}, ${applied} lançamento(s) aplicado(s), valor final ${formatMoney(totals.finalCents)}.` };
@@ -341,4 +366,89 @@ export async function deleteManager(tx: TenantTransaction, tenantId: string, act
     before: { name: manager.name, email: manager.email, commissionBps: manager.commissionBps, hadAccess: Boolean(manager.userId) }, after: { clientsUnlinked: unlinked.length, operationsReturned: returned.length },
   });
   return { ok: true, message: `Gerente ${manager.name} excluído.` };
+}
+
+// Estorno de comissão paga (CPG): devolve parte ou tudo do que foi pago de UM recebimento num fechamento (ex.: o gerente devolveu, ou o
+// pagamento foi feito por engano). O fechamento original não muda (histórico); a linha de estorno fica ligada a ele e o recebimento volta
+// a ficar pendente nesse valor, podendo ser pago de novo num próximo fechamento. Motivo obrigatório; auditado.
+export async function reverseCommissionPaid(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const rowId = text(data, "commissionPaidId", 80);
+  const reason = text(data, "reason", 300);
+  const typed = text(data, "amount", 20);
+  if (!reason) return { ok: false, error: "Informe o motivo do estorno." };
+  const [row] = await tx.select().from(accountManagerCommissionPaid).where(and(eq(accountManagerCommissionPaid.id, rowId), eq(accountManagerCommissionPaid.tenantId, tenantId)));
+  if (!row || row.kind !== "PAID") return { ok: false, error: "Comissão paga não encontrada nesta carteira." };
+  const manager = await ownManager(tx, tenantId, row.managerId);
+  if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  await tx.execute(sql`select 1 from ${accountManagers} where ${accountManagers.id} = ${manager.id} and ${accountManagers.tenantId} = ${tenantId} for update`);
+  const [reversed] = await tx.select({ total: sql<string>`coalesce(sum(${accountManagerCommissionPaid.commissionCents}), 0)` }).from(accountManagerCommissionPaid)
+    .where(and(eq(accountManagerCommissionPaid.tenantId, tenantId), eq(accountManagerCommissionPaid.reversesId, row.id), eq(accountManagerCommissionPaid.kind, "REVERSAL")));
+  const leftCents = row.commissionCents - Number(reversed?.total ?? 0);
+  if (leftCents <= 0) return { ok: false, error: "Esta comissão já foi totalmente estornada." };
+  const cents = typed ? parseMoneyToCents(typed) : leftCents;
+  if (cents === null || cents <= 0) return { ok: false, error: "Informe o valor do estorno, maior que zero." };
+  if (cents > leftCents) return { ok: false, error: `O estorno passa do que resta desta comissão paga (${formatMoney(leftCents)}).` };
+  const reversalId = id("cpg");
+  await tx.insert(accountManagerCommissionPaid).values({
+    id: reversalId, tenantId, managerId: row.managerId, payoutId: row.payoutId, kind: "REVERSAL", reversesId: row.id, operationId: row.operationId, paymentId: row.paymentId,
+    clientId: row.clientId, clientName: row.clientName, operationCode: row.operationCode, loanDate: row.loanDate, principalCents: row.principalCents, interestRateBps: row.interestRateBps,
+    commissionBps: row.commissionBps, receiptPaidOn: row.receiptPaidOn, interestCents: row.interestCents, commissionDueCents: row.commissionDueCents, commissionCents: cents,
+    source: row.source === "HISTORICAL" ? "HISTORICAL" : "CLOSING", reason, createdByUserId: actor.user.id,
+  });
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_COMMISSION_REVERSED", entity: "account_manager_payout", entityId: row.payoutId, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Estorno de ${formatMoney(cents)} da comissão paga a ${manager.name} (#${row.operationCode ?? "?"} · ${row.clientName}, recebimento de ${row.receiptPaidOn}). Motivo: ${reason}`,
+    before: { commissionPaidId: row.id, commissionCents: row.commissionCents, alreadyReversedCents: row.commissionCents - leftCents },
+    after: { reversalId, managerId: row.managerId, payoutId: row.payoutId, paymentId: row.paymentId, operationId: row.operationId, amountCents: cents, reason },
+  });
+  return { ok: true, message: `Estorno de ${formatMoney(cents)} registrado. Esse valor volta a ficar pendente para ${manager.name}.` };
+}
+
+// Composição histórica de um fechamento ANTIGO (anterior ao controle por contrato, sem composição registrada): a responsável confirma
+// quais recebimentos foram pagos nele e quanto de cada um. Só o MASTER registra (ação da administração). O fechamento não muda (valor,
+// data, lançamentos); as linhas entram como CPG de origem HISTORICAL, com o motivo, e precisam somar exatamente o valor gravado nele.
+// Uma vez só por fechamento (o banco também confere). `entries` = "paymentId:centavos,paymentId:centavos".
+export async function recordHistoricalComposition(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+  const payoutId = text(data, "payoutId", 80);
+  const reason = text(data, "reason", 300);
+  if (!reason) return { ok: false, error: "Informe o motivo/confirmação da composição histórica." };
+  const entries = text(data, "entries", 8000).split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
+    const [paymentId, cents] = item.split(":");
+    return { paymentId: paymentId ?? "", cents: Number(cents) };
+  });
+  if (entries.length === 0 || entries.some((entry) => !entry.paymentId || !Number.isInteger(entry.cents) || entry.cents <= 0)) return { ok: false, error: "Informe os recebimentos e valores da composição." };
+  if (new Set(entries.map((entry) => entry.paymentId)).size !== entries.length) return { ok: false, error: "Cada recebimento entra uma vez só na composição." };
+  const [payout] = await tx.select().from(accountManagerPayouts).where(and(eq(accountManagerPayouts.id, payoutId), eq(accountManagerPayouts.tenantId, tenantId)));
+  if (!payout) return { ok: false, error: "Fechamento não encontrado nesta carteira." };
+  const manager = await ownManager(tx, tenantId, payout.managerId);
+  if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  await tx.execute(sql`select 1 from ${accountManagers} where ${accountManagers.id} = ${manager.id} and ${accountManagers.tenantId} = ${tenantId} for update`);
+  const [existing] = await tx.select({ total: sql<string>`count(*)` }).from(accountManagerCommissionPaid)
+    .where(and(eq(accountManagerCommissionPaid.tenantId, tenantId), eq(accountManagerCommissionPaid.payoutId, payout.id), eq(accountManagerCommissionPaid.kind, "PAID")));
+  const [items] = await tx.select({ total: sql<string>`count(*)` }).from(accountManagerPayoutItems).where(and(eq(accountManagerPayoutItems.tenantId, tenantId), eq(accountManagerPayoutItems.payoutId, payout.id)));
+  if (Number(existing?.total ?? 0) > 0 || Number(items?.total ?? 0) > 0) return { ok: false, error: "Este fechamento já tem composição registrada." };
+  const total = entries.reduce((sum, entry) => sum + entry.cents, 0);
+  if (total !== payout.amountCents) return { ok: false, error: `A composição soma ${formatMoney(total)} e o fechamento gravado é de ${formatMoney(payout.amountCents)}.` };
+  const summary = await loadManagerCommissionSummary(tx, tenantId, manager.id, manager.commissionBps);
+  const lines = [];
+  for (const entry of entries) {
+    const receipt = summary.receipts.find((item) => item.paymentId === entry.paymentId);
+    if (!receipt) return { ok: false, error: `Recebimento ${entry.paymentId} não é de um contrato deste gerente.` };
+    if (receipt.paidOn > payout.paidOn) return { ok: false, error: `O recebimento de ${receipt.clientName} é posterior ao fechamento.` };
+    if (entry.cents > receipt.pendingCents) return { ok: false, error: `O valor de ${receipt.clientName} passa da comissão pendente desse recebimento (${formatMoney(receipt.pendingCents)}).` };
+    lines.push({ receipt, cents: entry.cents });
+  }
+  await tx.insert(accountManagerCommissionPaid).values(lines.map(({ receipt, cents }) => ({
+    id: id("cpg"), tenantId, managerId: manager.id, payoutId: payout.id, kind: "PAID", reversesId: null, operationId: receipt.operationId, paymentId: receipt.paymentId,
+    clientId: receipt.clientId, clientName: receipt.clientName.trim() || "Cliente", operationCode: receipt.operationCode, loanDate: receipt.loanDate, principalCents: receipt.principalCents,
+    interestRateBps: receipt.interestRateBps, commissionBps: receipt.commissionBps, receiptPaidOn: receipt.paidOn, interestCents: receipt.interestCents,
+    commissionDueCents: receipt.commissionDueCents, commissionCents: cents, source: "HISTORICAL", reason, createdByUserId: actor.user.id,
+  })));
+  await recordAdminAudit(tx, actor, {
+    action: "MANAGER_COMMISSION_COMPOSITION_RECORDED", entity: "account_manager_payout", entityId: payout.id, tenantId, tenantName: await tenantName(tx, tenantId),
+    description: `Composição histórica do fechamento de ${manager.name} em ${payout.paidOn} (${formatMoney(payout.amountCents)}) registrada: ${lines.map(({ receipt, cents }) => `#${receipt.operationCode} ${receipt.clientName} ${formatMoney(cents)}`).join("; ")}. Motivo: ${reason}`,
+    before: { payoutId: payout.id, amountCents: payout.amountCents, composition: null },
+    after: { payoutId: payout.id, managerId: manager.id, amountCents: payout.amountCents, reason, composition: lines.map(({ receipt, cents }) => ({ operationId: receipt.operationId, operationCode: receipt.operationCode, clientName: receipt.clientName, paymentId: receipt.paymentId, receiptPaidOn: receipt.paidOn, interestCents: receipt.interestCents, commissionBps: receipt.commissionBps, commissionCents: cents })) },
+  });
+  return { ok: true, message: `Composição do fechamento de ${payout.paidOn} registrada (${lines.length} recebimento(s), ${formatMoney(total)}).` };
 }

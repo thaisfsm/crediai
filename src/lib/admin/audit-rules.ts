@@ -52,6 +52,8 @@ export const AUDIT_ACTIONS = {
   MANAGER_CLIENT_UNLINKED: "Cliente indicado desvinculado de gerente de contas",
   MANAGER_OPERATION_TRANSFERRED: "Contrato transferido para gerente de contas",
   MANAGER_COMMISSION_PAID: "Comissão paga a gerente de contas",
+  MANAGER_COMMISSION_REVERSED: "Estorno de comissão paga a gerente de contas",
+  MANAGER_COMMISSION_COMPOSITION_RECORDED: "Composição histórica de fechamento de comissão registrada",
   MANAGER_ADJUSTMENT_CREATED: "Lançamento no fechamento de comissão", MANAGER_ADJUSTMENT_DELETED: "Lançamento pendente de comissão excluído",
   MANAGER_ACCESS_CREATED: "Acesso de leitura criado para gerente de contas",
   MANAGER_PASSWORD_RESET: "Senha de gerente de contas redefinida",

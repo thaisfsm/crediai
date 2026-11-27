@@ -1446,3 +1446,9 @@ button { color:inherit; }
 .proposal-wizard .date-field { display: grid; gap: 7px; }
 .proposal-wizard .date-field > label { color: #bdcbd6; font-size: 11px; font-weight: 600; }
 .proposal-wizard .date-input input { width: 100%; min-height: 43px; padding: 0 40px 0 12px; border: 1px solid rgba(112,145,170,.22); border-radius: 9px; color: #f2f8fc; background-color: #07111f; }
+
+/* Controle CPG (comissão paga por contrato e recebimento) */
+.commission-control .segmented { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.link-button { background:none; border:0; padding:0; color:inherit; font:inherit; cursor:pointer; text-align:left; text-decoration:underline dotted; text-underline-offset:3px; }
+.muted-row { opacity:.6; }
+.payout-composition { display:grid; gap:8px; padding:6px 0; }

@@ -162,6 +162,9 @@ export async function renderClosingPdf(input: ClosingReport | ClosingPdfInput, f
     y -= ROW;
     for (const item of report.adjustments) summary(`${item.kind === "CREDIT" ? "Crédito" : "Débito"} no fechamento · ${item.description} (${dateBr(item.entryDate)})`, `${item.kind === "CREDIT" ? "+" : "−"} ${formatMoney(item.amountCents)}`, { color: item.kind === "CREDIT" ? GREEN : DANGER });
     summary(`Valor pago a ${report.managerName}`, formatMoney(report.totals.finalCents), { font: bold, color: NAVY });
+    // Estornos feitos depois (o fechamento não muda; o valor estornado voltou a ficar pendente).
+    for (const item of report.reversals) summary(`Estorno em ${dateBr(item.createdAt.slice(0, 10))} · ${item.operationCode ? `#${item.operationCode} - ` : ""}${item.clientName} · ${item.reason}`, `− ${formatMoney(item.amountCents)}`, { color: DANGER });
+    if (report.reversals.length > 0) summary("Comissão líquida após estornos", formatMoney(report.totals.commissionCents - report.totals.reversedCents), { font: bold });
     currentGroup = null;
     y -= 10;
   }
@@ -197,12 +200,13 @@ export async function renderClosingPdf(input: ClosingReport | ClosingPdfInput, f
   y -= 56;
 
   // Notas.
-  const reconstructed = doc.reports.some((report) => report.source === "RECONSTRUCTED");
+  const unregistered = doc.reports.some((report) => report.source === "UNREGISTERED");
+  const historical = doc.reports.filter((report) => report.historical);
   const notes = [
     "Comissão de cada contrato = juros efetivamente recebidos × % de comissão do gerente naquele contrato (percentual real gravado no fechamento, nunca uma taxa padrão). % efetivo de repasse = taxa de juros × % de comissão (ex.: 30% × 45% = 13,50%); com um período de juros recebido, a comissão é o valor emprestado × % efetivo (R$ 2.000,00 × 13,50% = R$ 270,00).",
-    reconstructed
-      ? "Fechamento registrado antes da gravação do detalhamento por contrato: a divisão por contrato foi reconstituída com os recebimentos registrados até a data do fechamento. O total é o valor gravado no fechamento."
-      : "Valores históricos gravados no momento do fechamento: mudanças posteriores nos contratos não alteram este relatório. Só aparecem os contratos que entraram no fechamento.",
+    "Valores históricos gravados no fechamento: só aparecem os contratos (e os recebimentos de juros) que foram pagos nele; mudanças posteriores nos contratos não alteram este relatório.",
+    ...historical.map((report) => `Composição${doc.reports.length > 1 ? ` do fechamento de ${report.managerName}` : ""} registrada em ${dateBr(report.historical!.recordedAt.slice(0, 10))} como reconstrução histórica confirmada pela responsável: ${report.historical!.reason}`),
+    ...(unregistered ? ["Fechamento registrado antes do controle por contrato e sem composição confirmada: o valor gravado aparece sem divisão por contrato (nada é estimado)."] : []),
     ...doc.reports.filter((report) => report.payout.notes).map((report) => `Observação do fechamento${doc.reports.length > 1 ? ` de ${report.managerName}` : ""}: ${report.payout.notes}`),
   ];
   for (const text of notes.flatMap((note) => wrap(note, italic, 7.5, WIDTH))) {
