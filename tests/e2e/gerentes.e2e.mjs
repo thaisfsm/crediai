@@ -94,7 +94,7 @@ test("preparação: clientes e operações fictícias do tenant A (indicados e u
   owner = await signIn("roberio@teste.local");
 });
 
-test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente), paga comissão e cria o acesso", async () => {
+test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente), paga comissão; só o MASTER cria o acesso", async () => {
   await owner.goto(`${BASE}/gerentes`);
   await owner.getByLabel("Nome", { exact: true }).first().fill("Gabrielle Teste");
   assert.equal(await owner.getByLabel("Comissão padrão (%)").count(), 0, "o cadastro do gerente não pede percentual: ele é digitado por cliente");
@@ -146,9 +146,20 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   const zero = await action(ownerApi, "registerManagerPayoutAction", { managerId, amount: "0,00", paidOn: TODAY });
   assert.equal(zero.result?.ok, false, "R$ 0 recusado");
   assert.equal(await one(`select count(*) from account_manager_payout where tenant_id='ten_roberio'`), 1, "só o pagamento confirmado foi gravado");
-  // Acesso de leitura com senha provisória mostrada uma vez.
+  // O dono operacional NÃO administra logins: a tela não mostra os controles e o servidor recusa a ação forjada.
   await owner.reload();
-  const region2 = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
+  const ownerRegion = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
+  await ownerRegion.getByText("administrado pelo MASTER").waitFor();
+  assert.equal(await ownerRegion.getByRole("button", { name: /Criar acesso de leitura|Nova senha/ }).count(), 0, "sem controles de acesso para o dono");
+  assert.equal(await ownerRegion.getByLabel("E-mail de acesso do gerente").count(), 0);
+  const forgedAccess = await action(ownerApi, "createManagerAccessAction", { managerId, email: EMAIL });
+  assert.equal(forgedAccess.result?.ok, false, "dono não cria acesso nem chamando a ação direto");
+  assert.match(String(forgedAccess.result?.error), /Somente o MASTER/);
+  assert.equal(await one(`select count(*) from "user" where email='${EMAIL}'`), 0, "nenhum usuário criado");
+  // Acesso de leitura criado pelo MASTER, na administração do cliente SaaS, com senha provisória mostrada uma vez.
+  const masterPage = await signIn("thais@teste.local");
+  await masterPage.goto(`${BASE}/admin/clientes/ten_roberio`);
+  const region2 = masterPage.locator("#gerentes").getByRole("region", { name: "Gerente Gabrielle Teste" });
   await region2.getByLabel("E-mail de acesso do gerente").fill(EMAIL);
   await region2.getByRole("button", { name: "Criar acesso de leitura" }).click();
   const note = region2.locator(".capital-note", { hasText: "Senha provisória" });
@@ -162,6 +173,31 @@ test("G1. dono cadastra o gerente, vincula clientes (comissão livre por cliente
   // O hash nunca vai para a auditoria e a senha provisória não aparece nos registros.
   assert.equal(await one(`select count(*) from admin_audit_log where action like 'MANAGER_%' and tenant_id='ten_roberio'`) >= 6, true);
   assert.equal(await one(`select count(*) from admin_audit_log where after::text like '%${tempPassword}%' or description like '%${tempPassword}%'`), 0);
+  assert.equal(await one(`select actor_email from admin_audit_log where action='MANAGER_ACCESS_CREATED' and tenant_id='ten_roberio'`), "thais@teste.local", "auditoria: o MASTER é o autor");
+  // Com o acesso criado, o dono também não redefine senha, não desativa e não exclui (revogar) o gerente.
+  const loginId = await one(`select id from "user" where email='${EMAIL}'`);
+  const reset = await action(ownerApi, "resetManagerPasswordAction", { managerId });
+  assert.equal(reset.result?.ok, false);
+  assert.match(String(reset.result?.error), /Somente o MASTER/);
+  const deactivate = await action(ownerApi, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "", active: "0" });
+  assert.equal(deactivate.result?.ok, false);
+  assert.match(String(deactivate.result?.error), /Somente o MASTER/);
+  const remove = await action(ownerApi, "deleteManagerAction", { managerId });
+  assert.equal(remove.result?.ok, false);
+  assert.match(String(remove.result?.error), /Somente o MASTER/);
+  assert.equal(await one(`select active::text||'/'||must_change_password::text||'/'||email from "user" where id='${loginId}'`), `true/true/${EMAIL}`, "login intacto");
+  assert.equal(await one(`select user_id from account_manager where id='${managerId}'`), loginId, "vínculo intacto");
+  assert.equal(await one(`select count(*) from admin_audit_log where action in ('MANAGER_PASSWORD_RESET','MANAGER_DELETED') and tenant_id='ten_roberio'`), 0);
+  // As informações operacionais continuam com o dono (nome, caixa), sem mexer na situação do acesso.
+  const operational = await action(ownerApi, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "", active: "1" });
+  assert.equal(operational.result?.ok, true, JSON.stringify(operational));
+  await owner.reload();
+  await ownerRegion.getByRole("button", { name: "Editar" }).click();
+  assert.equal(await ownerRegion.getByLabel("Situação").count(), 0, "o dono não vê ativar/desativar de gerente com acesso");
+  assert.equal(await ownerRegion.getByRole("button", { name: "Excluir", exact: true }).count(), 0, "o dono não vê excluir gerente com acesso");
+  if (SHOTS) await ownerRegion.screenshot({ path: `${SHOTS}/gerentes-dono-sem-controles-de-acesso.png` });
+  await ownerRegion.getByRole("button", { name: "Cancelar" }).click();
+  await masterPage.context().close();
   if (SHOTS) { await owner.reload(); await owner.getByRole("region", { name: "Gerente Gabrielle Teste" }).screenshot({ path: `${SHOTS}/gerentes-tela-do-dono.png` }); }
 });
 
@@ -217,8 +253,7 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   // Operações: só leitura, com detalhes do histórico (sem registrar pagamento nem editar).
   await manager.locator(".side-nav").getByText("Operações", { exact: true }).click();
   await manager.getByRole("region", { name: "Lista de operações" }).waitFor();
-  assert.equal(await manager.getByRole("region", { name: /Nova operação/ }).count(), 1, "só o formulário de pedido para aprovação");
-  assert.ok(!(await manager.getByRole("region", { name: /Nova operação/ }).innerText()).includes("Cadastrar operação"));
+  assert.equal(await manager.getByRole("region", { name: /Nova operação/ }).count(), 0, "sem formulário de operação nem de pedido: só consulta");
   assert.equal(await manager.getByRole("button", { name: /Registrar pagamento|Editar|Excluir/ }).count(), 0, "sem botões de gravação");
   await manager.getByRole("button", { name: "Detalhes" }).first().click();
   await manager.getByRole("button", { name: /Registrar pagamento|Quitar|Renegociar/ }).count().then((count) => assert.equal(count, 0, "detalhe sem ações de gravação"));
@@ -228,6 +263,13 @@ test("G3. painel: mesmas telas do dono, só os clientes dele, números certos, s
   assert.match(text, /A receber agora R\$ 20,00/);
   assert.match(text, /Prevista \(juros ainda a pagar\) R\$ 17,50/);
   assert.match(text, /Comissão gerada até hoje R\$ 30,00/);
+  // Controle CPG dela (só leitura): por contrato, gerada × paga × pendente, sem botão de estorno nem de pagamento.
+  const cpg = manager.getByRole("region", { name: "Comissões por contrato (CPG)" });
+  await cpg.waitFor();
+  assert.match((await cpg.innerText()).replace(/\s+/g, " "), /Ana Indicada/);
+  assert.match((await cpg.innerText()).replace(/\s+/g, " "), /Carla Indicada/);
+  assert.equal(await manager.getByRole("button", { name: /Estornar|Pagar|Registrar/ }).count(), 0, "comissão sem ações de gravação");
+  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-comissao-cpg.png`, fullPage: true });
   // Telas do dono por endereço direto não abrem para ela.
   await manager.goto(`${BASE}/gerente?tela=capital`);
   assert.ok(!/Capital disponível/.test(await flat()), "?tela=capital não mostra o capital");
@@ -267,242 +309,63 @@ const CLIENT_FIELDS = {
   residentialCep: "01310100", residentialStreet: "Avenida Paulista", residentialNumber: "1000", residentialDistrict: "Bela Vista", residentialCity: "São Paulo", residentialState: "SP",
   reference1Name: "Ref Um", reference1Phone: "11977770001", reference1Relationship: "Irmã", reference2Name: "Ref Dois", reference2Phone: "11977770002", reference2Relationship: "Vizinho",
 };
-test("G11. a gerente cadastra cliente: campos obrigatórios, ligado a ela, sem banco, CPF único", async () => {
-  await manager.goto(`${BASE}/gerente?tela=clientes`);
-  await manager.getByRole("heading", { name: "Cadastrar cliente indicado por você" }).waitFor();
-  const countOf = async (name) => Number(await one(`select count(*) from client where tenant_id='ten_roberio' and name='${name}'`));
-  // Sem os obrigatórios o navegador nem envia.
-  await manager.locator('input[name="name"]').fill(CLIENT_FIELDS.name);
-  await manager.getByRole("button", { name: "Cadastrar cliente" }).click();
-  await sleep(1500);
-  assert.equal(await countOf(CLIENT_FIELDS.name), 0, "sem os campos obrigatórios nada é gravado");
-  assert.ok(await manager.locator('input[name="document"]').evaluate((input) => input.required), "CPF é obrigatório na tela");
-  assert.ok(!(await manager.locator("form.form-grid").innerText()).includes("Dados bancários"), "gerente não vê dados bancários");
-  // Servidor também recusa (formulário forjado sem os obrigatórios).
-  const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
-  const incomplete = await action(cookie, "registerClientAction", { name: "Forjada Incompleta" }, "/gerente");
-  assert.equal(incomplete.result?.ok, false);
-  assert.match(String(incomplete.result?.error), /campos obrigatórios/);
-  assert.equal(await countOf("Forjada Incompleta"), 0);
-  // Preenche tudo e cadastra pela tela.
-  await manager.locator('input[name="residentialCep"]').fill("01310-100");
-  for (const [name, value] of Object.entries(CLIENT_FIELDS)) {
-    if (name === "residentialCep") continue;
-    const control = manager.locator(`[name="${name}"]`);
-    if ((await control.evaluate((element) => element.tagName)) === "SELECT") await control.selectOption(value);
-    else await control.fill(value);
-  }
-  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-cadastro-cliente.png`, fullPage: true });
-  await manager.getByRole("button", { name: "Cadastrar cliente" }).click();
-  await poll(`select count(*) from client where tenant_id='ten_roberio' and name='${CLIENT_FIELDS.name}'`, 1);
-  const gabrielle = await one(`select id from account_manager where name='Gabrielle Teste'`);
-  assert.equal(await one(`select account_manager_id from client where name='${CLIENT_FIELDS.name}'`), gabrielle, "nasce ligado à gerente");
-  assert.equal(await one(`select account_manager_bps is null from client where name='${CLIENT_FIELDS.name}'`), true, "usa a comissão padrão até o dono definir a do cliente");
-  assert.equal(await one(`select count(*) from admin_audit_log where action='CLIENT_REGISTERED_BY_MANAGER' and tenant_id='ten_roberio'`) >= 1, true, "auditado");
-  await manager.getByText(CLIENT_FIELDS.name).first().waitFor();
-  // CPF repetido é recusado.
-  const repeated = await action(cookie, "registerClientAction", { ...CLIENT_FIELDS, name: "Outra Pessoa" }, "/gerente");
-  assert.equal(repeated.result?.ok, false);
-  assert.match(String(repeated.result?.error), /Já existe um cliente com o CPF/);
-  // Formulário forjado com banco e marcação interna: o servidor ignora.
-  const forged = await action(cookie, "registerClientAction", { ...CLIENT_FIELDS, name: "Com Banco Forjado", document: cpfFrom("987654320"), bankName: "Banco X", bankAccount: "123", onlineCasinoBettor: "on" }, "/gerente");
-  assert.equal(forged.result?.ok, true, JSON.stringify(forged));
-  assert.equal(await one(`select bank_name is null and not online_casino_bettor from client where name='Com Banco Forjado'`), true);
-  await admin(`delete from client where name in ('${CLIENT_FIELDS.name}','Com Banco Forjado') and tenant_id='ten_roberio'`);
-});
-
-test("G12. a gerente envia operação para aprovação; o dono aprova (ativa) ou reprova; nada entra no capital antes", async () => {
-  const hadWallet = Number(await one(`select count(*) from wallet where tenant_id='ten_roberio'`)) > 0;
-  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents + 50000000 where tenant_id='ten_roberio'`);
-  else await admin(`insert into wallet(id, tenant_id, initial_capital_cents) values ('wal_g12','ten_roberio',50000000)`);
-  await admin(`update account_manager set cash_limit_cents = 2000000000 where name='Gabrielle Teste'`);
+test("G11. somente consulta: a gerente não cadastra cliente nem envia pedido de operação (tela e servidor)", async () => {
   const before = await tenantHash("ten_roberio");
-  const opsBefore = Number(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`));
-  const ddMmYyyy = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+  const clientsBefore = Number(await one(`select count(*) from client where tenant_id='ten_roberio'`));
+  await manager.goto(`${BASE}/gerente?tela=clientes`);
+  await manager.getByRole("region", { name: "Lista de clientes" }).waitFor();
+  assert.equal(await manager.getByRole("heading", { name: "Cadastrar cliente indicado por você" }).count(), 0, "sem formulário de cadastro");
+  assert.equal(await manager.getByRole("button", { name: "Cadastrar cliente" }).count(), 0);
   await manager.goto(`${BASE}/gerente?tela=operacoes`);
-  await manager.getByRole("region", { name: "Nova operação" }).waitFor();
-  assert.ok((await manager.getByRole("region", { name: "Nova operação" }).innerText()).includes("para aprovação"));
-  assert.ok(!(await manager.getByRole("region", { name: "Nova operação" }).innerText()).includes("Capital disponível"), "gerente não vê o capital do dono");
-  const form = manager.getByRole("region", { name: "Nova operação" });
-  await form.locator('select[name="clientId"]').selectOption({ label: "Ana Indicada" });
-  await form.locator('input[name="principal"]').fill("2.000,00");
-  await form.locator('input[name="rate"]').fill("10");
-  await form.getByLabel("Vencimento", { exact: true }).fill(ddMmYyyy(day(30)));
-  if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-pedido-operacao.png`, fullPage: true });
-  await manager.getByRole("button", { name: "Enviar para aprovação" }).click();
-  await poll(`select count(*) from operation_request where tenant_id='ten_roberio' and status='PENDING'`, 1);
-  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore, "nenhuma operação nasce antes da aprovação");
-  assert.equal(await tenantHash("ten_roberio"), before, "capital, operações e pagamentos não mudaram");
-  await manager.getByText("Aguardando aprovação").first().waitFor();
-  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_REQUESTED_BY_MANAGER' and tenant_id='ten_roberio'`) >= 1, true, "pedido auditado");
-  // Servidor: cliente de outro gerente/sem gerente e campos fora do formulário.
+  await manager.getByRole("region", { name: "Lista de operações" }).waitFor();
+  assert.equal(await manager.getByRole("button", { name: /Enviar para aprovação|Cadastrar operação/ }).count(), 0, "sem envio de operação");
+  // Chamadas forjadas (tela antiga aberta ou requisição direta) são recusadas e nada é gravado.
+  // Sem nenhuma tela que as use, as ações nem entram no build (não há endpoint para chamar); se voltarem a existir, o servidor recusa.
   const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
-  const terms = { modality: "SINGLE", frequency: "MONTHLY", principal: "500,00", rate: "10", loanDate: day(0), dueDate: day(30) };
-  const foreign = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_dora", ...terms }, "/gerente");
-  assert.equal(foreign.result?.ok, false);
-  assert.match(String(foreign.result?.error), /entre os seus clientes/);
-  const invalid = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_ana", ...terms, principal: "" }, "/gerente");
-  assert.equal(invalid.result?.ok, false);
-  assert.equal(await one(`select count(*) from operation_request where tenant_id='ten_roberio'`), 1);
-  // Ela não aprova nem reprova o próprio pedido.
-  const requestId = await one(`select id from operation_request where status='PENDING'`);
-  for (const [name, fields] of [["approveOperationRequestAction", [requestId]], ["rejectOperationRequestAction", [requestId, "x"]]]) {
-    const response = await actionArgs(cookie, name, fields, "/gerente").catch(() => ({ status: 500 }));
-    assert.ok(response.status >= 300 || response.result?.ok !== true, `${name} recusada para a gerente`);
+  const inBuild = (name) => Object.values(manifest).some((value) => value.exportedName === name);
+  await admin(`update account_manager set cash_limit_cents = 2000000000 where name='Gabrielle Teste'`);
+  for (const [name, fields] of [["registerClientAction", { ...CLIENT_FIELDS }], ["submitOperationRequestAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: day(0), dueDate: day(30) }]]) {
+    if (!inBuild(name)) continue;
+    const response = await action(cookie, name, fields, "/gerente");
+    assert.equal(response.result?.ok, false, `${name} recusada`);
+    assert.match(String(response.result?.error), /somente de consulta/);
   }
-  assert.equal(await one(`select status from operation_request where id='${requestId}'`), "PENDING");
-  // Dono: vê o pedido e aprova pela tela.
-  await owner.goto(`${BASE}/?tela=aprovacoes`);
-  await owner.getByRole("region", { name: "Pedidos de operação" }).waitFor();
-  await owner.getByText("Enviado por Gabrielle Teste").first().waitFor();
-  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-aprova-operacao.png`, fullPage: true });
-  await owner.getByRole("button", { name: "Aprovar" }).first().click();
-  await poll(`select status from operation_request where id='${requestId}'`, "APPROVED");
-  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1);
-  assert.equal(await one(`select o.status||'/'||o.principal_cents||'/'||o.client_id from loan_operation o join operation_request r on r.operation_id = o.id where r.id='${requestId}'`), "OPEN/200000/c_g_ana");
-  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_REQUEST_APPROVED' and tenant_id='ten_roberio'`) >= 1, true);
-  // Decidido não muda: aprovar de novo não cria outra operação.
-  const ownerCookie = await apiLogin("roberio@teste.local");
-  const again = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
-  assert.equal(again.result?.ok, false);
-  assert.match(String(again.result?.error), /já foi decidido/);
-  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1);
-  // Aprovada = Pix a fazer: aparece no menu, na visão geral e em Contas a pagar; "Pix feito" baixa o compromisso e não mexe no capital.
-  await owner.goto(`${BASE}/`);
-  await owner.getByRole("region", { name: "Aprovações" }).waitFor();
-  assert.match(await owner.getByRole("region", { name: "Aprovações" }).innerText(), /Pix a fazer hoje[\s\S]*1 operação aprovada/);
-  assert.ok(await owner.getByRole("link", { name: /Aprovações/ }).count() >= 1, "item Aprovações no menu lateral");
-  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-visao-geral-aprovacoes.png`, fullPage: false });
-  await owner.goto(`${BASE}/contas-a-pagar`);
-  const pixRegion = owner.getByRole("region", { name: "Pix de operações aprovadas" });
-  await pixRegion.waitFor();
-  assert.match(await pixRegion.innerText(), /Ana Indicada/);
-  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-contas-a-pagar-pix.png`, fullPage: false });
-  const capitalBeforePix = await tenantHash("ten_roberio");
-  await pixRegion.getByRole("button", { name: "Pix feito" }).click();
-  await poll(`select pix_paid_on is not null from operation_request where id='${requestId}'`, "true");
-  assert.equal(await tenantHash("ten_roberio"), capitalBeforePix, "confirmar o Pix não mexe em capital, operações nem pagamentos");
-  assert.equal(await one(`select count(*) from admin_audit_log where action='OPERATION_PIX_CONFIRMED' and tenant_id='ten_roberio'`) >= 1, true);
-  const pixAgain = await actionArgs(ownerCookie, "confirmOperationPixAction", [requestId]);
-  assert.equal(pixAgain.result?.ok, false);
-  assert.equal(await one(`select count(*) from operation_request where status='APPROVED' and pix_paid_on is null`), 0);
-  const managerPix = await actionArgs(cookie, "confirmOperationPixAction", [requestId], "/gerente");
-  assert.ok(managerPix.status >= 300 || managerPix.result?.ok !== true, "a gerente não confirma Pix");
-  // Segundo pedido: reprovado com motivo, que a gerente vê.
-  const second = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_beto", ...terms }, "/gerente");
-  assert.equal(second.result?.ok, true, JSON.stringify(second));
-  await owner.goto(`${BASE}/?tela=aprovacoes`);
-  await owner.getByRole("button", { name: "Reprovar" }).first().click();
-  await owner.getByLabel("Motivo da reprovação").fill("Cliente com atraso, ajustar o prazo");
-  await owner.getByRole("button", { name: "Confirmar reprovação" }).click();
-  await poll(`select status from operation_request where client_id='c_g_beto'`, "REJECTED");
-  assert.equal(await one(`select count(*) from loan_operation where tenant_id='ten_roberio'`), opsBefore + 1, "reprovado não cria operação");
-  await manager.goto(`${BASE}/gerente?tela=operacoes`);
-  await manager.getByText("Motivo: Cliente com atraso, ajustar o prazo").waitFor();
-  // Sem capital suficiente a aprovação é recusada e o pedido continua pendente.
-  const big = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_ana", ...terms, principal: "9.000.000,00" }, "/gerente");
-  assert.equal(big.result?.ok, true, JSON.stringify(big));
-  const bigId = await one(`select id from operation_request where status='PENDING'`);
-  const refused = await actionArgs(ownerCookie, "approveOperationRequestAction", [bigId]);
-  assert.equal(refused.result?.ok, false);
-  assert.match(String(refused.result?.error), /Capital disponível insuficiente/);
-  assert.equal(await one(`select status from operation_request where id='${bigId}'`), "PENDING");
-  // Limpeza: volta o tenant ao estado original.
-  const createdOperation = await one(`select operation_id from operation_request where id='${requestId}'`);
-  await admin(`delete from operation_request where tenant_id='ten_roberio'`);
-  await admin(`delete from loan_operation where id='${createdOperation}'`);
   await admin(`update account_manager set cash_limit_cents = 0 where name='Gabrielle Teste'`);
-  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents - 50000000 where tenant_id='ten_roberio'`);
-  else await admin(`delete from wallet where id='wal_g12'`);
+  assert.equal(await one(`select count(*) from client where tenant_id='ten_roberio'`), clientsBefore, "nenhum cliente criado");
+  assert.equal(await one(`select count(*) from operation_request`), 0, "nenhum pedido criado");
+  assert.equal(await one(`select count(*) from admin_audit_log where action in ('CLIENT_REGISTERED_BY_MANAGER','OPERATION_REQUESTED_BY_MANAGER')`), 0);
+  assert.equal(await tenantHash("ten_roberio"), before, "nada mudou na carteira");
 });
 
-test("G13. caixa da gerente: o dono define, ela vê o disponível e não envia pedido acima dele; pagamentos devolvem o caixa", async () => {
-  const hadWallet = Number(await one(`select count(*) from wallet where tenant_id='ten_roberio'`)) > 0;
-  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents + 50000000 where tenant_id='ten_roberio'`);
-  else await admin(`insert into wallet(id, tenant_id, initial_capital_cents) values ('wal_g13','ten_roberio',50000000)`);
-  const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
+test("G13. caixa da gerente: o dono define, ela vê o disponível e o alerta do máximo da carteira (só consulta)", async () => {
   const ownerCookie = await apiLogin("roberio@teste.local");
   const managerId = await one(`select id from account_manager where name='Gabrielle Teste'`);
-  const terms = { modality: "SINGLE", frequency: "MONTHLY", rate: "10", loanDate: day(0), dueDate: day(30) };
-  const submit = (clientId, principal) => action(cookie, "submitOperationRequestAction", { clientId, principal, ...terms }, "/gerente");
-  // Sem caixa combinado (padrão 0) nenhum pedido chega.
-  const none = await submit("c_g_ana", "100,00");
-  assert.equal(none.result?.ok, false);
-  assert.match(String(none.result?.error), /Caixa insuficiente/);
-  assert.equal(await one(`select count(*) from operation_request`), 0);
-  // O dono define o caixa (R$ 3.000); a gerente já tem R$ 2.000 em aberto nos clientes dela: sobram R$ 1.000.
+  // O dono define o caixa (R$ 3.000); a gerente tem R$ 2.000 em aberto nos clientes dela (Ana e Beto).
   const saved = await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "3.000,00", active: "1" }, "/gerentes");
   assert.equal(saved.result?.ok, true, JSON.stringify(saved));
   assert.equal(await one(`select cash_limit_cents from account_manager where id='${managerId}'`), 300000);
   assert.equal(await one(`select count(*) from admin_audit_log where action='MANAGER_UPDATED' and description like '%caixa R$%3.000,00%'`) >= 1, true, "caixa auditado");
   await manager.goto(`${BASE}/gerente`);
-  await manager.getByLabel(/Caixa disponível, abrir operações/).waitFor();
-  assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /R\$\s*1\.000,00/);
-  assert.match(await manager.getByLabel(/Caixa disponível, abrir operações/).innerText(), /Caixa combinado R\$\s*3\.000,00/);
+  const cashCard = manager.getByLabel(/Caixa disponível, ver operações/);
+  await cashCard.waitFor();
+  assert.match(await cashCard.innerText(), /Caixa combinado R\$\s*3\.000,00/);
   if (SHOTS) await manager.screenshot({ path: `${SHOTS}/gerente-caixa.png`, fullPage: false });
-  // Sem máximo de principal da carteira, o caixa não tem alerta; com o máximo já atingido, fica em alerta explicando que não há capital para emprestar.
-  const cashCard = manager.getByLabel(/Caixa disponível, abrir operações/);
   assert.equal(await cashCard.getAttribute("data-limit-alert"), null);
   assert.equal((await action(ownerCookie, "saveCreditPolicyAction", { maxPrincipalLent: "1,00", maxPrincipalReviewOn: day(30) }, "/")).result?.ok, true);
   await manager.goto(`${BASE}/gerente`);
   await cashCard.waitFor();
   assert.equal(await cashCard.getAttribute("data-limit-alert"), "true");
   assert.match(await cashCard.innerText(), /limite máximo da carteira restringe novos empréstimos/);
-  assert.match(await cashCard.innerText(), /não há capital para emprestar/);
-  assert.match(await cashCard.innerText(), /R\$\s*1\.000,00/, "o caixa combinado continua visível");
   assert.equal((await action(ownerCookie, "saveCreditPolicyAction", {}, "/")).result?.ok, true);
   await manager.goto(`${BASE}/gerente`);
   await cashCard.waitFor();
   assert.equal(await cashCard.getAttribute("data-limit-alert"), null, "sem máximo, sem alerta");
-  // Acima do caixa: recusado; dentro: aceito e o disponível cai (pedido reservado).
-  const above = await submit("c_g_ana", "1.500,00");
-  assert.equal(above.result?.ok, false);
-  assert.match(String(above.result?.error), /Caixa insuficiente/);
-  const within = await submit("c_g_ana", "1.000,00");
-  assert.equal(within.result?.ok, true, JSON.stringify(within));
-  const more = await submit("c_g_beto", "100,00");
-  assert.equal(more.result?.ok, false, "o pedido pendente reserva o caixa");
-  // A tela avisa e trava o envio quando o valor passa do caixa.
-  await manager.goto(`${BASE}/gerente?tela=operacoes`);
-  const form = manager.getByRole("region", { name: "Nova operação" });
-  await form.locator('input[name="principal"]').fill("50,00");
-  await form.locator('input[name="principal"]').blur();
-  assert.equal(await form.getByRole("button", { name: "Enviar para aprovação" }).isDisabled(), true, "caixa zerado trava o envio");
-  assert.match(await form.innerText(), /maior que o seu caixa disponível/);
-  // O dono reduz o caixa abaixo do que está em uso: aprovar estoura o caixa e é recusado; o pedido continua pendente.
-  const requestId = await one(`select id from operation_request where status='PENDING'`);
-  await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "2.500,00", active: "1" }, "/gerentes");
-  const refused = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
-  assert.equal(refused.result?.ok, false);
-  assert.match(String(refused.result?.error), /Estoura o caixa da gerente/);
-  assert.equal(await one(`select status from operation_request where id='${requestId}'`), "PENDING");
-  // Caixa volta a R$ 3.000: aprova; o principal passa de "pedido" para "em aberto" e o disponível fica zerado.
-  await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "", cashLimit: "3.000,00", active: "1" }, "/gerentes");
-  const approved = await actionArgs(ownerCookie, "approveOperationRequestAction", [requestId]);
-  assert.equal(approved.result?.ok, true, JSON.stringify(approved));
-  const none2 = await submit("c_g_beto", "10,00");
-  assert.equal(none2.result?.ok, false);
-  // Cliente paga R$ 200 (juros R$ 100 primeiro e R$ 100 de principal): R$ 100 voltam ao caixa.
-  await admin(`insert into payment(id,tenant_id,operation_id,amount_cents,paid_at) values ('pay_g13','ten_roberio','op_g_ana_open',20000,'${day(0)}')`);
-  const back = await submit("c_g_beto", "100,00");
-  assert.equal(back.result?.ok, true, JSON.stringify(back));
-  const over = await submit("c_g_beto", "0,01");
-  assert.equal(over.result?.ok, false);
   // O dono vê o caixa de cada gerente.
   await owner.goto(`${BASE}/gerentes`);
   const region = owner.getByRole("region", { name: "Gerente Gabrielle Teste" });
   await region.waitFor();
   assert.match(await region.innerText(), /Caixa combinado\s*R\$\s*3\.000,00/);
-  assert.match(await region.innerText(), /Caixa disponível\s*R\$\s*0,00/);
-  if (SHOTS) await owner.screenshot({ path: `${SHOTS}/dono-caixa-gerente.png`, fullPage: true });
-  // Limpeza.
-  const createdOperation = await one(`select operation_id from operation_request where id='${requestId}'`);
-  await admin(`delete from operation_request where tenant_id='ten_roberio'`);
-  await admin(`delete from payment where id='pay_g13'`);
-  await admin(`delete from loan_operation where id='${createdOperation}'`);
   await admin(`update account_manager set cash_limit_cents = 0 where id='${managerId}'`);
-  if (hadWallet) await admin(`update wallet set initial_capital_cents = initial_capital_cents - 50000000 where tenant_id='ten_roberio'`);
-  else await admin(`delete from wallet where id='wal_g13'`);
 });
 
 test("G14. política de crédito: o dono salva os limites, campo vazio = sem limite, valores inválidos são recusados e a gerente não alcança", async () => {
@@ -1073,11 +936,14 @@ test("G7. regras do banco: comissão paga não se edita nem se apaga; percentual
   await assert.rejects(admin(`update account_manager set commission_bps = 10001`), /account_manager_commission_range/);
 });
 
-test("G8. desativar o gerente bloqueia o acesso na hora e nada financeiro mudou", async () => {
+test("G8. só o MASTER desativa o gerente; isso bloqueia o acesso na hora e nada financeiro mudou", async () => {
   const ownerCookie = await apiLogin("roberio@teste.local");
   const managerId = await one(`select id from account_manager where name='Gabrielle Teste'`);
-  const off = await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "10", active: "0" });
-  assert.equal(off.result?.ok, true);
+  const refused = await action(ownerCookie, "updateManagerAction", { managerId, name: "Gabrielle Teste", commission: "10", active: "0" });
+  assert.equal(refused.result?.ok, false, "o dono não desativa o acesso");
+  assert.equal(await one(`select active from "user" where email='${EMAIL}'`), true);
+  const off = await action(await apiLogin("thais@teste.local"), "adminUpdateManagerAction", { tenantId: "ten_roberio", managerId, name: "Gabrielle Teste", commission: "10", active: "0" }, "/admin/clientes/ten_roberio");
+  assert.equal(off.result?.ok, true, JSON.stringify(off));
   assert.equal(await one(`select active from "user" where email='${EMAIL}'`), false);
   assert.equal(await one(`select count(*) from session where user_id = (select id from "user" where email='${EMAIL}')`), 0, "sessões encerradas");
   await manager.goto(`${BASE}/gerente`);
@@ -1146,7 +1012,9 @@ test("G10. excluir gerente: sem comissão paga apaga (e desvincula clientes e re
   const gabrielle = await one(`select id from account_manager where name='Gabrielle Teste'`);
   const refused = await action(ownerCookie, "deleteManagerAction", { managerId: gabrielle });
   assert.equal(refused.result?.ok, false);
-  assert.match(refused.result?.error ?? "", /não pode ser excluído/);
+  assert.match(refused.result?.error ?? "", /Somente o MASTER/, "com login, só o MASTER exclui");
+  const byMaster = await action(await apiLogin("thais@teste.local"), "adminDeleteManagerAction", { tenantId: "ten_roberio", managerId: gabrielle }, "/admin/clientes/ten_roberio");
+  assert.match(byMaster.result?.error ?? "", /não pode ser excluído/, "nem o MASTER apaga quem já recebeu comissão");
   assert.equal(await one(`select count(*) from account_manager where id='${gabrielle}'`), 1);
   assert.equal(await one(`select count(*) from client where account_manager_id='${gabrielle}'`), 3);
   // "Outro Gerente" (sem pagamentos, com o cliente Dora) pela tela do dono.

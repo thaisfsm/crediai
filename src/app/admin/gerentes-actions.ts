@@ -32,10 +32,10 @@ async function run(data: FormData, command: (tx: TenantTransaction, tenantId: st
 }
 
 export async function adminCreateManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => createManager(tx, tenantId, session, data)); }
-export async function adminUpdateManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => updateManager(tx, tenantId, session, data)); }
+export async function adminUpdateManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => updateManager(tx, tenantId, session, data, true)); }
 export async function adminLinkClientAction(data: FormData) { return run(data, (tx, tenantId, session) => linkClient(tx, tenantId, session, data)); }
 export async function adminUnlinkClientAction(data: FormData) { return run(data, (tx, tenantId, session) => unlinkClient(tx, tenantId, session, data)); }
-export async function adminDeleteManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => deleteManager(tx, tenantId, session, data)); }
+export async function adminDeleteManagerAction(data: FormData) { return run(data, (tx, tenantId, session) => deleteManager(tx, tenantId, session, data, true)); }
 export async function adminRegisterManagerPayoutAction(data: FormData) { return run(data, (tx, tenantId, session) => registerPayout(tx, tenantId, session, data)); }
 export async function adminReverseCommissionAction(data: FormData) { return run(data, (tx, tenantId, session) => reverseCommissionPaid(tx, tenantId, session, data)); }
 // Só o MASTER: composição histórica confirmada de um fechamento antigo (sem tela; usada na correção de dados com rastreabilidade).

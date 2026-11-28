@@ -223,6 +223,8 @@ export async function loadManagerPanel() {
   const summary = managerCommission(commissionGroups(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), paidOutCents);
   const cards = clientCards(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps);
   const live = data.operations.filter((operation) => operation.status !== "CANCELED");
+  // Controle CPG da própria gerente (só leitura): por contrato, a comissão gerada, a paga e a pendente, com os mesmos cálculos de /gerentes.
+  const contracts = contractsWithStatus(receiptsWithStatus(managerReceipts(data.clientRows, data.operations, data.manager.commissionBps, data.overrideBps), data.commissionPaid));
   return {
     managerName: data.manager.name, userId: data.userId, userName: data.userName, today: todayIso(), summary, cash: data.cash,
     counts: {
@@ -233,6 +235,7 @@ export async function loadManagerPanel() {
     principalOpenCents: live.filter((operation) => operation.status === "OPEN").reduce((total, operation) => total + operation.principalRemainingCents, 0),
     clients: cards,
     payouts: data.payoutRows,
+    contracts: contracts.map(({ receipts: _receipts, ...contract }) => { void _receipts; return contract; }),
     pendingAdjustments: data.adjustments.filter((item) => !item.payoutId), pending: pendingTotals(data.adjustments),
   };
 }

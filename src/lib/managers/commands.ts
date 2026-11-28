@@ -67,7 +67,11 @@ export async function createManager(tx: TenantTransaction, tenantId: string, act
 }
 
 // Nome, comissão padrão (só vale para clientes sem percentual próprio) e ativo/inativo. Desativar também bloqueia o acesso.
-export async function updateManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+// Administração de LOGINS de gerente (criar acesso, nova senha, ativar/desativar, revogar ao excluir) é exclusiva do MASTER (SUPER_ADMIN).
+// Quem chama informa se o autor é MASTER, conferido no banco (nunca pela tela); o dono operacional da carteira recebe esta recusa.
+export const ACCESS_ADMIN_ONLY = "Somente o MASTER pode administrar os acessos de login dos gerentes (criar, ativar, desativar, redefinir senha ou revogar).";
+
+export async function updateManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData, canManageAccess: boolean): Promise<CommandResult> {
   const managerId = text(data, "managerId", 80);
   const name = text(data, "name", 120);
   const percent = readPercent(text(data, "commission", 10), { required: false });
@@ -79,6 +83,8 @@ export async function updateManager(tx: TenantTransaction, tenantId: string, act
   const bps = percent.bps ?? 0;
   const manager = await ownManager(tx, tenantId, managerId);
   if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  // Ativar/desativar o gerente liga/desliga o login dele: com acesso criado, só o MASTER muda a situação.
+  if (manager.userId && manager.active !== active && !canManageAccess) return { ok: false, error: ACCESS_ADMIN_ONLY };
   await tx.update(accountManagers).set({ name, commissionBps: bps, cashLimitCents: cash.cents, active, updatedAt: sql`now()` }).where(and(eq(accountManagers.id, manager.id), eq(accountManagers.tenantId, tenantId)));
   if (manager.userId && manager.active !== active) {
     await tx.update(users).set({ active, updatedAt: sql`now()` }).where(and(eq(users.id, manager.userId), eq(users.tenantId, tenantId), eq(users.role, "ACCOUNT_MANAGER")));
@@ -344,10 +350,12 @@ export async function resetManagerPassword(tx: TenantTransaction, tenantId: stri
 
 // Exclusão definitiva: só de gerente sem comissão paga (o histórico de pagamentos não se apaga). Desvincula os clientes (os clientes
 // em si não mudam) e apaga o login de leitura, se houver. Com pagamentos registrados, o gerente só pode ser desativado.
-export async function deleteManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData): Promise<CommandResult> {
+export async function deleteManager(tx: TenantTransaction, tenantId: string, actor: AuditActor, data: FormData, canManageAccess: boolean): Promise<CommandResult> {
   const managerId = text(data, "managerId", 80);
   const manager = await ownManager(tx, tenantId, managerId);
   if (!manager) return { ok: false, error: "Gerente não encontrado nesta carteira." };
+  // Excluir apaga o login de leitura (revoga o acesso): com acesso criado, só o MASTER.
+  if (manager.userId && !canManageAccess) return { ok: false, error: ACCESS_ADMIN_ONLY };
   const [paid] = await tx.select({ id: accountManagerPayouts.id }).from(accountManagerPayouts)
     .where(and(eq(accountManagerPayouts.tenantId, tenantId), eq(accountManagerPayouts.managerId, manager.id))).limit(1);
   if (paid) return { ok: false, error: `${manager.name} já recebeu comissão registrada e não pode ser excluído (o histórico financeiro fica). Desative o gerente.` };

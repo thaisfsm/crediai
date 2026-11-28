@@ -11,5 +11,5 @@ const actions: ManagerActions = {
 
 // Mesma tela que o dono da carteira usa em /gerentes, aqui para o MASTER operar em nome deste cliente SaaS.
 export default function ManagersSection({ tenantId, data }: { tenantId: string; data: ManagersPage }) {
-  return <ManagersHome data={data} actions={actions} tenantId={tenantId} standalone={false} />;
+  return <ManagersHome data={data} actions={actions} tenantId={tenantId} standalone={false} canManageAccess />;
 }

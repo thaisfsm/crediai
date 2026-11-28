@@ -23,7 +23,7 @@ export default async function ManagersPage() {
   const data = await loadManagersPage();
   return (
     <AppShell userId={session.user.id} userName={session.user.name} isSuperAdmin={state.role === "SUPER_ADMIN"} active="Gerentes" trail={[{ label: "Gerentes de contas" }]}>
-      <ManagersHome data={data} actions={actions} />
+      <ManagersHome data={data} actions={actions} canManageAccess={state.role === "SUPER_ADMIN"} />
     </AppShell>
   );
 }
