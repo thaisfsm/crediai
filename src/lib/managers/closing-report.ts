@@ -1,9 +1,8 @@
 // Relatório de cada fechamento de comissão do gerente (PDF): quais contratos entraram no fechamento e quanto de comissão cada um.
-// A regra de cálculo NÃO muda: comissão de um contrato = juros efetivamente recebidos × % de comissão (commissionOf). Aqui só se reparte
-// o valor que foi fechado entre os contratos que tinham comissão a pagar, em centavos exatos: a soma das linhas é SEMPRE o valor
-// gravado no fechamento. Fechamentos feitos a partir desta versão guardam as linhas (account_manager_payout_item, imutável); os
-// anteriores são reconstituídos com os recebimentos registrados até a data deles, sempre fechando no valor gravado.
-import { commissionOf } from "./commission";
+// Regra: comissão = juros efetivamente recebidos × % de comissão do contrato. As linhas vêm do que foi GRAVADO: o controle CPG (os
+// recebimentos pagos no fechamento) ou o detalhamento por contrato (account_manager_payout_item). Nada é repartido nem estimado: um
+// fechamento sem composição registrada aparece com uma linha só ("Composição não registrada") e o valor gravado.
+import type { CommissionPaidRow } from "./commission-paid";
 
 // Um contrato com a base da comissão até a data do fechamento.
 export type ContractEarning = {
@@ -15,61 +14,29 @@ export type ClosingLine = Omit<ContractEarning, "operationId" | "clientId" | "op
   operationId: string | null; clientId: string | null; operationCode: string | null; loanDate: string | null; commissionCents: number;
 };
 
-export const UNASSIGNED_LABEL = "Comissão sem contrato identificado";
+export const UNASSIGNED_LABEL = "Composição não registrada (fechamento anterior ao controle por contrato)";
 
 // Percentual efetivo de repasse = taxa de juros × % de comissão (30% × 45% = 13,5%), em pontos-base com casas decimais.
 export const effectiveRateBps = (interestRateBps: number, commissionBps: number) => (interestRateBps * commissionBps) / 10000;
 
-// Reparte `amountCents` proporcionalmente aos pesos, em centavos exatos (maiores restos), com BigInt para não perder precisão.
-function proportional(amountCents: number, weights: number[]) {
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  if (total <= 0 || amountCents <= 0) return weights.map(() => 0);
-  const big = weights.map((weight) => (BigInt(amountCents) * BigInt(weight)));
-  const shares = big.map((value) => Number(value / BigInt(total)));
-  const remainders = big.map((value, index) => ({ index, rest: Number(value % BigInt(total)) }));
-  let missing = amountCents - shares.reduce((sum, share) => sum + share, 0);
-  for (const { index } of remainders.sort((a, b) => b.rest - a.rest || a.index - b.index)) {
-    if (missing <= 0) break;
-    shares[index] += 1; missing -= 1;
+// Linhas de um fechamento a partir do controle CPG: os recebimentos pagos nele (linhas PAID), somados por contrato. Juros recebidos =
+// juros dos recebimentos pagos neste fechamento; comissão = o que foi pago deles. Nada é repartido nem estimado.
+export function linesFromCommissionPaid(rows: CommissionPaidRow[], payoutId: string): ClosingLine[] {
+  const byOperation = new Map<string, ClosingLine>();
+  for (const row of rows.filter((item) => item.payoutId === payoutId && item.kind === "PAID")) {
+    const line = byOperation.get(row.operationId) ?? {
+      operationId: row.operationId, clientId: row.clientId, clientName: row.clientName, operationCode: row.operationCode, loanDate: row.loanDate,
+      principalCents: row.principalCents, interestRateBps: row.interestRateBps, commissionBps: row.commissionBps, interestReceivedCents: 0, commissionCents: 0,
+    };
+    line.interestReceivedCents += row.interestCents; line.commissionCents += row.commissionCents;
+    byOperation.set(row.operationId, line);
   }
-  return shares;
+  return [...byOperation.values()].sort(compareLines);
 }
 
-// Reparte o valor fechado entre os contratos com comissão ainda não paga (gerada − já atribuída a fechamentos anteriores).
-// `priorityClientIds` (os clientes marcados na conferência) recebem primeiro; o que passar deles vai para os demais.
-// Se o valor passar de tudo o que havia a pagar só por arredondamento (centavos), a sobra vai para os maiores contratos; se for mais
-// que isso, fica numa linha "sem contrato identificado" (o total nunca deixa de bater com o valor gravado).
-export function allocateClosing(amountCents: number, contracts: ContractEarning[], alreadyPaid: Map<string, number>, priorityClientIds?: Set<string> | null): ClosingLine[] {
-  const rows = contracts.map((contract) => ({
-    contract, available: Math.max(0, commissionOf(contract.interestReceivedCents, contract.commissionBps) - (alreadyPaid.get(contract.operationId) ?? 0)),
-  }));
-  const shares = new Map<string, number>();
-  let remaining = amountCents;
-  const groups = priorityClientIds && priorityClientIds.size > 0
-    ? [rows.filter((row) => priorityClientIds.has(row.contract.clientId)), rows.filter((row) => !priorityClientIds.has(row.contract.clientId))]
-    : [rows];
-  for (const group of groups) {
-    if (remaining <= 0) break;
-    const available = group.reduce((sum, row) => sum + row.available, 0);
-    if (available <= 0) continue;
-    const parts = remaining >= available ? group.map((row) => row.available) : proportional(remaining, group.map((row) => row.available));
-    group.forEach((row, index) => { if (parts[index] > 0) shares.set(row.contract.operationId, (shares.get(row.contract.operationId) ?? 0) + parts[index]); });
-    remaining -= parts.reduce((sum, part) => sum + part, 0);
-  }
-  // Sobra de arredondamento: a conta do saldo arredonda por cliente e aqui é por contrato (no máximo 1 centavo por contrato).
-  const earners = rows.filter((row) => commissionOf(row.contract.interestReceivedCents, row.contract.commissionBps) > 0)
-    .sort((a, b) => b.available - a.available || a.contract.operationId.localeCompare(b.contract.operationId));
-  if (remaining > 0 && remaining <= earners.length) {
-    for (const row of earners.slice(0, remaining)) shares.set(row.contract.operationId, (shares.get(row.contract.operationId) ?? 0) + 1);
-    remaining = 0;
-  }
-  const lines: ClosingLine[] = rows.filter((row) => (shares.get(row.contract.operationId) ?? 0) > 0)
-    .map((row) => ({ ...row.contract, commissionCents: shares.get(row.contract.operationId) ?? 0 }))
-    .sort(compareLines);
-  if (remaining > 0) {
-    lines.push({ operationId: null, clientId: null, clientName: UNASSIGNED_LABEL, operationCode: null, loanDate: null, principalCents: 0, interestRateBps: 0, commissionBps: 0, interestReceivedCents: 0, commissionCents: remaining });
-  }
-  return lines;
+// Fechamento sem composição registrada (nem detalhamento nem CPG): uma linha só com o valor gravado, sem atribuir a contratos.
+export function unregisteredLine(amountCents: number): ClosingLine {
+  return { operationId: null, clientId: null, clientName: UNASSIGNED_LABEL, operationCode: null, loanDate: null, principalCents: 0, interestRateBps: 0, commissionBps: 0, interestReceivedCents: 0, commissionCents: amountCents };
 }
 
 export const compareLines = (a: Pick<ClosingLine, "clientName" | "loanDate" | "operationCode" | "operationId">, b: Pick<ClosingLine, "clientName" | "loanDate" | "operationCode" | "operationId">) =>
@@ -78,12 +45,6 @@ export const compareLines = (a: Pick<ClosingLine, "clientName" | "loanDate" | "o
   || (a.loanDate ?? "").localeCompare(b.loanDate ?? "")
   || (a.operationCode ?? "").localeCompare(b.operationCode ?? "", "pt-BR", { numeric: true })
   || (a.operationId ?? "").localeCompare(b.operationId ?? "");
-
-// Soma o que cada contrato recebeu num fechamento (para o próximo fechamento não atribuir de novo a mesma comissão).
-export function addPaid(paid: Map<string, number>, lines: Pick<ClosingLine, "operationId" | "commissionCents">[]) {
-  for (const line of lines) if (line.operationId) paid.set(line.operationId, (paid.get(line.operationId) ?? 0) + line.commissionCents);
-  return paid;
-}
 
 // Fechamentos de um gerente em ordem (data do fechamento, depois a hora em que foi registrado): o período de referência de cada um vai
 // do dia seguinte ao fechamento anterior até a data dele; o primeiro cobre tudo desde o início.
@@ -102,11 +63,17 @@ const nextDay = (iso: string) => { const date = new Date(`${iso}T00:00:00Z`); da
 
 // Documento do relatório (o que o PDF desenha). Confere que a soma das linhas é o valor fechado e que o valor final é o gravado.
 export type ClosingAdjustment = { kind: "DEBIT" | "CREDIT"; description: string; amountCents: number; entryDate: string };
+// Estorno de comissão ligado ao fechamento (parte ou tudo de um recebimento pago nele voltou a ficar pendente).
+export type ClosingReversal = { clientName: string; operationCode: string | null; receiptPaidOn: string; amountCents: number; reason: string; createdAt: string };
+export type ClosingSource = "SNAPSHOT" | "CPG" | "UNREGISTERED";
 export type ClosingReportInput = {
   tenantName: string; managerName: string;
   payout: { id: string; paidOn: string; createdAt: string; amountCents: number; debitCents: number; creditCents: number; notes: string | null };
   period: NonNullable<ReturnType<typeof referencePeriod>>;
-  lines: ClosingLine[]; adjustments: ClosingAdjustment[]; source: "SNAPSHOT" | "RECONSTRUCTED"; generatedAt: Date;
+  lines: ClosingLine[]; adjustments: ClosingAdjustment[]; source: ClosingSource; generatedAt: Date;
+  reversals?: ClosingReversal[];
+  // Composição registrada depois do fechamento (reconstrução histórica confirmada): quando, por quem e por quê.
+  historical?: { recordedAt: string; reason: string } | null;
 };
 export type ClientGroup = { clientName: string; lines: ClosingLine[]; commissionCents: number };
 export function buildClosingReport(input: ClosingReportInput) {
@@ -122,10 +89,11 @@ export function buildClosingReport(input: ClosingReportInput) {
     if (!group) { group = { clientName: line.clientName, lines: [], commissionCents: 0 }; groups.push(group); }
     group.lines.push(line); group.commissionCents += line.commissionCents;
   }
+  const reversedCents = (input.reversals ?? []).reduce((sum, item) => sum + item.amountCents, 0);
   return {
-    ...input, groups,
+    ...input, reversals: input.reversals ?? [], historical: input.historical ?? null, groups,
     totals: {
-      commissionCents: input.payout.amountCents, debitCents, creditCents, finalCents: input.payout.amountCents - debitCents + creditCents,
+      commissionCents: input.payout.amountCents, reversedCents, debitCents, creditCents, finalCents: input.payout.amountCents - debitCents + creditCents,
       clients: groups.filter((group) => group.lines[0].operationId !== null).length, contracts: input.lines.filter((line) => line.operationId !== null).length,
     },
   };

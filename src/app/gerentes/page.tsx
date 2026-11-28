@@ -3,12 +3,12 @@ import { DatabaseErrorState, databaseGate } from "@/app/database-error-state";
 import { requireActiveAccount } from "@/lib/auth/guards";
 import { loadManagersPage } from "@/lib/managers/queries";
 import { AppShell } from "../app-shell";
-import { createAdjustmentAction, createManagerAccessAction, createManagerAction, deleteAdjustmentAction, deleteManagerAction, linkClientAction, registerManagerPayoutAction, resetManagerPasswordAction, unlinkClientAction, updateManagerAction } from "./actions";
+import { createAdjustmentAction, createManagerAccessAction, createManagerAction, deleteAdjustmentAction, deleteManagerAction, linkClientAction, registerManagerPayoutAction, resetManagerPasswordAction, reverseCommissionAction, unlinkClientAction, updateManagerAction } from "./actions";
 import { ManagersHome, type ManagerActions } from "./managers-ui";
 
 const actions: ManagerActions = {
   createManager: createManagerAction, updateManager: updateManagerAction, linkClient: linkClientAction, unlinkClient: unlinkClientAction, deleteManager: deleteManagerAction,
-  registerPayout: registerManagerPayoutAction, createAdjustment: createAdjustmentAction, deleteAdjustment: deleteAdjustmentAction, createAccess: createManagerAccessAction, resetPassword: resetManagerPasswordAction,
+  registerPayout: registerManagerPayoutAction, createAdjustment: createAdjustmentAction, deleteAdjustment: deleteAdjustmentAction, createAccess: createManagerAccessAction, resetPassword: resetManagerPasswordAction, reverseCommission: reverseCommissionAction,
 };
 
 export const dynamic = "force-dynamic";

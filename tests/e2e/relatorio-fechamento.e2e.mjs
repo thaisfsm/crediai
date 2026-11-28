@@ -105,10 +105,13 @@ test("R1. novo fechamento grava o detalhamento por contrato (percentuais reais d
   assert.equal(result.result?.ok, true, JSON.stringify(result.result));
   newPayoutId = await one(`select id from account_manager_payout where manager_id='${R}' and id <> 'mgp_r_old'`);
   const items = await admin(`select operation_id, client_name, principal_cents::int p, interest_rate_bps::float r, commission_bps c, interest_received_cents::int i, commission_cents::int v, operation_code from account_manager_payout_item where payout_id='${newPayoutId}' order by client_name`);
-  // O antigo (R$ 200) é reconstituído: Ana 145,95 e Bia 54,05 (proporcional ao que cada uma tinha a pagar na data). O novo leva o resto.
+  // O antigo (R$ 200) não tem composição registrada: não é repartido. O novo paga os recebimentos pendentes, do mais antigo para o mais
+  // recente: Ana 270,00 e Bia 100,00 inteiras e Caio 137,50 de 337,50 (parcial; o saldo total já desconta os R$ 200 antigos).
   assert.deepEqual(items.map((item) => [item.operation_id, item.p, item.r, item.c, item.i, item.v]), [
-    ["op_r_ana", 200000, 3000, 4500, 60000, 27000 - 14595], ["op_r_bia", 500000, 2000, 1000, 100000, 10000 - 5405], ["op_r_caio", 300000, 2500, 4500, 75000, 33750],
+    ["op_r_ana", 200000, 3000, 4500, 60000, 27000], ["op_r_bia", 500000, 2000, 1000, 100000, 10000], ["op_r_caio", 300000, 2500, 4500, 75000, 13750],
   ]);
+  assert.deepEqual((await admin(`select payment_id, commission_cents::int v, commission_due_cents::int d from account_manager_commission_paid where payout_id='${newPayoutId}' order by receipt_paid_on, payment_id`)).map((row) => [row.payment_id, row.v, row.d]),
+    [["pay_r_ana", 27000, 27000], ["pay_r_bia", 10000, 10000], ["pay_r_caio", 13750, 33750]]);
   assert.ok(items.every((item) => item.operation_code));
   assert.equal(items.reduce((sum, item) => sum + item.v, 0), 50750);
   assert.equal(await one(`select count(*) from account_manager_payout_item where operation_id='op_r_zero'`), 0, "contrato sem comissão fora");
@@ -121,16 +124,16 @@ test("R2. PDF do fechamento: lista por contrato, percentuais e comissão de cada
   assert.equal(pdf.status, 200);
   assert.match(pdf.type, /application\/pdf/);
   assert.match(pdf.disposition, /^inline; filename\*=UTF-8''fechamento-comissao-gerente-relatorio-\d{4}-\d{2}-\d{2}-02\.pdf$/);
-  for (const piece of ["Relatório de Fechamento de Comissão", "Gerente Relatório", "Cliente Ana Relatório", "R$ 2.000,00", "30,00%", "45,00%", "13,50%", "R$ 124,05",
-    "Cliente Bia Relatório", "R$ 5.000,00", "20,00%", "10,00%", "2,00%", "R$ 45,95", "Cliente Caio Relatório", "R$ 3.000,00", "25,00%", "11,25%", "R$ 337,50",
+  for (const piece of ["Relatório de Fechamento de Comissão", "Gerente Relatório", "Cliente Ana Relatório", "R$ 2.000,00", "30,00%", "45,00%", "13,50%", "R$ 270,00",
+    "Cliente Bia Relatório", "R$ 5.000,00", "20,00%", "10,00%", "2,00%", "R$ 100,00", "Cliente Caio Relatório", "R$ 3.000,00", "25,00%", "11,25%", "R$ 137,50",
     "3 contratos Total R$ 10.000,00", "R$ 507,50", "Débito no fechamento · Adiantamento", "− R$ 10,00", "Valor pago a Gerente Relatório", "R$ 497,50", "Total pago ao gerente", "Usuário: Robério Santos",
-    "Valores históricos gravados no momento do fechamento"]) assert.ok(pdf.text.includes(piece), `PDF sem "${piece}"\n${pdf.text}`);
+    "Valores históricos gravados no fechamento"]) assert.ok(pdf.text.includes(piece), `PDF sem "${piece}"\n${pdf.text}`);
   assert.ok(!pdf.text.includes("Cliente Zero") && !pdf.text.includes("Cliente Duda"), "só os contratos do fechamento");
   const download = await pdfOf(ownerApi, `/gerentes/fechamentos/${newPayoutId}?baixar=1`);
   assert.match(download.disposition, /^attachment;/);
 });
 
-test("R3. histórico preservado: mudar cliente/percentual depois não muda o PDF; fechamento antigo baixa de novo (reconstituído) e o banco protege o detalhamento", async () => {
+test("R3. histórico preservado: mudar cliente/percentual depois não muda o PDF; fechamento antigo baixa de novo (sem rateio) e o banco protege o detalhamento", async () => {
   const before = withoutEmission((await pdfOf(ownerApi, `/gerentes/fechamentos/${newPayoutId}`)).text);
   await admin(`update client set name='Ana Renomeada', account_manager_bps=9000 where id='c_r_ana'`);
   const after = withoutEmission((await pdfOf(ownerApi, `/gerentes/fechamentos/${newPayoutId}`)).text);
@@ -138,8 +141,8 @@ test("R3. histórico preservado: mudar cliente/percentual depois não muda o PDF
   await admin(`update client set name='Cliente Ana Relatório', account_manager_bps=4500 where id='c_r_ana'`);
   const old = await pdfOf(ownerApi, `/gerentes/fechamentos/mgp_r_old`);
   assert.equal(old.status, 200);
-  for (const piece of ["Cliente Ana Relatório", "R$ 145,95", "Cliente Bia Relatório", "R$ 54,05", "2 contratos Total R$ 7.000,00", "R$ 200,00", "reconstituída", "Observação do fechamento: fechamento antigo"]) assert.ok(old.text.includes(piece), `PDF antigo sem "${piece}"\n${old.text}`);
-  assert.ok(!old.text.includes("Cliente Caio"), "Caio só recebeu depois do fechamento antigo");
+  for (const piece of ["Composição não registrada", "0 contratos Total", "R$ 200,00", "sem composição confirmada", "Observação do fechamento: fechamento antigo"]) assert.ok(old.text.includes(piece), `PDF antigo sem "${piece}"\n${old.text}`);
+  assert.ok(!old.text.includes("Cliente Ana") && !old.text.includes("R$ 145,95"), "nada repartido entre contratos");
   const item = await one(`select id from account_manager_payout_item where payout_id='${newPayoutId}' limit 1`);
   await assert.rejects(admin(`update account_manager_payout_item set commission_cents=1 where id='${item}'`), /não podem ser alterados/);
   await assert.rejects(admin(`delete from account_manager_payout_item where id='${item}'`), /não podem ser alterados/);

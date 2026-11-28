@@ -515,6 +515,53 @@ export const accountManagerPayoutItems = pgTable("account_manager_payout_item", 
   ...tenantPolicies("account_manager_payout_item", table.tenantId),
 ]).enableRLS();
 
+// Controle CPG (Comissão Paga) por recebimento de juros (migração 0062). Cada linha PAID diz que, no fechamento payout_id, o gerente
+// recebeu commission_cents da comissão gerada pelo recebimento payment_id (juros interest_cents × commission_bps do contrato); REVERSAL
+// devolve parte ou tudo de uma linha PAID (reverses_id) e o recebimento volta a ficar pendente nesse valor. Só se acrescenta (nunca se
+// altera nem se apaga). O banco confere: o pago líquido de um recebimento nunca passa da comissão dele nem fica negativo; as linhas PAID
+// de um fechamento somam exatamente o valor gravado nele e são gravadas de uma vez (junto com o fechamento ou, se ele não tinha
+// composição, uma única reconstrução histórica com motivo); duas gravações ao mesmo tempo para o mesmo gerente esperam uma pela outra.
+export const accountManagerCommissionPaid = pgTable("account_manager_commission_paid", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  managerId: text("manager_id").notNull(),
+  payoutId: text("payout_id").notNull(),
+  kind: text("kind").notNull(),
+  reversesId: text("reverses_id"),
+  operationId: text("operation_id").notNull(),
+  paymentId: text("payment_id").notNull(),
+  clientId: text("client_id"),
+  clientName: text("client_name").notNull(),
+  operationCode: text("operation_code"),
+  loanDate: date("loan_date", { mode: "string" }),
+  principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
+  interestRateBps: numeric("interest_rate_bps", { precision: 9, scale: 1, mode: "number" }).notNull(),
+  commissionBps: integer("commission_bps").notNull(),
+  receiptPaidOn: date("receipt_paid_on", { mode: "string" }).notNull(),
+  interestCents: bigint("interest_cents", { mode: "number" }).notNull(),
+  commissionDueCents: bigint("commission_due_cents", { mode: "number" }).notNull(),
+  commissionCents: bigint("commission_cents", { mode: "number" }).notNull(),
+  source: text("source").notNull(),
+  reason: text("reason"),
+  createdByUserId: text("created_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("account_manager_commission_paid_manager_idx").on(table.tenantId, table.managerId),
+  index("account_manager_commission_paid_payout_idx").on(table.tenantId, table.payoutId),
+  index("account_manager_commission_paid_payment_idx").on(table.tenantId, table.paymentId),
+  uniqueIndex("account_manager_commission_paid_receipt_unique").on(table.tenantId, table.payoutId, table.paymentId).where(sql`${table.kind} = 'PAID'`),
+  unique("account_manager_commission_paid_tenant_id_unique").on(table.tenantId, table.id),
+  foreignKey({ name: "account_manager_commission_paid_reverses_same_tenant_fk", columns: [table.tenantId, table.reversesId], foreignColumns: [table.tenantId, table.id] }).onDelete("cascade"),
+  foreignKey({ name: "account_manager_commission_paid_payout_same_manager_fk", columns: [table.tenantId, table.managerId, table.payoutId], foreignColumns: [accountManagerPayouts.tenantId, accountManagerPayouts.managerId, accountManagerPayouts.id] }).onDelete("cascade"),
+  check("account_manager_commission_paid_kind_valid", sql`${table.kind} in ('PAID', 'REVERSAL')`),
+  check("account_manager_commission_paid_source_valid", sql`${table.source} in ('CLOSING', 'HISTORICAL')`),
+  check("account_manager_commission_paid_reversal_pair", sql`(${table.kind} = 'REVERSAL') = (${table.reversesId} is not null)`),
+  check("account_manager_commission_paid_values_valid", sql`${table.commissionCents} > 0 and ${table.interestCents} >= 0 and ${table.commissionDueCents} >= 0 and ${table.principalCents} >= 0 and ${table.interestRateBps} >= 0 and ${table.commissionBps} >= 0 and ${table.commissionBps} <= 10000 and (${table.kind} = 'REVERSAL' or ${table.commissionCents} <= ${table.commissionDueCents})`),
+  check("account_manager_commission_paid_reason_required", sql`(${table.kind} = 'PAID' and ${table.source} = 'CLOSING') or length(trim(coalesce(${table.reason}, ''))) > 0`),
+  check("account_manager_commission_paid_client_name_not_blank", sql`length(trim(${table.clientName})) > 0`),
+  ...tenantPolicies("account_manager_commission_paid", table.tenantId),
+]).enableRLS();
+
 export const clients = pgTable("client", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
