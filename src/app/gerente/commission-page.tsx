@@ -6,6 +6,7 @@ import { EmptyPanel, PageHeading } from "../portfolio-pages";
 
 const KindChip = ({ kind }: { kind: string }) => <span className={`status-chip ${kind === "CREDIT" ? "status-paid" : "status-late"}`}><i />{kind === "CREDIT" ? "Crédito" : "Débito"}</span>;
 const signed = (kind: string, cents: number) => `${kind === "CREDIT" ? "+" : "−"} ${formatMoney(cents)}`;
+const CPG: Record<string, { label: string; className: string }> = { PAID: { label: "Paga (CPG)", className: "status-paid" }, PARTIAL: { label: "Paga em parte", className: "status-due" }, PENDING: { label: "Pendente", className: "status-late" } };
 const percent = (bps: number) => `${(bps / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 
 // "Minha comissão": quanto a gerente já ganhou sobre os juros que os clientes indicados realmente pagaram, quanto já recebeu e quanto falta.
@@ -30,6 +31,21 @@ export function ManagerCommissionPage({ panel }: { panel: ManagerPanel }) {
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Cliente</th><th>Percentual</th><th>Juros pagos</th><th>Sua comissão</th></tr></thead>
             <tbody>{panel.clients.map((client) => <tr key={client.id}><td><strong>{client.name}</strong></td><td>{percent(client.commissionBps)}</td><td>{formatMoney(client.interestReceivedCents)}</td><td><strong>{formatMoney(client.commissionCents)}</strong></td></tr>)}</tbody>
+          </table></div>
+        )}
+      </section>
+      <section className="panel table-panel" aria-label="Comissões por contrato (CPG)">
+        <div className="panel-header"><div><div className="panel-title-row"><h2>Comissões por contrato (CPG)</h2><span className="today-count">{panel.contracts.length}</span></div><p>Por contrato: a comissão gerada sobre os juros já recebidos, quanto já foi paga (CPG) e quanto está pendente.</p></div></div>
+        {panel.contracts.length === 0 ? <EmptyPanel icon="receipt" text="Nenhuma comissão gerada ainda." /> : (
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Cliente / contrato</th><th>Juros recebidos</th><th>Percentual</th><th>Comissão gerada</th><th>Paga</th><th>Pendente</th><th>Situação</th></tr></thead>
+            <tbody>{panel.contracts.map((contract) => (
+              <tr key={contract.operationId}>
+                <td><strong>{contract.clientName}</strong> · #{contract.operationCode}</td><td>{formatMoney(contract.interestCents)}</td><td>{percent(contract.commissionBps)}</td>
+                <td>{formatMoney(contract.commissionDueCents)}</td><td>{formatMoney(contract.paidCents)}</td><td><strong>{formatMoney(contract.pendingCents)}</strong></td>
+                <td><span className={`status-chip ${CPG[contract.status].className}`}><i />{CPG[contract.status].label}</span></td>
+              </tr>
+            ))}</tbody>
           </table></div>
         )}
       </section>

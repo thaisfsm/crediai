@@ -26,7 +26,8 @@ export type ManagerActions = {
   // Só na administração (MASTER): registrar a composição confirmada de um fechamento antigo sem composição.
   recordHistorical?: (data: FormData) => Promise<Result>;
 };
-const Scope = createContext<{ actions: ManagerActions; tenantId?: string } | null>(null);
+// canManageAccess: só o MASTER administra logins de gerente; para o dono operacional os controles nem aparecem (e o servidor recusa).
+const Scope = createContext<{ actions: ManagerActions; tenantId?: string; canManageAccess: boolean } | null>(null);
 function useScope() {
   const scope = useContext(Scope);
   if (!scope) throw new Error("ManagersHome ausente.");
@@ -295,7 +296,7 @@ function TemporaryPassword({ result, onClose }: { result: Extract<AccessResult, 
 }
 
 function AccessBox({ manager }: { manager: Manager }) {
-  const { actions } = useScope();
+  const { actions, canManageAccess } = useScope();
   const router = useRouter();
   const [result, setResult] = useState<Extract<AccessResult, { ok: true }> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -307,6 +308,11 @@ function AccessBox({ manager }: { manager: Manager }) {
     setPending(true); setError(null);
     void action(data).then((response) => { if (response.ok) { setResult(response); router.refresh(); } else setError(response.error); }).catch(() => setError("Não foi possível concluir. Tente novamente.")).finally(() => setPending(false));
   };
+  if (!canManageAccess) return (
+    <div className="manager-access">
+      <span className="muted">{manager.hasLogin ? `Acesso de leitura: ${manager.email} · ${manager.loginActive ? (manager.mustChangePassword ? "aguardando 1º acesso" : "ativo") : "bloqueado"} · ` : "Sem acesso de leitura · "}administrado pelo MASTER</span>
+    </div>
+  );
   return (
     <div className="manager-access">
       {result && <TemporaryPassword result={result} onClose={() => setResult(null)} />}
@@ -329,7 +335,9 @@ function AccessBox({ manager }: { manager: Manager }) {
 }
 
 function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void }) {
-  const { actions } = useScope();
+  const { actions, canManageAccess } = useScope();
+  // Com login criado, ativar/desativar liga/desliga o acesso: só o MASTER vê a escolha; para os demais a situação vai como está.
+  const lockedSituation = manager.hasLogin && !canManageAccess;
   const router = useRouter();
   const form = useFormAction(actions.updateManager, () => { router.refresh(); onDone(); }, false);
   return (
@@ -338,7 +346,7 @@ function ManagerEdit({ manager, onDone }: { manager: Manager; onDone: () => void
       <label className="field"><span>Nome</span><input name="name" defaultValue={manager.name} required maxLength={120} /></label>
       <label className="field"><span>Comissão sugerida (%) — opcional</span><input name="commission" defaultValue={manager.commissionBps > 0 ? percentInput(manager.commissionBps) : ""} inputMode="decimal" placeholder="Em branco: você define por cliente" /></label>
       <label className="field"><span>Caixa disponibilizado (R$)</span><MoneyInput name="cashLimit" defaultValue={manager.cash.limitCents > 0 ? (manager.cash.limitCents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }) : ""} placeholder="20.000,00" /></label>
-      <label className="field"><span>Situação</span><select name="active" defaultValue={manager.active ? "1" : "0"}><option value="1">Ativo</option><option value="0">Inativo (bloqueia o acesso)</option></select></label>
+      {lockedSituation ? <input type="hidden" name="active" value={manager.active ? "1" : "0"} /> : <label className="field"><span>Situação</span><select name="active" defaultValue={manager.active ? "1" : "0"}><option value="1">Ativo</option><option value="0">Inativo (bloqueia o acesso)</option></select></label>}
       <div className="form-actions"><button type="button" className="outline-button" onClick={onDone}>Cancelar</button><button className="primary-button" disabled={form.pending}>{form.pending ? "Salvando…" : "Salvar"}</button></div>
       <Feedback feedback={form.feedback} />
     </form>
@@ -481,10 +489,12 @@ function ClientRow({ manager, client }: { manager: Manager; client: Manager["cli
 }
 
 function DeleteManager({ manager }: { manager: Manager }) {
-  const { actions } = useScope();
+  const { actions, canManageAccess } = useScope();
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const form = useFormAction(actions.deleteManager, () => router.refresh(), false);
+  // Excluir gerente com login revoga o acesso: só o MASTER.
+  if (manager.hasLogin && !canManageAccess) return null;
   if (!confirming) return <button type="button" className="outline-button" onClick={() => setConfirming(true)}>Excluir</button>;
   return (
     <form onSubmit={form.onSubmit} className="capital-note" role="alert">
@@ -594,8 +604,8 @@ function ConsolidatedReports({ managers }: { managers: Manager[] }) {
   );
 }
 
-export function ManagersHome({ data, actions, tenantId, standalone = true }: { data: ManagersPage; actions: ManagerActions; tenantId?: string; standalone?: boolean }) {
-  return <Scope.Provider value={{ actions, tenantId }}><ManagersBody data={data} standalone={standalone} /></Scope.Provider>;
+export function ManagersHome({ data, actions, tenantId, standalone = true, canManageAccess }: { data: ManagersPage; actions: ManagerActions; tenantId?: string; standalone?: boolean; canManageAccess: boolean }) {
+  return <Scope.Provider value={{ actions, tenantId, canManageAccess }}><ManagersBody data={data} standalone={standalone} /></Scope.Provider>;
 }
 
 function ManagersBody({ data, standalone }: { data: ManagersPage; standalone: boolean }) {
@@ -604,7 +614,7 @@ function ManagersBody({ data, standalone }: { data: ManagersPage; standalone: bo
   const create = useFormAction(actions.createManager, () => router.refresh());
   return (
     <div className={standalone ? "workspace-page" : "managers-embedded"}>
-      {standalone && <PageHeading eyebrow="CREDIAI · INDICAÇÕES" title="Gerentes de contas" description="Quem indica clientes para você. Defina a comissão de cada cliente indicado na hora de vincular e dê a ele um acesso só de leitura." />}
+      {standalone && <PageHeading eyebrow="CREDIAI · INDICAÇÕES" title="Gerentes de contas" description="Quem indica clientes para você. Defina a comissão de cada cliente indicado na hora de vincular e acompanhe a comissão de cada um." />}
       <section className="panel form-panel" aria-label="Novo gerente de contas">
         <div className="panel-header"><div><h2>Novo gerente de contas</h2><p>A comissão é um percentual sobre os juros que o cliente indicado realmente pagar. O percentual é digitado por você, cliente a cliente, na hora de vincular.</p></div></div>
         <form className="form-grid" onSubmit={create.onSubmit}>

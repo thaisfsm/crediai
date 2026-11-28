@@ -1,22 +1,21 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-import { withManagerContext } from "@/lib/auth/guards";
+import { requireAccountManager } from "@/lib/auth/guards";
 import type { CommandResult } from "@/lib/managers/commands";
-import { submitOperationRequest } from "@/lib/managers/operation-request";
-import { registerClientByManager } from "@/lib/managers/register-client";
 
-// Única gravação da gerente de contas: cadastrar um cliente que ela indica (ligado a ela). A gerente vem só da sessão
-// (withManagerContext); nenhuma outra ação de carteira aceita o papel dela.
+// O acesso da gerente de contas é ESTRITAMENTE de consulta: nenhuma gravação é aceita deste painel. As duas ações antigas (cadastrar
+// cliente indicado e pedir operação para aprovação) continuam existindo só para recusar qualquer chamada forjada, mesmo de uma tela
+// antiga aberta no navegador. requireAccountManager confere sessão, conta ativa e papel; nada é lido nem gravado na carteira.
+const READ_ONLY: CommandResult = { ok: false, error: "Seu acesso é somente de consulta. Peça ao responsável pela carteira para fazer esta alteração." };
+
 export async function registerClientAction(data: FormData): Promise<CommandResult> {
-  const result = await withManagerContext((tx, { tenantId, manager, session }) => registerClientByManager(tx, tenantId, manager, session, data));
-  if (result.ok) revalidatePath("/gerente");
-  return result;
+  void data;
+  await requireAccountManager();
+  return READ_ONLY;
 }
 
-// Pedido de operação: a gerente preenche o mesmo formulário do dono e o pedido espera a aprovação dele; nada entra no capital antes.
 export async function submitOperationRequestAction(data: FormData): Promise<CommandResult> {
-  const result = await withManagerContext((tx, { tenantId, manager, session }) => submitOperationRequest(tx, tenantId, manager, session, data));
-  if (result.ok) { revalidatePath("/gerente"); revalidatePath("/"); }
-  return result;
+  void data;
+  await requireAccountManager();
+  return READ_ONLY;
 }

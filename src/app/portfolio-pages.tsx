@@ -933,7 +933,7 @@ export function ClientsPage({ portfolio, onChanged, onNewOperation, initialClien
       })()}
       <section className="panel table-panel" aria-label="Lista de clientes">
         <div className="panel-header"><div><div className="panel-title-row"><h2>Clientes da carteira</h2><span className="today-count">{shownClients.length}</span></div></div></div>
-        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text={readOnly ? "Você ainda não tem clientes indicados. Cadastre o primeiro no formulário acima." : "Nenhum cliente cadastrado ainda."} /> : (
+        {portfolio.clients.length === 0 ? <EmptyPanel icon="users" text={readOnly ? "Você ainda não tem clientes indicados." : "Nenhum cliente cadastrado ainda."} /> : (
           <div className="table-scroll"><table className="data-table">
             <thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Operações</th><th>Emprestado</th><th>Juros recebidos</th><th>Saldo</th><th /></tr></thead>
             <tbody>{shownClients.map((client) => <tr key={client.id}><td><button className="text-link client-link" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}><strong>{client.name}</strong></button>{client.notes && <small>{client.notes}</small>}</td><td>{formatCpf(client.document) ?? "—"}</td><td className="nowrap-cell">{formatPhone(client.phone) ?? "—"}{client.whatsapp && <small>WhatsApp {formatPhone(client.whatsapp)}</small>}</td><td>{client.operationCount}</td><td>{formatMoney(client.profile.principalCents)}</td><td>{formatMoney(client.profile.interestPaidCents)}</td><td>{formatMoney(client.profile.balanceCents)}</td><td className="actions-cell"><span className="row-actions"><button className="outline-button" onClick={() => { setViewingId(client.id); window.scrollTo({ top: 0 }); }}>Ver</button>{!readOnly && <><button className="outline-button" onClick={() => startEdit(client)}>Editar</button><button className="outline-button danger-outline" onClick={() => setDeleting(client)}>Excluir</button></>}</span></td></tr>)}</tbody>
@@ -2230,7 +2230,7 @@ export function OperationsPage({ portfolio, onChanged, onNewClient, focus = null
   });
   return (
     <div className="workspace-page">
-      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Cadastre operações dos clientes que você indicou (elas vão para a aprovação do Fernando) e acompanhe os empréstimos." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
+      <PageHeading eyebrow="CREDIAI · OPERAÇÕES" title="Operações" description={readOnly ? "Os empréstimos dos clientes que você indicou. Somente consulta." : "Cadastre e acompanhe os empréstimos da sua carteira."} />
       {readOnly && portfolio.operationRequests.length > 0 && <OperationRequestsPanel requests={portfolio.operationRequests} owner={false} onChanged={onChanged} />}
       {readOnly && !request ? null : focus ? <FocusPanel focus={focus} portfolio={portfolio} onClear={() => onClearFocus?.()} /> : <OperationForm portfolio={portfolio} onChanged={onChanged} onNewClient={onNewClient} request={request} cashAvailableCents={cashAvailableCents} />}
       <section className="panel table-panel" aria-label="Lista de operações">
