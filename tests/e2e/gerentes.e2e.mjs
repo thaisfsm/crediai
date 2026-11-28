@@ -320,14 +320,16 @@ test("G11. somente consulta: a gerente não cadastra cliente nem envia pedido de
   await manager.getByRole("region", { name: "Lista de operações" }).waitFor();
   assert.equal(await manager.getByRole("button", { name: /Enviar para aprovação|Cadastrar operação/ }).count(), 0, "sem envio de operação");
   // Chamadas forjadas (tela antiga aberta ou requisição direta) são recusadas e nada é gravado.
+  // Sem nenhuma tela que as use, as ações nem entram no build (não há endpoint para chamar); se voltarem a existir, o servidor recusa.
   const cookie = await apiLogin(EMAIL, NEW_PASSWORD);
-  const registered = await action(cookie, "registerClientAction", { ...CLIENT_FIELDS }, "/gerente");
-  assert.equal(registered.result?.ok, false);
-  assert.match(String(registered.result?.error), /somente de consulta/);
+  const inBuild = (name) => Object.values(manifest).some((value) => value.exportedName === name);
   await admin(`update account_manager set cash_limit_cents = 2000000000 where name='Gabrielle Teste'`);
-  const requested = await action(cookie, "submitOperationRequestAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: day(0), dueDate: day(30) }, "/gerente");
-  assert.equal(requested.result?.ok, false);
-  assert.match(String(requested.result?.error), /somente de consulta/);
+  for (const [name, fields] of [["registerClientAction", { ...CLIENT_FIELDS }], ["submitOperationRequestAction", { clientId: "c_g_ana", modality: "SINGLE", frequency: "MONTHLY", principal: "100,00", rate: "10", loanDate: day(0), dueDate: day(30) }]]) {
+    if (!inBuild(name)) continue;
+    const response = await action(cookie, name, fields, "/gerente");
+    assert.equal(response.result?.ok, false, `${name} recusada`);
+    assert.match(String(response.result?.error), /somente de consulta/);
+  }
   await admin(`update account_manager set cash_limit_cents = 0 where name='Gabrielle Teste'`);
   assert.equal(await one(`select count(*) from client where tenant_id='ten_roberio'`), clientsBefore, "nenhum cliente criado");
   assert.equal(await one(`select count(*) from operation_request`), 0, "nenhum pedido criado");
